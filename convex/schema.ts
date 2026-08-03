@@ -57,6 +57,7 @@ export default defineSchema({
     taskId: v.id("tasks"),
     role: v.union(v.literal("planner"), v.literal("coding"), v.literal("reviewer"), v.literal("research"), v.literal("operator")),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("awaiting_approval"), v.literal("blocked"), v.literal("completed"), v.literal("failed"), v.literal("cancelled"), v.literal("needs_configuration")),
+    objective: v.string(),
     maxParallelism: v.number(),
     createdAt: v.number(),
     startedAt: v.optional(v.number()),

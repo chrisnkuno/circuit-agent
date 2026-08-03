@@ -27,6 +27,38 @@ describe("provider readiness", () => {
     expect(report.missing).toEqual(expect.arrayContaining(["OPENAI_MODEL", "MODEL_INPUT_RWF_PER_MILLION", "MODEL_OUTPUT_RWF_PER_MILLION"]));
   });
 
+  it("evaluates the explicitly selected CircuitNotion provider instead of the OpenAI defaults", () => {
+    const report = assessProviderReadiness({
+      convexDeployment: "dev:one",
+      convexUrl: "https://example.convex.cloud",
+      e2bApiKey: "e2b_key",
+      e2bCodingTemplate: "circuit-coding",
+      codingModelProvider: "circuitnotion",
+      circuitNotionApiKey: "cn_key",
+      circuitNotionModel: "circuit-3",
+      modelInputRwfPerMillion: "2000",
+      modelOutputRwfPerMillion: "8000",
+    });
+    expect(report.codingExecution).toBe(true);
+    expect(report.missing).not.toContain("OPENAI_API_KEY");
+    expect(report.missing).not.toContain("CIRCUITNOTION_API_KEY");
+  });
+
+  it("treats an unselected model provider as not ready even if OpenAI keys are present", () => {
+    const report = assessProviderReadiness({
+      convexDeployment: "dev:one",
+      convexUrl: "https://example.convex.cloud",
+      e2bApiKey: "e2b_key",
+      e2bCodingTemplate: "circuit-coding",
+      openaiApiKey: "model_key",
+      openaiModel: "gpt-5.6-terra",
+      modelInputRwfPerMillion: "2000",
+      modelOutputRwfPerMillion: "8000",
+    });
+    expect(report.codingExecution).toBe(false);
+    expect(report.missing).toContain("CODING_MODEL_PROVIDER");
+  });
+
   it("requires both payment API and webhook verification", () => {
     const report = assessProviderReadiness({ convexDeployment: "dev:one", convexUrl: "https://example.convex.cloud", circuitPayApiKey: "pay_key" });
     expect(report.payments).toBe(false);

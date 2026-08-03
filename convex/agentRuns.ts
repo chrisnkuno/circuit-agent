@@ -9,7 +9,7 @@ const template = v.union(v.literal("coding"), v.literal("browser"), v.literal("d
 /** Creates an auditable coding run. External E2B/model execution is scheduled only after provider activation. */
 export const createCodingRun = mutation({
   args: {
-    taskId: v.id("tasks"), maxParallelism: v.number(),
+    taskId: v.id("tasks"), maxParallelism: v.number(), objective: v.string(),
     steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template) })),
   },
   handler: async (ctx, args) => {
@@ -18,6 +18,7 @@ export const createCodingRun = mutation({
     await requireOrganizationPermission(ctx, task.organizationId, "agent:run");
     if (task.status === "completed" || task.status === "cancelled") throw new Error("Task is already terminal");
     if (!Number.isInteger(args.maxParallelism) || args.maxParallelism < 1 || args.maxParallelism > 8) throw new Error("maxParallelism must be between 1 and 8");
+    if (!args.objective.trim() || args.objective.length > 4_000) throw new Error("objective must contain 1 to 4000 characters");
     const graphIssues = validateTaskGraph({
       runId: "new-run",
       title: "New coding run",
@@ -34,7 +35,7 @@ export const createCodingRun = mutation({
     });
     if (graphIssues.length > 0) throw new Error(`Invalid task graph: ${graphIssues.map((issue) => issue.message).join("; ")}`);
     const now = Date.now();
-    const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, role: "coding", status: "queued", maxParallelism: args.maxParallelism, createdAt: now });
+    const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, role: "coding", status: "queued", objective: args.objective, maxParallelism: args.maxParallelism, createdAt: now });
     for (const step of args.steps) {
       const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
       if (step.requiresApproval) {
@@ -324,7 +325,17 @@ export const recoverExpiredLeases = internalMutation({
   },
 });
 
-/** Internal snapshot consumed by the future dispatcher action; never exposed to clients. */
+/** Cancellation checkpoint polled by the coding worker; never exposed to clients. */
+export const isRunCancelled = internalQuery({
+  args: { runId: v.id("agentRuns") },
+  returns: v.boolean(),
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    return run?.status === "cancelled";
+  },
+});
+
+/** Internal snapshot consumed by the dispatcher action; never exposed to clients. */
 export const getDispatchSnapshot = internalQuery({
   args: {},
   handler: async (ctx) => {

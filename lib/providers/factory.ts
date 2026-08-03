@@ -1,5 +1,7 @@
 import { E2BSandboxProvider } from "./e2b";
 import { OpenAICodingModelProvider } from "./openai";
+import { CircuitNotionCodingModelProvider } from "./circuitnotion";
+import type { CodingModelProvider } from "./model";
 import type { ModelPriceCatalog } from "../model-cost";
 
 export type ProviderEnvironment = {
@@ -10,6 +12,10 @@ export type ProviderEnvironment = {
   E2B_ALLOW_INTERNET?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  CIRCUITNOTION_API_KEY?: string;
+  CIRCUITNOTION_MODEL?: string;
+  CIRCUITNOTION_BASE_URL?: string;
+  CODING_MODEL_PROVIDER?: string;
   MODEL_INPUT_RWF_PER_MILLION?: string;
   MODEL_OUTPUT_RWF_PER_MILLION?: string;
 };
@@ -41,6 +47,25 @@ export function createOpenAIProvider(environment: ProviderEnvironment): OpenAICo
   const model = environment.OPENAI_MODEL?.trim();
   if (!apiKey || !model) return undefined;
   return new OpenAICodingModelProvider({ apiKey, model });
+}
+
+export function createCircuitNotionProvider(environment: ProviderEnvironment): CircuitNotionCodingModelProvider | undefined {
+  const apiKey = environment.CIRCUITNOTION_API_KEY?.trim();
+  const model = environment.CIRCUITNOTION_MODEL?.trim();
+  if (!apiKey || !model) return undefined;
+  return new CircuitNotionCodingModelProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined });
+}
+
+/**
+ * Model provider selection is explicit, never a silent fallback: CODING_MODEL_PROVIDER
+ * must name exactly one configured provider, matching the project's "explicit model
+ * identity" invariant instead of picking whichever credential happens to be present.
+ */
+export function createCodingModelProvider(environment: ProviderEnvironment): CodingModelProvider | undefined {
+  const selection = environment.CODING_MODEL_PROVIDER?.trim();
+  if (selection === "openai") return createOpenAIProvider(environment);
+  if (selection === "circuitnotion") return createCircuitNotionProvider(environment);
+  return undefined;
 }
 
 export function createModelPriceCatalog(environment: ProviderEnvironment): ModelPriceCatalog | undefined {

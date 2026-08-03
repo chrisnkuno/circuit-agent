@@ -16,8 +16,23 @@ test("recalculates a bounded quote as task requirements change", async ({ page }
   await expect(quoteRange).not.toHaveText(initialQuote ?? "");
   await expect(page.getByText("Never exceeds without approval")).toBeVisible();
   await page.getByRole("button", { name: /Reserve task cap/i }).click();
-  await expect(page.getByText(/recorded locally/i)).toBeVisible();
-  await expect(page.getByText(/intentionally blocked/i)).toBeVisible();
+  await expect(page.getByText(/Sign in to reserve a task cap/i)).toBeVisible();
+});
+
+test("signs up, bootstraps a workspace, and reserves a real task cap in Convex", async ({ page }) => {
+  const email = `e2e-${Date.now()}@circuitagent.test`;
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByPlaceholder("Name").fill("E2E Runner");
+  await page.getByPlaceholder("Email").fill(email);
+  await page.getByPlaceholder("Password").fill("CorrectHorseBattery9");
+  await page.getByRole("button", { name: "Create account" }).click();
+
+  await expect(page.getByText(email)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/'s workspace/)).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole("button", { name: /Reserve task cap/i }).click();
+  await expect(page.getByText(/persisted in Convex/i)).toBeVisible({ timeout: 15_000 });
 });
 
 test("plans multiple coding runs with fair scheduling and valid graphs", async ({ page }) => {
@@ -39,7 +54,8 @@ test("health endpoint reports provider readiness without secret values", async (
   expect(response.ok()).toBeTruthy();
   const body = await response.json();
   expect(body).toMatchObject({ ok: true, application: "up" });
-  expect(body.readiness.missing).toContain("CONVEX_DEPLOYMENT");
+  expect(body.readiness.missing).not.toContain("CONVEX_DEPLOYMENT");
+  expect(body.readiness.controlPlane).toBe(true);
   expect(body.readiness.missing).toEqual(expect.arrayContaining(["OPENAI_API_KEY", "MODEL_INPUT_RWF_PER_MILLION", "MODEL_OUTPUT_RWF_PER_MILLION"]));
   expect(JSON.stringify(body)).not.toContain("API_KEY=");
 });

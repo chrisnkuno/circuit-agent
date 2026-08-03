@@ -1,0 +1,150 @@
+import OpenAI from "openai";
+import { buildCodingPlannerPrompt, CodingPlanSchema } from "../coding-prompt";
+import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
+
+export const CIRCUITNOTION_DEFAULT_BASE_URL = "https://api.circuitnotion.com/v1";
+
+type ChatCompletionResponse = {
+  id: string;
+  model: string;
+  choices: Array<{
+    finish_reason: string | null;
+    message: { content: string | null; refusal?: string | null };
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+    completion_tokens_details?: { reasoning_tokens?: number };
+  } | null;
+};
+
+type ChatCompletionBody = Parameters<OpenAI["chat"]["completions"]["create"]>[0];
+type ChatCompletionCall = (body: ChatCompletionBody, signal: AbortSignal) => Promise<ChatCompletionResponse>;
+
+export type CircuitNotionCodingModelOptions = {
+  apiKey: string;
+  model: string;
+  baseURL?: string;
+};
+
+function validateRequest(request: CodingPlanRequest): void {
+  if (!request.taskId.trim() || !request.stepId.trim()) throw new Error("taskId and stepId are required");
+  if (!Number.isInteger(request.maxOutputTokens) || request.maxOutputTokens < 256 || request.maxOutputTokens > 16_384) {
+    throw new Error("maxOutputTokens must be between 256 and 16384");
+  }
+  if (!Number.isInteger(request.timeoutMs) || request.timeoutMs < 1_000 || request.timeoutMs > 10 * 60_000) {
+    throw new Error("timeoutMs must be between 1 second and 10 minutes");
+  }
+}
+
+function normalizeUsage(response: ChatCompletionResponse): ModelUsage {
+  if (!response.usage) throw new Error("Model response did not include usage accounting");
+  const usage = {
+    inputTokens: response.usage.prompt_tokens,
+    outputTokens: response.usage.completion_tokens,
+    totalTokens: response.usage.total_tokens,
+    cachedInputTokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: response.usage.completion_tokens_details?.reasoning_tokens ?? 0,
+  };
+  if (Object.values(usage).some((value) => !Number.isSafeInteger(value) || value < 0)) throw new Error("Model response contained invalid usage accounting");
+  return usage;
+}
+
+function sumUsage(a: ModelUsage, b: ModelUsage): ModelUsage {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    cachedInputTokens: a.cachedInputTokens + b.cachedInputTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+    reasoningTokens: a.reasoningTokens + b.reasoningTokens,
+  };
+}
+
+function extractJson(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    // fall through to brace extraction below
+  }
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Model response did not contain a JSON object");
+  return JSON.parse(match[0]);
+}
+
+function parsePlan(content: string | null) {
+  if (!content) return undefined;
+  try {
+    return CodingPlanSchema.parse(extractJson(content));
+  } catch {
+    return undefined;
+  }
+}
+
+const RETRY_INSTRUCTION = "Your previous response was not valid JSON matching the required schema. Return ONLY a single JSON object matching the schema, with no commentary, code fences, or extra text.";
+
+/**
+ * CircuitNotion adapter using Chat Completions (JSON mode + Zod validate-and-retry).
+ * CircuitNotion's API is OpenAI SDK compatible but only documents Chat Completions,
+ * not the Responses API or native Structured Outputs used by the OpenAI adapter.
+ */
+export class CircuitNotionCodingModelProvider implements CodingModelProvider {
+  private readonly call: ChatCompletionCall;
+
+  constructor(private readonly options: CircuitNotionCodingModelOptions, call?: ChatCompletionCall) {
+    if (!options.apiKey.trim()) throw new Error("CIRCUITNOTION_API_KEY is required");
+    if (!options.model.trim()) throw new Error("CIRCUITNOTION_MODEL is required");
+    if (call) {
+      this.call = call;
+    } else {
+      const client = new OpenAI({
+        apiKey: options.apiKey,
+        baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL,
+        defaultHeaders: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+      });
+      this.call = async (body, signal) => (await client.chat.completions.create(body, { signal })) as unknown as ChatCompletionResponse;
+    }
+  }
+
+  async generateCodingPlan(request: CodingPlanRequest): Promise<CodingPlanResult> {
+    validateRequest(request);
+    const prompt = buildCodingPlannerPrompt(request);
+    const systemPrompt = `${prompt.instructions}\n\nRespond with a single JSON object matching the required schema. Do not include any text outside the JSON object.`;
+
+    const attempt = (extra?: string) => this.call({
+      model: this.options.model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt.input },
+        ...(extra ? [{ role: "user" as const, content: extra }] : []),
+      ],
+      max_tokens: request.maxOutputTokens,
+      temperature: 0,
+      response_format: { type: "json_object" },
+    }, AbortSignal.timeout(request.timeoutMs));
+
+    let response = await attempt();
+    let usage = normalizeUsage(response);
+    let choice = response.choices[0];
+    if (!choice) throw new Error("Model response contained no choices");
+    if (choice.message.refusal) return { status: "refused", refusal: choice.message.refusal, responseId: response.id, model: response.model, usage };
+    if (choice.finish_reason !== "stop") throw new Error(`Model response ended with finish reason ${choice.finish_reason}`);
+
+    let plan = parsePlan(choice.message.content);
+    if (!plan) {
+      response = await attempt(RETRY_INSTRUCTION);
+      usage = sumUsage(usage, normalizeUsage(response));
+      choice = response.choices[0];
+      if (!choice) throw new Error("Model response contained no choices");
+      if (choice.message.refusal) return { status: "refused", refusal: choice.message.refusal, responseId: response.id, model: response.model, usage };
+      if (choice.finish_reason !== "stop") throw new Error(`Model response ended with finish reason ${choice.finish_reason}`);
+      plan = parsePlan(choice.message.content);
+      if (!plan) throw new Error("Model response did not contain a coding plan matching the required schema after one retry");
+    }
+
+    return { status: "planned", plan, responseId: response.id, model: response.model, usage };
+  }
+}
