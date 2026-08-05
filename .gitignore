@@ -6,6 +6,7 @@ node_modules/
 !.env.example
 *.tsbuildinfo
 .convex/
+.wrangler/
 coverage/
 dist/
 playwright-report/

@@ -21,6 +21,7 @@ export type ProviderEnvironment = {
   CIRCUITNOTION_API_KEY?: string;
   CIRCUITNOTION_MODEL?: string;
   CIRCUITNOTION_BASE_URL?: string;
+  CIRCUITNOTION_RELAY_SECRET?: string;
   CODING_MODEL_PROVIDER?: string;
   MODEL_INPUT_RWF_PER_MILLION?: string;
   MODEL_OUTPUT_RWF_PER_MILLION?: string;
@@ -78,14 +79,14 @@ export function createCircuitNotionProvider(environment: ProviderEnvironment): C
   const apiKey = environment.CIRCUITNOTION_API_KEY?.trim();
   const model = environment.CIRCUITNOTION_MODEL?.trim();
   if (!apiKey || !model) return undefined;
-  return new CircuitNotionCodingModelProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined });
+  return new CircuitNotionCodingModelProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined, relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined });
 }
 
 export function createCircuitNotionAgentProvider(environment: ProviderEnvironment): CircuitNotionAgentTurnProvider | undefined {
   const apiKey = environment.CIRCUITNOTION_API_KEY?.trim();
   const model = environment.CIRCUITNOTION_MODEL?.trim();
   if (!apiKey || !model) return undefined;
-  return new CircuitNotionAgentTurnProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined });
+  return new CircuitNotionAgentTurnProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined, relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined });
 }
 
 /**

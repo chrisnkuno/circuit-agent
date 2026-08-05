@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { CIRCUITNOTION_DEFAULT_BASE_URL } from "./circuitnotion";
+import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL } from "./circuitnotion";
 import type { AgentMessage, AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "../agent-runtime";
 import type { ModelUsage } from "./model";
 
@@ -25,7 +25,7 @@ type ChatResponse = {
 
 type ChatCall = (body: Record<string, unknown>, signal: AbortSignal) => Promise<ChatResponse>;
 
-export type CircuitNotionAgentOptions = { apiKey: string; model: string; baseURL?: string; timeoutMs?: number };
+export type CircuitNotionAgentOptions = { apiKey: string; model: string; baseURL?: string; timeoutMs?: number; relaySecret?: string };
 
 function usageOf(response: ChatResponse): ModelUsage {
   if (!response.usage) throw new Error("Model response did not include usage accounting");
@@ -66,7 +66,7 @@ export class CircuitNotionAgentTurnProvider implements AgentTurnProvider {
     if (!options.model.trim()) throw new Error("CIRCUITNOTION_MODEL is required");
     if (call) this.call = call;
     else {
-      const client = new OpenAI({ apiKey: options.apiKey, baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL });
+      const client = new OpenAI({ apiKey: options.apiKey, baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL, defaultHeaders: buildCircuitNotionHeaders(options.relaySecret) });
       this.call = async (body, signal) => await client.chat.completions.create(body as never, { signal }) as unknown as ChatResponse;
     }
   }

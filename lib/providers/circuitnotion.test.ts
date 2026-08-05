@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CircuitNotionCodingModelProvider } from "./circuitnotion";
+import { buildCircuitNotionHeaders, CircuitNotionCodingModelProvider } from "./circuitnotion";
 
 const request = {
   taskId: "task_1",
@@ -85,5 +85,16 @@ describe("CircuitNotion coding model provider", () => {
 
     expect(() => new CircuitNotionCodingModelProvider({ apiKey: "", model: "circuit-3" })).toThrow("CIRCUITNOTION_API_KEY");
     expect(() => new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "" })).toThrow("CIRCUITNOTION_MODEL");
+  });
+});
+
+describe("buildCircuitNotionHeaders", () => {
+  it("always sends a browser-like User-Agent", () => {
+    expect(buildCircuitNotionHeaders()["User-Agent"]).toContain("Mozilla/5.0");
+  });
+
+  it("only includes the relay secret header when a relay secret is configured", () => {
+    expect(buildCircuitNotionHeaders()).not.toHaveProperty("x-relay-secret");
+    expect(buildCircuitNotionHeaders("relay-secret-value")["x-relay-secret"]).toBe("relay-secret-value");
   });
 });
