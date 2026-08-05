@@ -1,3 +1,5 @@
+import { truncateEvidence } from "./artifacts";
+
 export type RecoverableStep = {
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   attempts: number;
@@ -11,6 +13,18 @@ export type LeaseRecoveryDecision = {
   releaseRwf: number;
   retryAfterMs?: number;
 };
+
+/**
+ * Some providers fail with an HTML error page (a WAF/bot-challenge block, a gateway
+ * timeout page) instead of a JSON API error. Storing that raw markup verbatim as a
+ * permanent step/event record is unreadable and unbounded, so it gets recognized and
+ * replaced with a short, honest summary; every other error is just length-capped.
+ */
+export function summarizeWorkerError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Worker execution failed";
+  const looksLikeHtml = /<!DOCTYPE html|<html[\s>]/i.test(message);
+  return truncateEvidence(looksLikeHtml ? "Provider returned an HTML error page instead of a JSON response (likely a gateway or bot-protection block)." : message, 500);
+}
 
 export function retryDelayMs(attempt: number, baseMs = 1_000, maximumMs = 60_000): number {
   if (!Number.isInteger(attempt) || attempt < 1) throw new Error("attempt must be a positive integer");

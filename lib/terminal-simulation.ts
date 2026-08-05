@@ -77,7 +77,8 @@ export function buildBanner(): string {
 export function buildHelpLines(): TerminalLine[] {
   return [
     { tone: "system", text: "Available commands:", delayMs: 0 },
-    { tone: "muted", text: "  run [coding|research|writing|operations] <objective>   simulate an agent session", delayMs: 40 },
+    { tone: "muted", text: '  run coding <objective>          REAL agent run — real model, real E2B sandbox, real RWF cost', delayMs: 40 },
+    { tone: "muted", text: "  run research|writing|operations <objective>   simulated preview — no live worker exists for these yet", delayMs: 40 },
     { tone: "muted", text: "  status                                                  show capability + provider readiness", delayMs: 40 },
     { tone: "muted", text: "  about                                                    what this terminal is (and isn't)", delayMs: 40 },
     { tone: "muted", text: "  clear                                                    clear the screen", delayMs: 40 },
@@ -87,9 +88,9 @@ export function buildHelpLines(): TerminalLine[] {
 
 export function buildAboutLines(): TerminalLine[] {
   return [
-    { tone: "system", text: "This is a simulated agent session for demonstration only.", delayMs: 0 },
-    { tone: "muted", text: "No task is created, no model is called, no sandbox runs, and no RWF is spent.", delayMs: 60 },
-    { tone: "muted", text: "The real system is durable, approval-gated, and cost-capped — see the main workspace.", delayMs: 60 },
+    { tone: "system", text: '"run coding <objective>" is real: it creates an actual task and run in Convex, dispatches a real model, executes in a real E2B sandbox, and spends real (small) RWF against your workspace cap.', delayMs: 0 },
+    { tone: "muted", text: "It only runs the steps that have a live worker today (inspect, reproduce, implement, checks) — the approval-gated review step is intentionally left out because no reviewer worker exists yet.", delayMs: 60 },
+    { tone: "muted", text: "Every other task kind (research, writing, operations) still plays back a scripted, clearly-labeled simulation, because those workers are not built.", delayMs: 60 },
   ];
 }
 

@@ -3,6 +3,7 @@ import Link from "next/link";
 import "../../components/terminal.css";
 import { Starfield } from "@/components/starfield";
 import { TerminalConsole } from "@/components/terminal-console";
+import { AuthPanel } from "@/components/auth-panel";
 
 export const metadata: Metadata = {
   title: "Circuit-Nova — Agent Terminal",
@@ -20,12 +21,15 @@ export default function TerminalPage() {
           </Link>
           <span className="terminal-page-title">Agent Terminal</span>
         </header>
+        <div className="terminal-auth-row">
+          <AuthPanel />
+        </div>
         <p className="terminal-page-lede">
-          A simulated session showing how a Circuit-Nova agent run actually reads: a quote, loaded capabilities, planner turns, tool calls, and a
-          settlement inside the approved cap. Type <code>help</code> to start.
+          Sign in, then <code>run coding &lt;objective&gt;</code> starts a real agent run: a real Convex task and budget, a real model call, and a
+          real E2B sandbox — not a script. Other task kinds still preview as a labeled simulation. Type <code>help</code> to start.
         </p>
         <TerminalConsole />
-        <p className="terminal-footnote">Simulation only — no task is created, no model or sandbox is called, and no RWF is spent.</p>
+        <p className="terminal-footnote">A real coding run spends a small real amount against your workspace's RWF cap. Everything else stays a clearly-labeled preview.</p>
       </div>
     </div>
   );

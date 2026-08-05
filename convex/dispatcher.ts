@@ -15,6 +15,7 @@ import type { CodingSandboxProvider } from "../lib/providers/contracts";
 import type { ModelPriceCatalog } from "../lib/model-cost";
 import { createConvexArtifactStore } from "./lib/artifactStore";
 import { createWorkerControl } from "./lib/workerControl";
+import { summarizeWorkerError } from "../lib/worker-runtime";
 
 const REPOSITORY_CONTEXT = "No repository is connected yet. There is no existing codebase to inspect; work only within the provided workspace using the allowed commands.";
 const CLAIM_LEASE_MS = 120_000;
@@ -75,7 +76,7 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
       quantity: 0,
       usageIdempotencyKey: `error_${params.stepId}_${params.workerId}`,
       outcome: "failed",
-      summary: error instanceof Error ? error.message : "Worker execution failed",
+      summary: summarizeWorkerError(error),
       artifactReferences: [],
     });
     return;

@@ -63,6 +63,37 @@
   text-transform: uppercase;
 }
 
+.terminal-auth-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+.terminal-auth-row .auth-panel { position: relative; font-size: 12px; color: var(--nova-muted); }
+.terminal-auth-row .auth-panel input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--nova-border);
+  color: var(--nova-text);
+  border-radius: 6px;
+}
+.terminal-auth-row .auth-panel input::placeholder { color: var(--nova-muted); }
+.terminal-auth-row .auth-mode { border: 1px solid var(--nova-border); border-radius: 6px; overflow: hidden; }
+.terminal-auth-row .auth-mode button { background: transparent; color: var(--nova-muted); }
+.terminal-auth-row .auth-mode button.selected { background: var(--nova-cyan); color: #06131f; }
+.terminal-auth-row .auth-panel .outline { border: 1px solid var(--nova-border); background: transparent; color: var(--nova-text); border-radius: 6px; }
+.terminal-auth-row .auth-panel .primary { background: var(--nova-cyan); color: #06131f; border-radius: 6px; }
+.terminal-auth-row .auth-panel.signed-in b { color: var(--nova-accent); }
+.terminal-auth-row .auth-panel .notice {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  background: var(--nova-panel);
+  border: 1px solid var(--nova-border);
+  color: var(--nova-warn);
+  border-radius: 8px;
+  max-width: 260px;
+  z-index: 5;
+}
+
 .terminal-page-lede {
   color: var(--nova-muted);
   font-size: 14px;

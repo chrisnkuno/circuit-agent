@@ -13,6 +13,7 @@ import type * as approvals from "../approvals.js";
 import type * as auth from "../auth.js";
 import type * as connectors from "../connectors.js";
 import type * as crons from "../crons.js";
+import type * as devPayment from "../devPayment.js";
 import type * as devTools from "../devTools.js";
 import type * as dispatcher from "../dispatcher.js";
 import type * as github from "../github.js";
@@ -26,6 +27,7 @@ import type * as lib_workerControl from "../lib/workerControl.js";
 import type * as organizations from "../organizations.js";
 import type * as skills from "../skills.js";
 import type * as tasks from "../tasks.js";
+import type * as terminalRuns from "../terminalRuns.js";
 
 import type {
   ApiFromModules,
@@ -39,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   connectors: typeof connectors;
   crons: typeof crons;
+  devPayment: typeof devPayment;
   devTools: typeof devTools;
   dispatcher: typeof dispatcher;
   github: typeof github;
@@ -52,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   organizations: typeof organizations;
   skills: typeof skills;
   tasks: typeof tasks;
+  terminalRuns: typeof terminalRuns;
 }>;
 
 /**
