@@ -7,6 +7,8 @@ Users should know a task's expected RWF cost and maximum approved spend before a
 ## Current implementation
 
 - Responsive task quote interface with RWF estimate, confidence, assumptions, and hard cap.
+- Hermes-inspired narrow capability registry with core, skill, and connector layers.
+- Distinct capability-scoped workflows for coding, research, writing, and operations.
 - Pure typed v1 task-cost estimator with tests.
 - Convex schema for tasks, quotes, payment holds, and immutable task events.
 - Idempotent `createQuotedTask` mutation, ready to be called after client authentication is wired.
@@ -19,6 +21,14 @@ Users should know a task's expected RWF cost and maximum approved spend before a
 - Auditable dispatcher planning that combines graph validity, fair global scheduling, provider readiness, approvals, and budgets.
 - Concrete E2B adapter with secure access, approved-template gating, bounded runtime, command allowlisting, opt-in internet, and sandbox termination.
 - OpenAI Responses API coding planner with code-versioned prompts, Structured Outputs, explicit model selection, non-stored responses, and complete token accounting.
+- Provider-neutral bounded agent loop with iterative tool calls, cumulative RWF accounting, cancellation, approval pauses, context limits, and incremental events.
+- CircuitNotion native Chat Completions tool adapter, verified live with `gpt-5.6-luna`.
+- Interactive E2B coding tools for confined reads, searches, writes, commands, and classified verification evidence.
+- Delegated child-run policy that can only reduce parent capabilities, budget, depth, and iteration authority.
+- Daily-life connector catalogue for Calendar, Gmail, Drive, Notion, Todoist, Slack, WhatsApp Business, and Home Assistant.
+- Multi-app workflow compiler with dependency-aware parallel reads and explicit approval states for every external write.
+- Durable Convex connection metadata, action intents, schedules, idempotency keys, and connector audit events; credential values remain in an external vault.
+- Deployed Google Calendar vertical slice with state + PKCE OAuth, AES-256-GCM credential vault, offline token refresh/revocation, bounded event reads, approval-gated idempotent event creation, verified push channels, and leased calendar-digest schedules.
 - Conservative token-to-RWF model reservation plus reconciliation from actual provider usage.
 - Bounded coding worker that writes scoped files, runs checks, observes cancellation checkpoints, captures content-addressed evidence, and terminates E2B in every exit path.
 - Convex heartbeat, sandbox identity, artifact metadata, approval records, and lifecycle transitions ready for deployment validation.
@@ -26,9 +36,21 @@ Users should know a task's expected RWF cost and maximum approved spend before a
 - Secret-safe provider readiness diagnostics at `/api/health`.
 - Desktop and mobile-viewport Playwright coverage for the current operational interface.
 
-## Deliberately not yet activated
+## Activation status
 
-No live payment, sandbox, connector, or model call is made. Those integrations require provider credentials and verified API contracts. The interface states this truthfully.
+A live iterative coding task exercised CircuitNotion `gpt-5.6-luna` through six model turns and six E2B tool calls, created a JavaScript module and unit tests, and completed only after `node --test` passed two tests. The Google Calendar control plane, vault, webhook, and schedule worker are deployed to the Convex development environment. Final user-consent verification remains blocked until a Google Cloud OAuth web client ID and secret are configured; every other catalogue connector remains inactive. Production coding execution still requires dispatcher migration, payment authorization, durable repository provisioning, and provider-specific research/writing workers.
+
+## Google Calendar activation
+
+Create a Google OAuth **Web application** client, enable the Calendar API, and register the exact callback shown by `GOOGLE_OAUTH_REDIRECT_URI`. Then set the two remaining server-only values on the Convex deployment:
+
+```bash
+bunx convex env set GOOGLE_OAUTH_CLIENT_ID
+bunx convex env set GOOGLE_OAUTH_CLIENT_SECRET
+bunx convex dev --once
+```
+
+The connector requests only `calendar.events.owned`, offline access, state, and PKCE. The client secret and vault key are Convex environment variables; OAuth and action payloads are encrypted before database insertion and never sent to the browser.
 
 ## Development
 
@@ -52,6 +74,8 @@ bunx convex dev
 ## System map
 
 See [docs/architecture.md](docs/architecture.md) for boundaries, lifecycle, pricing invariant, and provider activation gates.
+
+The multipurpose merge strategy and phased Hermes integration are documented in [docs/hermes-hybrid-architecture.md](docs/hermes-hybrid-architecture.md).
 
 The current system is assessed in [docs/assessment-technical.md](docs/assessment-technical.md). The philosophical direction and staged delivery plan are in [docs/assessment-roadmap.md](docs/assessment-roadmap.md).
 

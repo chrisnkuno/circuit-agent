@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { z } from "zod";
 import { buildCodingPlannerPrompt, CodingPlanSchema } from "../coding-prompt";
 import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
 
@@ -112,7 +113,13 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
   async generateCodingPlan(request: CodingPlanRequest): Promise<CodingPlanResult> {
     validateRequest(request);
     const prompt = buildCodingPlannerPrompt(request);
-    const systemPrompt = `${prompt.instructions}\n\nRespond with a single JSON object matching the required schema. Do not include any text outside the JSON object.`;
+    const jsonSchema = JSON.stringify(z.toJSONSchema(CodingPlanSchema));
+    const systemPrompt = [
+      prompt.instructions,
+      "Respond with a single JSON object matching the JSON Schema below.",
+      "Do not rename fields or include text outside the JSON object.",
+      jsonSchema,
+    ].join("\n\n");
 
     const attempt = (extra?: string) => this.call({
       model: this.options.model,

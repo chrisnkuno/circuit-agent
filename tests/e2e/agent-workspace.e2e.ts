@@ -49,6 +49,37 @@ test("plans multiple coding runs with fair scheduling and valid graphs", async (
   await expect(page.getByText(/does not claim that an agent has executed work/i)).toHaveCount(0);
 });
 
+test("compiles research, writing, and operations into distinct capability graphs", async ({ page }) => {
+  await page.goto("/#agents");
+
+  await page.getByRole("button", { name: /Research a decision/i }).click();
+  await page.getByRole("button", { name: /Plan research run/i }).click();
+  await expect(page.getByText("Gather and validate primary sources")).toBeVisible();
+  await expect(page.getByText("Web research", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /Create a deliverable/i }).click();
+  await page.getByRole("button", { name: /Plan writing run/i }).click();
+  await expect(page.getByText("Create the first deliverable")).toBeVisible();
+
+  await page.getByRole("button", { name: /Run work operations/i }).click();
+  await page.getByRole("button", { name: /Plan operations run/i }).click();
+  await expect(page.getByText("Execute the approved external action")).toBeVisible();
+  await expect(page.getByText("External operations", { exact: true })).toBeVisible();
+});
+
+test("previews multi-app daily workflows without faking provider connections", async ({ page }) => {
+  await page.goto("/#integrations");
+  await expect(page.getByRole("heading", { name: /Many apps. One controlled workflow/i })).toBeVisible();
+  await expect(page.locator(".connector-card")).toHaveCount(8);
+  await expect(page.getByText("Not connected", { exact: true })).toHaveCount(8);
+  await expect(page.getByText(/No card above represents a simulated connection/i)).toBeVisible();
+
+  await page.getByLabel("Daily workflow").selectOption("project-update");
+  await expect(page.getByText("Read project notes")).toBeVisible();
+  await expect(page.getByText("Post approved update")).toBeVisible();
+  await expect(page.getByText("Approval required", { exact: true })).toHaveCount(2);
+});
+
 test("health endpoint reports provider readiness without secret values", async ({ request }) => {
   const response = await request.get("/api/health");
   expect(response.ok()).toBeTruthy();
@@ -56,7 +87,8 @@ test("health endpoint reports provider readiness without secret values", async (
   expect(body).toMatchObject({ ok: true, application: "up" });
   expect(body.readiness.missing).not.toContain("CONVEX_DEPLOYMENT");
   expect(body.readiness.controlPlane).toBe(true);
-  expect(body.readiness.missing).toEqual(expect.arrayContaining(["OPENAI_API_KEY", "MODEL_INPUT_RWF_PER_MILLION", "MODEL_OUTPUT_RWF_PER_MILLION"]));
+  expect(typeof body.readiness.codingExecution).toBe("boolean");
+  expect(body.readiness.missing.every((name: unknown) => typeof name === "string" && /^[A-Z0-9_]+$/.test(name))).toBe(true);
   expect(JSON.stringify(body)).not.toContain("API_KEY=");
 });
 

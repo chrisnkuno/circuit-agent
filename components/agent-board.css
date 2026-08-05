@@ -25,6 +25,7 @@
 .run-card li strong,.run-card li small { display:block; }
 .run-card li strong { font-size:13px; line-height:1.35; }
 .run-card li small { color:var(--muted); font-size:10px; line-height:1.4; margin-top:5px; }
+.run-card li .capability-list { color:#4d7f32; display:block; font-size:9px; line-height:1.4; margin-top:8px; text-transform:uppercase; letter-spacing:.04em; }
 .run-card li em { color:#95661d; font-size:9px; font-style:normal; margin-left:auto; writing-mode:vertical-rl; }
 .agent-notice { color:var(--muted); font-size:12px; margin:13px 0 0; }
 @media (max-width:760px) { .agent-section { margin-top:50px; } .agent-intro { align-items:start; flex-direction:column; } .agent-summary { grid-template-columns:1fr 1fr; } .agent-summary div:nth-child(2) { border-right:0; } .agent-summary div:nth-child(-n+2) { border-bottom:1px solid var(--line); } .run-card ol { grid-template-columns:1fr; } .run-card li,.run-card li:nth-child(3n) { border-right:0; border-bottom:1px solid var(--line); } .run-card li:last-child { border-bottom:0; } }

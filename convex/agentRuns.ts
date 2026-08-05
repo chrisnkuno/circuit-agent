@@ -1,20 +1,25 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { validateTaskGraph } from "../lib/agent-orchestration";
+import { capabilityRegistry } from "../lib/capability-registry";
 import { requireOrganizationPermission } from "./lib/authz";
 
 const role = v.union(v.literal("planner"), v.literal("coding"), v.literal("reviewer"), v.literal("research"), v.literal("operator"));
 const template = v.union(v.literal("coding"), v.literal("browser"), v.literal("data"));
+const taskKind = v.union(v.literal("coding"), v.literal("research"), v.literal("writing"), v.literal("operations"));
+const leadRole = { coding: "coding", research: "research", writing: "operator", operations: "operator" } as const;
 
-/** Creates an auditable coding run. External E2B/model execution is scheduled only after provider activation. */
-export const createCodingRun = mutation({
+/** Creates an auditable capability-scoped run. Workers still fail closed until their runtime is configured. */
+export const createTaskRun = mutation({
   args: {
-    taskId: v.id("tasks"), maxParallelism: v.number(), objective: v.string(),
-    steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template) })),
+    taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(),
+    steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template), capabilityIds: v.optional(v.array(v.string())) })),
   },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task not found");
+    const kind = args.kind ?? "coding";
+    if (task.kind !== kind) throw new Error(`Run kind ${kind} does not match task kind ${task.kind}`);
     await requireOrganizationPermission(ctx, task.organizationId, "agent:run");
     if (task.status === "completed" || task.status === "cancelled") throw new Error("Task is already terminal");
     if (!Number.isInteger(args.maxParallelism) || args.maxParallelism < 1 || args.maxParallelism > 8) throw new Error("maxParallelism must be between 1 and 8");
@@ -31,11 +36,18 @@ export const createCodingRun = mutation({
         status: "pending",
         requiresApproval: step.requiresApproval,
         sandboxTemplate: step.sandboxTemplate,
+        capabilityIds: step.capabilityIds,
       })),
     });
     if (graphIssues.length > 0) throw new Error(`Invalid task graph: ${graphIssues.map((issue) => issue.message).join("; ")}`);
+    const capabilityIds = [...new Set(args.steps.flatMap((step) => step.capabilityIds ?? []))];
+    capabilityRegistry.resolve(kind, capabilityIds);
+    for (const step of args.steps) {
+      const requiresCapabilityApproval = (step.capabilityIds ?? []).some((id) => capabilityRegistry.get(id)?.requiresApproval);
+      if (requiresCapabilityApproval && !step.requiresApproval) throw new Error(`Step ${step.stepKey} must require approval for its capabilities`);
+    }
     const now = Date.now();
-    const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, role: "coding", status: "queued", objective: args.objective, maxParallelism: args.maxParallelism, createdAt: now });
+    const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, createdAt: now });
     for (const step of args.steps) {
       const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
       if (step.requiresApproval) {
@@ -49,10 +61,13 @@ export const createCodingRun = mutation({
         });
       }
     }
-    await ctx.db.insert("agentRunEvents", { runId, type: "run_created", message: "Coding run created. Execution awaits an enabled E2B and model provider.", createdAt: now });
+    await ctx.db.insert("agentRunEvents", { runId, type: "run_created", message: `${kind} run created with ${capabilityIds.length} scoped capabilities. Execution awaits the required providers and approvals.`, createdAt: now });
     return runId;
   },
 });
+
+/** Backward-compatible endpoint name for existing coding clients. */
+export const createCodingRun = createTaskRun;
 
 export const listForTask = query({
   args: { taskId: v.id("tasks") },

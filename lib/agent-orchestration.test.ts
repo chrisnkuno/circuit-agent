@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodingTaskPlan, propagateBlockedSteps, runStatus, scheduleAcrossRuns, scheduleReadySteps, validateTaskGraph, type AgentRunPlan } from "./agent-orchestration";
+import { buildCodingTaskPlan, buildTaskPlan, propagateBlockedSteps, runStatus, scheduleAcrossRuns, scheduleReadySteps, validateTaskGraph, type AgentRunPlan } from "./agent-orchestration";
 
 describe("agent orchestration", () => {
   it("starts only dependency-free work and honors its concurrency cap", () => {
@@ -20,6 +20,21 @@ describe("agent orchestration", () => {
     expect(plan.steps.at(-1)?.requiresApproval).toBe(true);
     expect(runStatus(plan)).toBe("queued");
     expect(validateTaskGraph(plan)).toEqual([]);
+  });
+
+  it.each(["research", "writing", "operations"] as const)("builds a valid capability-scoped %s workflow", (kind) => {
+    const plan = buildTaskPlan({ runId: `run-${kind}`, title: `${kind} task`, kind });
+    expect(validateTaskGraph(plan)).toEqual([]);
+    expect(plan.steps.every((step) => (step.capabilityIds?.length ?? 0) > 0)).toBe(true);
+    expect(plan.steps.at(-1)?.role).toBe("reviewer");
+  });
+
+  it("requires approval before an operations connector can execute", () => {
+    const plan = buildTaskPlan({ runId: "run-ops", title: "Update CRM", kind: "operations" });
+    expect(plan.steps.find((step) => step.id.endsWith(":execute"))).toMatchObject({
+      requiresApproval: true,
+      capabilityIds: ["operations.execute"],
+    });
   });
 
   it("rejects missing dependencies and cycles before execution", () => {

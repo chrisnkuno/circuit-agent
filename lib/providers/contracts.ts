@@ -55,3 +55,7 @@ export interface ExecutableSandboxProvider extends SandboxProvider {
 export interface CodingSandboxProvider extends ExecutableSandboxProvider {
   writeFile(sandboxId: string, path: string, content: string): Promise<void>;
 }
+
+export interface InteractiveCodingSandboxProvider extends CodingSandboxProvider {
+  readFile(sandboxId: string, path: string): Promise<string>;
+}

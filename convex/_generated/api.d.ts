@@ -11,9 +11,12 @@
 import type * as agentRuns from "../agentRuns.js";
 import type * as approvals from "../approvals.js";
 import type * as auth from "../auth.js";
+import type * as connectors from "../connectors.js";
 import type * as crons from "../crons.js";
 import type * as devTools from "../devTools.js";
 import type * as dispatcher from "../dispatcher.js";
+import type * as googleCalendar from "../googleCalendar.js";
+import type * as googleCalendarModel from "../googleCalendarModel.js";
 import type * as http from "../http.js";
 import type * as lib_artifactStore from "../lib/artifactStore.js";
 import type * as lib_authz from "../lib/authz.js";
@@ -31,9 +34,12 @@ declare const fullApi: ApiFromModules<{
   agentRuns: typeof agentRuns;
   approvals: typeof approvals;
   auth: typeof auth;
+  connectors: typeof connectors;
   crons: typeof crons;
   devTools: typeof devTools;
   dispatcher: typeof dispatcher;
+  googleCalendar: typeof googleCalendar;
+  googleCalendarModel: typeof googleCalendarModel;
   http: typeof http;
   "lib/artifactStore": typeof lib_artifactStore;
   "lib/authz": typeof lib_authz;

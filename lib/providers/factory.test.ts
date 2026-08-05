@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { E2BSandboxProvider } from "./e2b";
 import { OpenAICodingModelProvider } from "./openai";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
-import { createCircuitNotionProvider, createCodingModelProvider, createE2BProvider, createModelPriceCatalog, createOpenAIProvider } from "./factory";
+import { createCircuitNotionAgentProvider, createCircuitNotionProvider, createCodingModelProvider, createE2BProvider, createModelPriceCatalog, createOpenAIProvider } from "./factory";
 
 describe("provider factory", () => {
   it("keeps E2B disabled until both credential and approved template exist", () => {
@@ -22,6 +22,11 @@ describe("provider factory", () => {
   it("creates the CircuitNotion provider only with an explicit model", () => {
     expect(createCircuitNotionProvider({ CIRCUITNOTION_API_KEY: "cn_test" })).toBeUndefined();
     expect(createCircuitNotionProvider({ CIRCUITNOTION_API_KEY: "cn_test", CIRCUITNOTION_MODEL: "circuit-3" })).toBeInstanceOf(CircuitNotionCodingModelProvider);
+  });
+
+  it("creates the CircuitNotion multi-turn agent provider from the same explicit identity", () => {
+    expect(createCircuitNotionAgentProvider({ CIRCUITNOTION_API_KEY: "cn_test", CIRCUITNOTION_MODEL: "gpt-5.6-luna" })).toBeDefined();
+    expect(createCircuitNotionAgentProvider({ CIRCUITNOTION_API_KEY: "cn_test" })).toBeUndefined();
   });
 
   it("selects the coding model provider explicitly, never by whichever credential is present", () => {

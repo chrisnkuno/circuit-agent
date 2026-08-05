@@ -38,6 +38,8 @@ describe("CircuitNotion coding model provider", () => {
     });
     const result = await provider.generateCodingPlan(request);
     expect(body).toMatchObject({ model: "circuit-3", response_format: { type: "json_object" } });
+    expect(JSON.stringify(body)).toContain("fileChanges");
+    expect(JSON.stringify(body)).toContain("expectedArtifacts");
     expect(result).toMatchObject({ status: "planned", plan, usage: { totalTokens: 600, cachedInputTokens: 100, reasoningTokens: 50 } });
     expect(JSON.stringify(body)).not.toContain("cn_test");
   });

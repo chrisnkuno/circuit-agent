@@ -123,6 +123,7 @@ export const dispatchTick = internalAction({
       runId: run._id,
       title: run.objective,
       maxParallelism: run.maxParallelism,
+      capabilityIds: run.capabilityIds,
       steps: steps.map((step): AgentStep => ({
         id: step.stepKey,
         title: step.title,
@@ -131,6 +132,7 @@ export const dispatchTick = internalAction({
         status: step.status,
         requiresApproval: step.requiresApproval,
         sandboxTemplate: step.sandboxTemplate,
+        capabilityIds: step.capabilityIds,
       })),
     }));
 

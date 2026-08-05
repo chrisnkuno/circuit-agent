@@ -1,11 +1,11 @@
-import { Sandbox } from "e2b";
+import { CommandExitError, Sandbox } from "e2b";
 import { validateSandboxCommand, validateWorkspaceFile } from "../sandbox-policy";
-import type { CodingSandboxProvider, SandboxCommand, SandboxCommandResult, SandboxRequest, SandboxSession } from "./contracts";
+import type { InteractiveCodingSandboxProvider, SandboxCommand, SandboxCommandResult, SandboxRequest, SandboxSession } from "./contracts";
 
 type SandboxHandle = {
   sandboxId: string;
   commands: { run(command: string, options: { cwd?: string; timeoutMs: number }): Promise<SandboxCommandResult> };
-  files: { write(path: string, content: string): Promise<unknown> };
+  files: { write(path: string, content: string): Promise<unknown>; read(path: string): Promise<string> };
 };
 
 type E2BClient = {
@@ -31,7 +31,7 @@ export type E2BSandboxProviderOptions = {
 };
 
 /** Concrete E2B adapter with secure access, bounded lifetime, and argv-only commands. */
-export class E2BSandboxProvider implements CodingSandboxProvider {
+export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
   constructor(private readonly options: E2BSandboxProviderOptions, private readonly client: E2BClient = defaultClient) {
     if (!options.apiKey.trim()) throw new Error("E2B_API_KEY is required");
   }
@@ -55,13 +55,28 @@ export class E2BSandboxProvider implements CodingSandboxProvider {
     validateSandboxCommand(command);
     const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: command.timeoutMs + 5_000 });
     const serialized = [command.program, ...command.args.map(quoteArgument)].join(" ");
-    return sandbox.commands.run(serialized, { cwd: command.cwd, timeoutMs: command.timeoutMs });
+    try {
+      return await sandbox.commands.run(serialized, { cwd: command.cwd, timeoutMs: command.timeoutMs });
+    } catch (error) {
+      // The provider contract represents ordinary process failures as results so
+      // the worker can record them as evidence and make its own lifecycle decision.
+      if (error instanceof CommandExitError) {
+        return { exitCode: error.exitCode, stdout: error.stdout, stderr: error.stderr };
+      }
+      throw error;
+    }
   }
 
   async writeFile(sandboxId: string, path: string, content: string): Promise<void> {
     validateWorkspaceFile(path, content);
     const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: 30_000 });
     await sandbox.files.write(path, content);
+  }
+
+  async readFile(sandboxId: string, path: string): Promise<string> {
+    validateWorkspaceFile(path, "");
+    const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: 30_000 });
+    return sandbox.files.read(path);
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {

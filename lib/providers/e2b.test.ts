@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CommandExitError } from "e2b";
 import { E2BSandboxProvider } from "./e2b";
 
 function fakeClient() {
@@ -9,7 +10,10 @@ function fakeClient() {
       calls.push({ method: "run", value: { command, options } });
       return { exitCode: 0, stdout: "ok", stderr: "" };
     } },
-    files: { write: async (path: string, content: string) => { calls.push({ method: "write", value: { path, content } }); } },
+    files: {
+      write: async (path: string, content: string) => { calls.push({ method: "write", value: { path, content } }); },
+      read: async (path: string) => { calls.push({ method: "read", value: { path } }); return "file content"; },
+    },
   };
   return {
     calls,
@@ -37,12 +41,35 @@ describe("E2B sandbox provider", () => {
     await expect(provider.runCommand("sandbox_1", { program: "bash", args: ["-lc", "danger"], timeoutMs: 5_000 })).rejects.toThrow("not allowed");
   });
 
+  it("normalizes non-zero process exits into command results", async () => {
+    const fake = fakeClient();
+    fake.client.connect = async () => ({
+      sandboxId: "sandbox_1",
+      commands: { run: async () => { throw new CommandExitError({ exitCode: 2, stdout: "partial", stderr: "failed" }); } },
+      files: { write: async () => undefined, read: async () => "" },
+    });
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+    await expect(provider.runCommand("sandbox_1", { program: "ls", args: ["/workspace/missing"], timeoutMs: 5_000 })).resolves.toEqual({
+      exitCode: 2,
+      stdout: "partial",
+      stderr: "failed",
+    });
+  });
+
   it("writes bounded files only inside the workspace", async () => {
     const fake = fakeClient();
     const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
     await provider.writeFile("sandbox_1", "/workspace/repo/src/index.ts", "export const ready = true;");
     expect(fake.calls.at(-1)).toMatchObject({ method: "write", value: { path: "/workspace/repo/src/index.ts" } });
     await expect(provider.writeFile("sandbox_1", "/tmp/escape", "no")).rejects.toThrow("/workspace");
+  });
+
+  it("reads files only inside the workspace", async () => {
+    const fake = fakeClient();
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+    await expect(provider.readFile("sandbox_1", "/workspace/repo/src/index.ts")).resolves.toBe("file content");
+    expect(fake.calls.at(-1)).toMatchObject({ method: "read", value: { path: "/workspace/repo/src/index.ts" } });
+    await expect(provider.readFile("sandbox_1", "/etc/passwd")).rejects.toThrow("/workspace");
   });
 
   it("requires credentials and rejects unbounded lifetimes", async () => {

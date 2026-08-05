@@ -32,6 +32,7 @@ export const decide = mutation({
     }
     if (approval.stepId) await ctx.db.patch(approval.stepId, { approvalStatus: decision, status: decision === "approved" ? "pending" : "cancelled" });
     if (approval.runId) await ctx.db.patch(approval.runId, { status: decision === "approved" ? "queued" : "blocked" });
+    if (approval.actionIntentId) await ctx.db.patch(approval.actionIntentId, { status: decision === "approved" ? "approved" : "cancelled", updatedAt: now });
     if (decision === "rejected") {
       await ctx.db.patch(task._id, { status: "blocked" });
       await ctx.db.insert("taskEvents", { taskId: task._id, type: "approval_rejected", message: "A required agent action was rejected.", createdAt: now });

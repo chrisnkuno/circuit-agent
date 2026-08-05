@@ -1,3 +1,6 @@
+import { capabilityRegistry } from "./capability-registry";
+import type { TaskKind } from "./task-cost";
+
 export type AgentRole = "planner" | "coding" | "reviewer" | "research" | "operator";
 export type StepStatus = "pending" | "ready" | "running" | "awaiting_approval" | "completed" | "failed" | "blocked" | "cancelled";
 
@@ -9,12 +12,14 @@ export type AgentStep = {
   status: StepStatus;
   requiresApproval?: boolean;
   sandboxTemplate?: "coding" | "browser" | "data";
+  capabilityIds?: string[];
 };
 
 export type AgentRunPlan = {
   runId: string;
   title: string;
   maxParallelism: number;
+  capabilityIds?: string[];
   steps: AgentStep[];
 };
 
@@ -30,34 +35,79 @@ export type CodingTaskInput = {
   requiresBrowserVerification: boolean;
 };
 
+export type TaskPlanInput = {
+  runId: string;
+  title: string;
+  kind: TaskKind;
+  requiresBrowserVerification?: boolean;
+  requestedCapabilityIds?: string[];
+};
+
+type StepDefinition = Omit<AgentStep, "id" | "status"> & { key: string };
+
+const taskWorkflows: Record<TaskKind, (input: TaskPlanInput) => StepDefinition[]> = {
+  coding: (input) => {
+    const steps: StepDefinition[] = [
+      { key: "inspect", title: "Inspect repository and constraints", role: "coding", dependsOn: [], sandboxTemplate: "coding", capabilityIds: ["reasoning.plan", "workspace.files", "workspace.terminal"] },
+      { key: "reproduce", title: "Reproduce issue and establish baseline", role: "coding", dependsOn: ["inspect"], sandboxTemplate: "coding", capabilityIds: ["workspace.terminal"] },
+      { key: "implement", title: "Implement scoped change", role: "coding", dependsOn: ["reproduce"], sandboxTemplate: "coding", capabilityIds: ["workspace.files", "workspace.terminal"] },
+      { key: "checks", title: "Run targeted checks and build", role: "coding", dependsOn: ["implement"], sandboxTemplate: "coding", capabilityIds: ["workspace.terminal"] },
+    ];
+    if (input.requiresBrowserVerification) {
+      steps.push({ key: "browser", title: "Verify affected workflow in browser", role: "coding", dependsOn: ["checks"], sandboxTemplate: "browser", capabilityIds: ["web.research"] });
+    }
+    steps.push({ key: "review", title: "Review evidence and prepare handoff", role: "reviewer", dependsOn: input.requiresBrowserVerification ? ["checks", "browser"] : ["checks"], requiresApproval: true, capabilityIds: ["reasoning.plan"] });
+    return steps;
+  },
+  research: () => [
+    { key: "scope", title: "Define questions and evidence standard", role: "planner", dependsOn: [], capabilityIds: ["reasoning.plan"] },
+    { key: "sources", title: "Gather and validate primary sources", role: "research", dependsOn: ["scope"], sandboxTemplate: "browser", capabilityIds: ["web.research"] },
+    { key: "synthesis", title: "Synthesize findings with provenance", role: "research", dependsOn: ["sources"], sandboxTemplate: "data", capabilityIds: ["document.compose"] },
+    { key: "review", title: "Review claims and deliver recommendation", role: "reviewer", dependsOn: ["synthesis"], requiresApproval: true, capabilityIds: ["reasoning.plan"] },
+  ],
+  writing: () => [
+    { key: "brief", title: "Turn the goal into a structured brief", role: "planner", dependsOn: [], capabilityIds: ["reasoning.plan"] },
+    { key: "draft", title: "Create the first deliverable", role: "operator", dependsOn: ["brief"], sandboxTemplate: "data", capabilityIds: ["workspace.files", "document.compose"] },
+    { key: "revise", title: "Revise for accuracy, voice, and format", role: "reviewer", dependsOn: ["draft"], sandboxTemplate: "data", capabilityIds: ["document.compose"] },
+    { key: "review", title: "Approve the packaged deliverable", role: "reviewer", dependsOn: ["revise"], requiresApproval: true, capabilityIds: ["reasoning.plan"] },
+  ],
+  operations: () => [
+    { key: "inspect", title: "Inspect current state and policy", role: "operator", dependsOn: [], capabilityIds: ["reasoning.plan"] },
+    { key: "proposal", title: "Prepare an exact action proposal", role: "operator", dependsOn: ["inspect"], capabilityIds: ["reasoning.plan"] },
+    { key: "execute", title: "Execute the approved external action", role: "operator", dependsOn: ["proposal"], requiresApproval: true, capabilityIds: ["operations.execute"] },
+    { key: "verify", title: "Verify outcome and record evidence", role: "reviewer", dependsOn: ["execute"], capabilityIds: ["reasoning.plan"] },
+  ],
+};
+
+/** Compiles a task kind into a capability-scoped graph before any provider is called. */
+export function buildTaskPlan(input: TaskPlanInput): AgentRunPlan {
+  const selected = new Set(capabilityRegistry.resolve(input.kind, input.requestedCapabilityIds).map((item) => item.id));
+  const definitions = taskWorkflows[input.kind](input);
+  for (const step of definitions) {
+    for (const capabilityId of step.capabilityIds ?? []) {
+      const capability = capabilityRegistry.get(capabilityId);
+      if (!capability || !capability.taskKinds.includes(input.kind)) throw new Error(`Workflow uses invalid capability ${capabilityId}`);
+      selected.add(capabilityId);
+    }
+    if ((step.capabilityIds ?? []).some((id) => capabilityRegistry.get(id)?.requiresApproval) && !step.requiresApproval) {
+      throw new Error(`Workflow step ${step.key} must require approval for its capabilities`);
+    }
+  }
+  const steps = definitions.map(({ key, dependsOn, ...step }) => ({
+    ...step,
+    id: `${input.runId}:${key}`,
+    dependsOn: dependsOn.map((dependency) => `${input.runId}:${dependency}`),
+    status: "pending" as const,
+  }));
+  return { runId: input.runId, title: input.title, maxParallelism: input.kind === "coding" ? 2 : 1, capabilityIds: [...selected], steps };
+}
+
 /**
  * Produces a constrained coding workflow. The planner may propose implementation
  * details later, but the execution checkpoints are fixed and auditable here.
  */
 export function buildCodingTaskPlan(input: CodingTaskInput): AgentRunPlan {
-  const inspectId = `${input.runId}:inspect`;
-  const reproduceId = `${input.runId}:reproduce`;
-  const implementId = `${input.runId}:implement`;
-  const checksId = `${input.runId}:checks`;
-  const reviewId = `${input.runId}:review`;
-
-  const steps: AgentStep[] = [
-    { id: inspectId, title: "Inspect repository and constraints", role: "coding", dependsOn: [], status: "pending", sandboxTemplate: "coding" },
-    { id: reproduceId, title: "Reproduce issue and establish baseline", role: "coding", dependsOn: [inspectId], status: "pending", sandboxTemplate: "coding" },
-    { id: implementId, title: "Implement scoped change", role: "coding", dependsOn: [reproduceId], status: "pending", sandboxTemplate: "coding" },
-    { id: checksId, title: "Run targeted checks and build", role: "coding", dependsOn: [implementId], status: "pending", sandboxTemplate: "coding" },
-    { id: reviewId, title: "Review diff and prepare handoff", role: "reviewer", dependsOn: [checksId], status: "pending", requiresApproval: true },
-  ];
-
-  if (input.requiresBrowserVerification) {
-    steps.splice(4, 0, {
-      id: `${input.runId}:browser`,
-      title: "Verify affected workflow in browser", role: "coding", dependsOn: [checksId], status: "pending", sandboxTemplate: "browser",
-    });
-    steps[5].dependsOn = [checksId, `${input.runId}:browser`];
-  }
-
-  return { runId: input.runId, title: input.title, maxParallelism: 2, steps };
+  return buildTaskPlan({ ...input, kind: "coding" });
 }
 
 /** Returns pending steps whose dependencies have completed, respecting the run cap. */

@@ -1,6 +1,7 @@
 import { E2BSandboxProvider } from "./e2b";
 import { OpenAICodingModelProvider } from "./openai";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
+import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import type { CodingModelProvider } from "./model";
 import type { ModelPriceCatalog } from "../model-cost";
 
@@ -54,6 +55,13 @@ export function createCircuitNotionProvider(environment: ProviderEnvironment): C
   const model = environment.CIRCUITNOTION_MODEL?.trim();
   if (!apiKey || !model) return undefined;
   return new CircuitNotionCodingModelProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined });
+}
+
+export function createCircuitNotionAgentProvider(environment: ProviderEnvironment): CircuitNotionAgentTurnProvider | undefined {
+  const apiKey = environment.CIRCUITNOTION_API_KEY?.trim();
+  const model = environment.CIRCUITNOTION_MODEL?.trim();
+  if (!apiKey || !model) return undefined;
+  return new CircuitNotionAgentTurnProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined });
 }
 
 /**

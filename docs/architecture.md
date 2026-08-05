@@ -34,7 +34,15 @@ low estimate <= high estimate <= approved maximum
 
 No task may charge above `approved maximum` without a new approval.
 
-## Coding-agent orchestration
+## Multipurpose orchestration
+
+The control plane uses a narrow capability registry inspired by Hermes Agent's extension architecture. Core capabilities stay small; task-specific skills and configured connectors are selected only for the current task. Capability manifests declare supported task kinds, runtime, risk, approval requirements, and configuration gates without containing credential values.
+
+`buildTaskPlan` compiles coding, research, writing, and operations work into different dependency graphs. Runs and steps carry their capability identifiers into Convex so future dispatchers can route them to coding, browser, data, or connector workers. Any capability classified as an external action must sit behind a human approval step.
+
+See [hermes-hybrid-architecture.md](hermes-hybrid-architecture.md) for the full architecture and delivery sequence.
+
+## Coding-agent execution
 
 `lib/agent-orchestration.ts` creates an immutable, dependency-aware coding plan: inspect, reproduce, implement, verify, optional browser verification, and review handoff. The scheduler releases only dependency-free steps and obeys an explicit per-run parallelism cap.
 
@@ -57,3 +65,11 @@ Preflight model pricing has two values: an expected token estimate and a conserv
 - OpenAI integration requires an API key, explicit model, and versioned input/output RWF rates. Missing usage accounting or a malformed/refused response fails closed.
 - The current UI labels those integrations as blocked rather than pretending a reservation or execution occurred.
 - `/api/health` reports control-plane, coding, and payment readiness using configuration presence only; it never returns credential values.
+
+## Multi-app connections
+
+The multi-app layer uses a provider-neutral connector registry and a durable action-intent boundary. Google Calendar, Gmail, Drive, Notion, Todoist, Slack, WhatsApp Business, and Home Assistant currently have validated manifests, but no provider is represented as connected without a trusted callback and an opaque credential-vault reference.
+
+Convex stores connection metadata, permission names, expiry, paused schedules, approval-linked action intents, and sanitized audit events. Google Calendar is the first concrete adapter: state + PKCE OAuth with the narrow `calendar.events.owned` scope, AES-256-GCM token and payload encryption, offline refresh, provider revocation, bounded reads, approval-gated event insertion, push-channel verification, and leased daily-digest claims. The development schema/functions and cron are deployed; a live consent/read/write proof awaits a configured Google OAuth client.
+
+Google push notifications are accepted only when channel ID, opaque resource ID, hashed channel token, increasing message number, channel status, and expiration all validate. Notifications contain no event body; the trusted worker performs the subsequent scoped read. Scheduled occurrences use one durable idempotency key per schedule and due timestamp, a two-minute lease, and an explicit completed/failed record.

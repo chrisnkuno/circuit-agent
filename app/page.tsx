@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { estimateTaskCost, formatRwf, type QualityTier, type TaskKind } from "@/lib/task-cost";
 import { AgentBoard } from "@/components/agent-board";
+import { IntegrationBoard } from "@/components/integration-board";
 import { AuthPanel, useCurrentOrganization } from "@/components/auth-panel";
 import { authClient } from "@/lib/auth-client";
 
@@ -79,6 +80,7 @@ export default function Home() {
       <aside className="quote"><div className="quote-head"><span>02 / Your quote</span><b className={`confidence ${quote.confidence}`}>{quote.confidence} confidence</b></div><p className="task-name">{selected.label}</p><div className="range"><strong>{formatRwf(quote.estimateLowRwf)}</strong><span>to</span><strong>{formatRwf(quote.estimateHighRwf)}</strong></div><p className="quote-copy">Expected cost based on the selected execution plan.</p><div className="cap"><span>Never exceeds without approval</span><b>{formatRwf(quote.maxRwf)}</b></div><ul>{quote.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul><button className="primary" onClick={reserve} disabled={status === "pending"}>{status === "pending" ? "Reserving…" : "Reserve task cap"} <span>→</span></button>{status === "done" && <p className="notice">Task and quote persisted in Convex. Circuit Pay authorization is still blocked until its webhook contract is verified; execution awaits the dispatcher.</p>}{status === "error" && <p className="notice">{error}</p>}</aside>
     </section>
     <section className="principles"><div><span>01</span><h3>Durable by default</h3><p>Convex persists task plans, quotes, approvals, events, and payment holds.</p></div><div><span>02</span><h3>Isolated execution</h3><p>E2B runs code and browser work away from the user’s device.</p></div><div><span>03</span><h3>Human authority</h3><p>No overage, send, merge, or payment action happens silently.</p></div></section>
-    <AgentBoard />
+    <IntegrationBoard organizationId={organization?._id} />
+    <AgentBoard taskKind={kind} />
   </main>;
 }

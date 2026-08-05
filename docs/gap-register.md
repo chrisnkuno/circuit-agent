@@ -17,9 +17,9 @@ This register is the implementation source of truth for what Circuit Agent can d
 |---|---|---|---|---|
 | Convex control plane | Schema, organization scoping, runs, steps, approvals, leases, usage, recovery cron, and internal dispatch snapshot exist | Integration-ready | Configure dev/preview/prod; generate bindings; add backend test harness and migrations | Generated Convex types pass CI; tenant, lifecycle, and recovery integration tests pass against a deployment |
 | Authentication and tenancy | Role matrix and backend permission helpers exist | Blocked | Add auth provider, session bridge, organization bootstrap, invite/revoke flow | Authenticated negative tests prove cross-tenant reads and writes fail |
-| Durable dispatcher | Pure dispatcher plus a tested coding-worker engine plan fair, budgeted, approval-gated work and observe cancellation checkpoints | Integration-ready | Add the scheduled Convex Node action that atomically claims work and invokes the worker | Kill-and-resume test reaches one truthful terminal state without duplicate usage |
-| Model gateway | Typed OpenAI Responses adapter uses code-versioned prompts, Structured Outputs, timeouts, refusals, explicit model identity, and complete usage capture | Integration-ready | Exercise real credentials; add fast/balanced/expert evaluation routing and provider fallback | Recorded live token usage reconciles to step usage; refusal, timeout, fallback, and malformed-response cases pass |
-| E2B execution | Secure adapter and tested worker write bounded files, run policy-approved commands, capture evidence, heartbeat, check cancellation, and force cleanup | Integration-ready | Build the approved coding template and authorized repository provisioner | Live E2B test clones a fixture repo, changes it, runs checks, exports evidence, and terminates the sandbox |
+| Durable dispatcher | Pure planner and Convex Node action atomically claim fair, budgeted, approval-gated coding work and observe cancellation checkpoints | Integration-ready | Deploy it and exercise concurrent claim, cancellation, and restart recovery | Kill-and-resume test reaches one truthful terminal state without duplicate usage |
+| Model gateway | Typed OpenAI Responses and CircuitNotion Chat Completions adapters use explicit models, schema validation, timeouts, refusals, and usage capture; CircuitNotion `gpt-5.6-luna` completed a live smoke plan | Integration-ready | Add fast/balanced/expert evaluation routing and provider fallback | Recorded live token usage reconciles through deployed step usage; refusal, timeout, fallback, and malformed-response cases pass |
+| E2B execution | Secure adapter and tested worker write bounded files, run policy-approved commands, capture evidence, heartbeat, check cancellation, and force cleanup; a live isolated proof-file task completed and terminated | Integration-ready | Build the repository provisioner and repeat against a Git fixture | Live E2B test clones a fixture repo, changes it, runs checks, exports evidence, and terminates the sandbox |
 | GitHub authorization | Coding request contract mentions repositories | Not started | Create GitHub App flow, installation-token vault, repo/ref validation, patch branch, approval-gated PR | Revoked access fails closed; approved workflow creates one tested PR with no long-lived token in E2B |
 | Budget enforcement | Quote, cap, reservation, settlement, overage approval, and replay guard exist | Implemented locally | Enforce shared invariants in deployed Convex tests and ingest real provider usage | Negative, replay, concurrent-claim, and reconciliation tests show zero unapproved overrun |
 | Circuit Pay | Payment state and adapter contract exist | Blocked | Verify official API, auth/checkout or hold semantics, signed webhooks, refund/release, idempotency | Provider sandbox transactions and replayed webhooks reconcile exactly to the internal ledger |
@@ -35,7 +35,8 @@ This register is the implementation source of truth for what Circuit Agent can d
 | Security hardening | Secure E2B defaults and authorization concepts exist | Integration-ready | Threat model, secret manager, network allowlists, prompt-injection defenses, scanning, audit export | P0 threats have automated controls and no unresolved critical findings |
 | Evaluations | Domain unit and browser workflow tests exist | Integration-ready | Representative coding corpus, quality grader, destructive-action tests, fault injection | Release dashboard tracks success, evidence quality, cost error, cancellation, and recovery |
 | Notification service | Approval states exist | Not started | Push/email/in-app delivery with dedupe, expiry, and deep links | Retries never duplicate an approval action; sensitive approval requires authenticated app context |
-| Connector platform | Narrow provider contracts exist | Not started | OAuth vault, permission manifests, revocation, connector health, read/draft/execute tiers | First connector passes consent, expiry, revocation, replay, and tenant-isolation tests |
+| Connector platform | Google Calendar OAuth, encrypted vault, token refresh/revocation, scoped reads, encrypted approval-gated event writes, verified push channels, and leased digest schedules are implemented and deployed to development; seven catalogue apps remain manifests only | Integration-ready | Configure a Google OAuth web client and complete user consent, read, approved write, watch, digest, and revoke proofs | Calendar consent, scoped read, approval-gated insert, webhook, schedule replay, expiry, revocation, and tenant-isolation tests all pass live |
+| Multipurpose capability platform | Validated registry, four task graphs, persisted capability IDs, bounded tool loop, CircuitNotion tool adapter, interactive E2B coding tools, verification ledger state, and delegation policy exist; one isolated live coding loop passed | Integration-ready | Migrate the Convex dispatcher to the iterative worker, then add research, writing, and connector workers | Each task kind completes one live evidence-backed run through the same control plane |
 
 ## P2 — required for platform scale
 
@@ -49,10 +50,10 @@ This register is the implementation source of truth for what Circuit Agent can d
 
 ## Verified in the current local build
 
-- 63 domain, worker, and adapter tests pass with 96.86% function and 99.59% line coverage over the tested core.
+- 108 domain, worker, registry, orchestration, runtime, connector, multitasker, delegation, and adapter tests pass.
 - TypeScript checking and the optimized Next.js build pass.
-- Seven Playwright checks pass across desktop Chromium and a mobile Chromium viewport; one desktop duplicate of the mobile-only geometry test is intentionally skipped.
-- The browser suite verifies quote recalculation, local-only reservation honesty, multiple run planning, fair scheduling display, graph validity, provider blocking, the health endpoint, and absence of horizontal mobile overflow.
+- Thirteen Playwright checks pass across desktop Chromium and a mobile Chromium viewport; one desktop duplicate of the mobile-only geometry test is intentionally skipped.
+- The browser suite verifies quote recalculation, local-only reservation honesty, multiple run planning, fair scheduling display, graph validity, truthful multi-app workflow previews, provider blocking, the health endpoint, and absence of horizontal mobile overflow.
 - OpenAI and E2B adapters plus their composed worker are tested with fake providers; no live model request or sandbox was created because credentials, price inputs, and an approved coding template are not configured.
 
 ## Next executable slice
@@ -60,12 +61,12 @@ This register is the implementation source of truth for what Circuit Agent can d
 The next slice should close one vertical path rather than add more agent categories:
 
 ```text
-auth + Convex activation
-  -> GitHub installation token
-    -> model-planned coding step
-      -> E2B clone / edit / test
-        -> persisted logs and patch
-          -> approval-gated PR
+provider-neutral turn and tool protocol
+  -> capability-specific prompt/tool selection
+    -> E2B browser and data workers
+      -> persisted research/writing evidence
+        -> approval-gated connector worker
+          -> one live run per task kind
 ```
 
 Circuit Pay activation should follow the same path after its real contract is verified. Until then, the task cap remains a budget-control promise rather than a captured payment.
