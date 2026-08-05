@@ -43,6 +43,26 @@ const TASK_KIND_ALIASES: Record<string, TaskKind> = {
 
 const TASK_KIND_LIST: TaskKind[] = ["coding", "research", "writing", "operations"];
 
+export type StageStatus = "pending" | "active" | "completed" | "failed";
+export type Stage = { key: string; label: string; status: StageStatus };
+
+/**
+ * Reuses the same stage vocabulary the real workflows use (see taskWorkflows in
+ * lib/agent-orchestration.ts) so the art reflects the product's actual steps rather than
+ * inventing decorative ones. Coding is the only kind with a live worker today; the other
+ * three back a simulated preview, but the labels still describe the real intended workflow.
+ */
+const STAGE_LABELS: Record<TaskKind, string[]> = {
+  coding: ["inspect", "reproduce", "implement", "checks"],
+  research: ["scope", "sources", "synthesis", "review"],
+  writing: ["brief", "draft", "revise", "review"],
+  operations: ["inspect", "propose", "approve", "execute"],
+};
+
+export function stageKeysFor(taskKind: TaskKind): string[] {
+  return STAGE_LABELS[taskKind];
+}
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.trim();
   if (!trimmed) return { kind: "empty" };
@@ -215,4 +235,49 @@ export function buildRunSessionLines(taskKind: TaskKind, objective: string): Ter
   push("muted", "evidence recorded: model_plan, command_log, patch, test_log (simulation only — nothing persisted)", 160);
 
   return lines;
+}
+
+const CELL_WIDTH = 10;
+
+function padCenter(text: string, width: number): string {
+  const clipped = text.slice(0, width);
+  const totalPad = Math.max(0, width - clipped.length);
+  const left = Math.floor(totalPad / 2);
+  const right = totalPad - left;
+  return " ".repeat(left) + clipped + " ".repeat(right);
+}
+
+function glyphFor(status: StageStatus, spinnerFrame: string): string {
+  if (status === "completed") return "✓";
+  if (status === "failed") return "✗";
+  if (status === "active") return spinnerFrame;
+  return "·";
+}
+
+/**
+ * Renders a boxed pipeline of stages, e.g.:
+ * ┌──────────┐──▶┌──────────┐──▶┌──────────┐──▶┌──────────┐
+ * │  INSPECT │   │ REPRODUCE│   │ IMPLEMENT│   │  CHECKS  │
+ * │    ✓     │   │    ⠋     │   │    ·     │   │    ·     │
+ * └──────────┘   └──────────┘   └──────────┘   └──────────┘
+ * `spinnerFrame` only shows on whichever stage is currently active; every other stage shows
+ * a fixed glyph, so nothing here claims progress that hasn't actually happened.
+ */
+export function renderStageTrack(stages: Stage[], spinnerFrame: string): string {
+  if (stages.length === 0) throw new Error("renderStageTrack requires at least one stage");
+  const top = stages.map(() => `┌${"─".repeat(CELL_WIDTH)}┐`).join("──▶");
+  const label = stages.map((stage) => `│${padCenter(stage.label.toUpperCase(), CELL_WIDTH)}│`).join("   ");
+  const glyph = stages.map((stage) => `│${padCenter(glyphFor(stage.status, spinnerFrame), CELL_WIDTH)}│`).join("   ");
+  const bottom = stages.map(() => `└${"─".repeat(CELL_WIDTH)}┘`).join("   ");
+  return [top, label, glyph, bottom].join("\n");
+}
+
+export const CELEBRATION_FRAMES = [
+  "   ·        ✦        ·   \n ✧    ╔══════════════╗    · \n   ·  ║  TASK DONE ✓ ║  ✦ \n ·    ╚══════════════╝    · \n    ✦     ·      ✧        ",
+  "   ✦        ·        ✧   \n ·    ╔══════════════╗    ✦ \n   ✧  ║  TASK DONE ✓ ║  · \n ✦    ╚══════════════╝    · \n    ·     ✧      ·        ",
+  "   ✧        ✦        ·   \n ✦    ╔══════════════╗    ✧ \n   ·  ║  TASK DONE ✓ ║  ✦ \n ·    ╚══════════════╝    ✧ \n    ✧     ·      ✦        ",
+];
+
+export function renderFailureBanner(): string {
+  return "┌──────────────────┐\n│   RUN FAILED  ✗   │\n└──────────────────┘";
 }

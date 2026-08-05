@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import { formatRwf } from "@/lib/task-cost";
+import type { TaskKind } from "@/lib/task-cost";
 import {
   buildAboutLines,
   buildBanner,
@@ -14,13 +15,21 @@ import {
   buildRunSessionLines,
   buildStatusLines,
   buildUnknownCommandLines,
-  parseCommand,
+  CELEBRATION_FRAMES,
   ORBIT_FRAMES,
+  parseCommand,
+  renderFailureBanner,
+  renderStageTrack,
+  SPINNER_FRAMES,
+  stageKeysFor,
+  type Stage,
+  type StageStatus,
   type TerminalLine,
 } from "@/lib/terminal-simulation";
 
 type LogTone = TerminalLine["tone"] | "input" | "banner";
 type LogEntry = { id: string; tone: LogTone; text: string };
+type TrackState = { stages: Stage[]; outcome?: "completed" | "failed" };
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,6 +52,18 @@ function toneForEvent(type: string): TerminalLine["tone"] {
   return "muted";
 }
 
+function initialStages(taskKind: TaskKind): Stage[] {
+  return stageKeysFor(taskKind).map((key, index) => ({ key, label: key, status: index === 0 ? "active" : "pending" }));
+}
+
+/** Maps a real Convex agentSteps status onto the four visual stage states — never claims more progress than actually happened. */
+function stageStatusFromStepStatus(status: string): StageStatus {
+  if (status === "completed") return "completed";
+  if (status === "failed" || status === "blocked" || status === "cancelled") return "failed";
+  if (status === "running") return "active";
+  return "pending";
+}
+
 export function TerminalConsole() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [input, setInput] = useState("");
@@ -50,6 +71,9 @@ export function TerminalConsole() {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [orbitFrame, setOrbitFrame] = useState(0);
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
+  const [celebrationFrame, setCelebrationFrame] = useState(0);
+  const [track, setTrack] = useState<TrackState | null>(null);
   const [activeRunId, setActiveRunId] = useState<Id<"agentRuns"> | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -75,23 +99,47 @@ export function TerminalConsole() {
 
   useEffect(() => {
     if (!busy) return;
-    const interval = setInterval(() => setOrbitFrame((frame) => (frame + 1) % ORBIT_FRAMES.length), 140);
+    const interval = setInterval(() => {
+      setOrbitFrame((frame) => (frame + 1) % ORBIT_FRAMES.length);
+      setSpinnerFrame((frame) => (frame + 1) % SPINNER_FRAMES.length);
+    }, 140);
     return () => clearInterval(interval);
   }, [busy]);
+
+  // Plays a few celebration frames then settles, rather than animating forever.
+  useEffect(() => {
+    if (track?.outcome !== "completed") return;
+    let cycles = 0;
+    const interval = setInterval(() => {
+      cycles += 1;
+      setCelebrationFrame((frame) => (frame + 1) % CELEBRATION_FRAMES.length);
+      if (cycles >= 5) clearInterval(interval);
+    }, 260);
+    return () => clearInterval(interval);
+  }, [track?.outcome]);
 
   // Streams the real agentRunEvents ledger as it changes — this is Convex's own live
   // reactivity, not a timer: a new event appears here the moment the deployed dispatcher
   // or worker records it, whether that happens in one second or after the next cron tick.
+  // The same data drives the stage-track art, so its progress is exactly the real progress.
   useEffect(() => {
     if (!runDetail) return;
     const newEvents = runDetail.events.filter((event) => !renderedEventIds.current.has(event._id));
-    if (newEvents.length === 0) return;
     for (const event of newEvents) {
       renderedEventIds.current.add(event._id);
       appendLine({ tone: toneForEvent(event.type), text: `[${new Date(event.createdAt).toLocaleTimeString()}] ${event.message}` });
     }
-    const terminalStatus = ["completed", "failed", "cancelled"].includes(runDetail.run.status);
-    if (terminalStatus) {
+
+    const stepByKey = new Map(runDetail.steps.map((step) => [step.stepKey, step]));
+    const stages: Stage[] = stageKeysFor("coding").map((key) => {
+      const step = stepByKey.get(key);
+      return { key, label: key, status: step ? stageStatusFromStepStatus(step.status) : "pending" };
+    });
+    const runTerminal = ["completed", "failed", "cancelled"].includes(runDetail.run.status);
+    setTrack({ stages, outcome: runTerminal ? (runDetail.run.status === "completed" ? "completed" : "failed") : undefined });
+
+    if (newEvents.length === 0) return;
+    if (runTerminal) {
       const task = tasks?.find((item) => item._id === runDetail.run.taskId);
       if (task) appendLine({ tone: runDetail.run.status === "completed" ? "success" : "error", text: `run ${runDetail.run.status} — spent ${formatRwf(Number(task.spentRwf))} of ${formatRwf(Number(task.maxRwf))} cap` });
       setBusy(false);
@@ -107,15 +155,32 @@ export function TerminalConsole() {
     setLog((current) => [...current, { id: entryId(), ...line }]);
   }
 
-  async function playScript(lines: TerminalLine[]) {
+  async function playScript(lines: TerminalLine[], trackTaskKind?: TaskKind) {
     const myRunId = ++runIdRef.current;
     setBusy(true);
-    for (const line of lines) {
+    if (trackTaskKind) setTrack({ stages: initialStages(trackTaskKind) });
+    const stageCount = trackTaskKind ? stageKeysFor(trackTaskKind).length : 0;
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
       await delay(line.delayMs);
       if (runIdRef.current !== myRunId) return;
       appendLine({ tone: line.tone, text: line.text });
+      if (trackTaskKind) {
+        const reachedIndex = Math.min(stageCount - 1, Math.floor(((index + 1) / lines.length) * stageCount));
+        setTrack((current) => current && { stages: current.stages.map((stage, i) => ({ ...stage, status: i < reachedIndex ? "completed" : i === reachedIndex ? "active" : "pending" })) });
+      }
     }
-    if (runIdRef.current === myRunId) setBusy(false);
+    if (runIdRef.current !== myRunId) return;
+    setBusy(false);
+    if (trackTaskKind) {
+      // A settlement line (tone "success") only ever appears for a run that actually
+      // finished; checking anywhere in the script (not just the last line) matters because
+      // the script itself ends with a trailing "evidence recorded" note after settlement.
+      const succeeded = lines.some((line) => line.tone === "success");
+      if (succeeded) setTrack((current) => current && { stages: current.stages.map((stage) => ({ ...stage, status: "completed" })), outcome: "completed" });
+      // Any other ending (e.g. an operations run paused at its approval gate) leaves the
+      // track showing exactly how far it actually got — no fabricated completion.
+    }
   }
 
   async function runLiveCoding(objective: string) {
@@ -129,6 +194,7 @@ export function TerminalConsole() {
     }
     runIdRef.current += 1;
     setBusy(true);
+    setTrack({ stages: initialStages("coding") });
     appendLine({ tone: "system", text: `starting a real coding run — objective: "${objective}"` });
     appendLine({ tone: "muted", text: "creating task, authorizing budget, compiling the run graph, and nudging the dispatcher…" });
     try {
@@ -137,6 +203,7 @@ export function TerminalConsole() {
       setActiveRunId(result.runId);
     } catch (error) {
       appendLine({ tone: "error", text: errorMessage(error) });
+      setTrack((current) => current && { ...current, outcome: "failed" });
       setBusy(false);
     }
   }
@@ -148,14 +215,14 @@ export function TerminalConsole() {
 
     const parsed = parseCommand(raw);
     if (parsed.kind === "empty") return;
-    if (parsed.kind === "clear") { setLog([]); return; }
+    if (parsed.kind === "clear") { setLog([]); setTrack(null); return; }
     if (parsed.kind === "help") { void playScript(buildHelpLines()); return; }
     if (parsed.kind === "about") { void playScript(buildAboutLines()); return; }
     if (parsed.kind === "status") { void playScript(buildStatusLines()); return; }
     if (parsed.kind === "unknown") { void playScript(buildUnknownCommandLines(parsed.raw)); return; }
     if (parsed.kind === "run" && parsed.taskKind === "coding") { void runLiveCoding(parsed.objective); return; }
     appendLine({ tone: "warn", text: `only "run coding <objective>" is wired to a real agent right now — previewing ${parsed.taskKind} as a simulation instead.` });
-    void playScript(buildRunSessionLines(parsed.taskKind, parsed.objective));
+    void playScript(buildRunSessionLines(parsed.taskKind, parsed.objective), parsed.taskKind);
   }
 
   function handleSubmit(event: FormEvent) {
@@ -193,6 +260,13 @@ export function TerminalConsole() {
           {busy && <span className="terminal-orbit">{ORBIT_FRAMES[orbitFrame]}</span>}
         </span>
       </div>
+      {track && (
+        <div className={`terminal-track-panel${track.outcome ? ` terminal-track-${track.outcome}` : ""}`}>
+          <pre className="terminal-track-art">{renderStageTrack(track.stages, SPINNER_FRAMES[spinnerFrame])}</pre>
+          {track.outcome === "completed" && <pre className="terminal-celebration">{CELEBRATION_FRAMES[celebrationFrame]}</pre>}
+          {track.outcome === "failed" && <pre className="terminal-celebration terminal-failure-art">{renderFailureBanner()}</pre>}
+        </div>
+      )}
       <div className="terminal-body">
         {log.map((entry) => (
           <div key={entry.id} className={`terminal-line terminal-line-${entry.tone}`}>

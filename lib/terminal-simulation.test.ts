@@ -6,7 +6,12 @@ import {
   buildRunSessionLines,
   buildStatusLines,
   buildUnknownCommandLines,
+  CELEBRATION_FRAMES,
   parseCommand,
+  renderFailureBanner,
+  renderStageTrack,
+  stageKeysFor,
+  type Stage,
 } from "./terminal-simulation";
 
 describe("parseCommand", () => {
@@ -113,5 +118,66 @@ describe("buildRunSessionLines", () => {
       const lines = buildRunSessionLines(taskKind, "example objective");
       expect(lines.some((line) => line.tone === "tool")).toBe(true);
     }
+  });
+});
+
+describe("stageKeysFor", () => {
+  it("returns four real-workflow stage keys for every task kind", () => {
+    for (const taskKind of ["coding", "research", "writing", "operations"] as const) {
+      expect(stageKeysFor(taskKind)).toHaveLength(4);
+    }
+    expect(stageKeysFor("coding")).toEqual(["inspect", "reproduce", "implement", "checks"]);
+  });
+});
+
+function stage(overrides: Partial<Stage>): Stage {
+  return { key: "inspect", label: "inspect", status: "pending", ...overrides };
+}
+
+describe("renderStageTrack", () => {
+  it("rejects an empty stage list", () => {
+    expect(() => renderStageTrack([], "⠋")).toThrow("at least one stage");
+  });
+
+  it("shows a distinct glyph per stage status, with the spinner frame only on the active stage", () => {
+    const track = renderStageTrack([
+      stage({ key: "inspect", label: "inspect", status: "completed" }),
+      stage({ key: "reproduce", label: "reproduce", status: "active" }),
+      stage({ key: "implement", label: "implement", status: "pending" }),
+      stage({ key: "checks", label: "checks", status: "failed" }),
+    ], "⠋");
+    const lines = track.split("\n");
+    expect(lines).toHaveLength(4);
+    expect(lines[2]).toContain("✓"); // completed
+    expect(lines[2]).toContain("⠋"); // active spinner
+    expect(lines[2]).toContain("·"); // pending
+    expect(lines[2]).toContain("✗"); // failed
+  });
+
+  it("uppercases labels and keeps every row the same width", () => {
+    const track = renderStageTrack([stage({ label: "inspect" }), stage({ label: "checks" })], "⠋");
+    const lines = track.split("\n");
+    expect(lines[1]).toContain("INSPECT");
+    const widths = new Set(lines.map((line) => line.length));
+    expect(widths.size).toBe(1);
+  });
+
+  it("stays aligned for a longer real stage label like REPRODUCE", () => {
+    const track = renderStageTrack(stageKeysFor("coding").map((key) => stage({ key, label: key, status: "pending" })), "⠋");
+    const lines = track.split("\n");
+    const widths = new Set(lines.map((line) => line.length));
+    expect(widths.size).toBe(1);
+  });
+});
+
+describe("celebration and failure art", () => {
+  it("has multiple celebration frames, each announcing the same completion", () => {
+    expect(CELEBRATION_FRAMES.length).toBeGreaterThan(1);
+    for (const frame of CELEBRATION_FRAMES) expect(frame).toContain("TASK DONE");
+  });
+
+  it("renders a plain, distinct failure banner", () => {
+    expect(renderFailureBanner()).toContain("RUN FAILED");
+    expect(renderFailureBanner()).not.toContain("TASK DONE");
   });
 });
