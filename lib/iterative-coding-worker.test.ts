@@ -36,7 +36,7 @@ describe("iterative coding worker", () => {
     expect(result).toMatchObject({ status: "completed", iterations: 1, toolCallsExecuted: 0 });
     expect(result.artifactReferences).toHaveLength(2);
     expect(writes.map((item) => item.kind)).toEqual(["command_log", "review_summary"]);
-    expect(calls).toEqual(["create", "write:/workspace/repo/.circuit-agent-workspace", "stop"]);
+    expect(calls).toEqual(["create", "write:/workspace/repo/.circuit-nova-workspace", "stop"]);
   });
 
   it("terminates the sandbox when the model fails", async () => {

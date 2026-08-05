@@ -15,6 +15,8 @@ import type * as connectors from "../connectors.js";
 import type * as crons from "../crons.js";
 import type * as devTools from "../devTools.js";
 import type * as dispatcher from "../dispatcher.js";
+import type * as github from "../github.js";
+import type * as githubModel from "../githubModel.js";
 import type * as googleCalendar from "../googleCalendar.js";
 import type * as googleCalendarModel from "../googleCalendarModel.js";
 import type * as http from "../http.js";
@@ -38,6 +40,8 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   devTools: typeof devTools;
   dispatcher: typeof dispatcher;
+  github: typeof github;
+  githubModel: typeof githubModel;
   googleCalendar: typeof googleCalendar;
   googleCalendarModel: typeof googleCalendarModel;
   http: typeof http;

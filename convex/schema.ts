@@ -229,6 +229,27 @@ export default defineSchema({
   }).index("by_channel_id", ["channelId"])
     .index("by_connection", ["connectionId"])
     .index("by_expiration", ["status", "expiration"]),
+  githubInstallAttempts: defineTable({
+    organizationId: v.id("organizations"),
+    identitySubject: v.string(),
+    stateHash: v.string(),
+    expiresAt: v.number(),
+    consumedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_state_hash", ["stateHash"])
+    .index("by_organization", ["organizationId"]),
+  githubInstallations: defineTable({
+    organizationId: v.id("organizations"),
+    installationId: v.string(),
+    accountLogin: v.string(),
+    accountType: v.union(v.literal("Organization"), v.literal("User")),
+    repositorySelection: v.union(v.literal("all"), v.literal("selected")),
+    allowedRepositories: v.array(v.string()),
+    status: v.union(v.literal("connected"), v.literal("suspended"), v.literal("revoked")),
+    connectedAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_organization", ["organizationId"])
+    .index("by_installation_id", ["installationId"]),
   connectorScheduleRuns: defineTable({
     organizationId: v.id("organizations"),
     scheduleId: v.id("agentSchedules"),

@@ -20,7 +20,7 @@ test("recalculates a bounded quote as task requirements change", async ({ page }
 });
 
 test("signs up, bootstraps a workspace, and reserves a real task cap in Convex", async ({ page }) => {
-  const email = `e2e-${Date.now()}@circuitagent.test`;
+  const email = `e2e-${Date.now()}@circuitnova.test`;
   await page.goto("/");
   await page.getByRole("button", { name: "Sign up" }).click();
   await page.getByPlaceholder("Name").fill("E2E Runner");

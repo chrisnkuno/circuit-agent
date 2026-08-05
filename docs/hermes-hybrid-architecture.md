@@ -1,10 +1,10 @@
-# Circuit Agent × Hermes architecture
+# Circuit-Nova × Hermes architecture
 
-This design combines Circuit Agent's durable, task-priced control plane with the strongest architectural patterns from [Nous Research's Hermes Agent](https://github.com/nousresearch/hermes-agent). Hermes is MIT-licensed; this integration currently adapts architectural patterns rather than vendoring its Python runtime or copying implementation files.
+This design combines Circuit-Nova's durable, task-priced control plane with the strongest architectural patterns from [Nous Research's Hermes Agent](https://github.com/nousresearch/hermes-agent). Hermes is MIT-licensed; this integration currently adapts architectural patterns rather than vendoring its Python runtime or copying implementation files.
 
 ## Product shape
 
-Circuit Agent remains the system of record and policy authority. Hermes contributes the model for a multipurpose runtime: a small stable core, capabilities loaded at the edges, reusable skills, multiple interaction surfaces, long-lived memory, scheduled work, and delegation.
+Circuit-Nova remains the system of record and policy authority. Hermes contributes the model for a multipurpose runtime: a small stable core, capabilities loaded at the edges, reusable skills, multiple interaction surfaces, long-lived memory, scheduled work, and delegation.
 
 ```text
 Web / mobile / CLI / messaging
@@ -29,7 +29,7 @@ The model is never the policy authority. It can propose steps and tool calls, bu
 
 ## What comes from each system
 
-| Keep from Circuit Agent | Adopt from Hermes |
+| Keep from Circuit-Nova | Adopt from Hermes |
 |---|---|
 | Organization-scoped authorization | Narrow core with capability at the edges |
 | Pre-execution RWF quote and hard cap | Skills and connectors loaded only when relevant |
@@ -84,7 +84,7 @@ Capability identifiers are attached to runs and steps and persisted by Convex. T
 
 ### Stable prompt, volatile context
 
-Hermes treats prompt caching as a runtime invariant. Circuit Agent should likewise keep the policy and capability schema byte-stable for the life of a run. Task state, recalled memory, tool output, and user corrections belong in appended messages, not mutations of the stable system prefix. Context compression must create an auditable continuation rather than silently rewriting durable history.
+Hermes treats prompt caching as a runtime invariant. Circuit-Nova should likewise keep the policy and capability schema byte-stable for the life of a run. Task state, recalled memory, tool output, and user corrections belong in appended messages, not mutations of the stable system prefix. Context compression must create an auditable continuation rather than silently rewriting durable history.
 
 ### Bounded tool loop
 
@@ -120,7 +120,7 @@ The second model is preferred for recovery: a worker can die, the lease can expi
 
 ### Memory and learned skills
 
-Hermes's distinction between small durable facts and larger on-demand procedures is useful, but Circuit Agent must make it tenant-safe:
+Hermes's distinction between small durable facts and larger on-demand procedures is useful, but Circuit-Nova must make it tenant-safe:
 
 - memory records require organization ownership, provenance, sensitivity, retention, and deletion state;
 - recall results are attached to a run as evidence of influence;
@@ -214,3 +214,13 @@ Retries reuse the same idempotency key. A provider adapter that cannot prove saf
 - Do not ship every Hermes tool in the default model schema.
 - Do not let autonomous memory or skill learning alter authorization, budgets, or approval policy.
 - Do not combine the full Python and TypeScript applications into one deployment unit. Hermes can later be supported as an optional worker runtime behind the same capability contract.
+
+## Cross-checked against OpenClaw
+
+[OpenClaw](https://github.com/openclaw/openclaw) is a large open-source personal agent gateway that connects chat platforms to coding agents with shell and browser access. Two things from it are worth recording.
+
+**Adopted.** OpenClaw's coding-agent skill resolves a canonical remote, classifies the working ref as trusted or untrusted before checkout, isolates credentials from ambient environment state, validates branch ancestry before pushing, and never force-pushes. `lib/providers/github.ts` adapts this directly: `classifyRefTrust` distrusts forks, unlisted repositories, and non-default refs; every patch branch is namespaced under `circuit-nova/` and created rather than force-updated; every repository call mints a fresh, short-lived installation token instead of holding one; and installation identity is always re-resolved from GitHub's API rather than trusted from a callback redirect.
+
+**Deliberately not adopted.** OpenClaw's default posture is to run shell access, browser control, and message-sending "on a loop" without a human approval step, and a January 2026 disclosure (CVE-2026-25253, a cross-site WebSocket hijack) found over 21,000 self-hosted instances exposed to the public internet. That outcome is the concrete failure mode principle 2 in this document exists to prevent: Circuit-Nova's connector and coding-run writes go through `connectorActionIntents`/`approvals`, not an unattended loop, and nothing in the control plane is designed to be reachable without organization-scoped authentication.
+
+**Still worth taking.** Hermes's procedural-memory skills (distilling a solved task into a reusable, versioned skill) and its multi-backend terminal abstraction (seven interchangeable sandbox runtimes behind one interface) are both patterns Circuit-Nova has only sketched — Slice 3 for skills, and a single E2B implementation behind the already-narrow `SandboxProvider`/`CodingSandboxProvider` contracts for backends. Neither documents any spending control comparable to the RWF budget/reservation/settlement system here, which remains this project's clearest advantage over both.

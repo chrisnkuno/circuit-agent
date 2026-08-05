@@ -14,7 +14,7 @@ This is a repository-grounded maturity assessment, not a security certification,
 
 ## Executive finding
 
-Circuit Agent is a coherent, tested foundation for a task-priced agent platform. It is not yet a complete or production-ready agent system. The strongest implemented seams are transparent RWF quoting, dependency-aware task planning, bounded scheduling, durable data models, and explicit provider contracts. The weakest seams are live execution, identity/security, provider integrations, mobile delivery, and production operations.
+Circuit-Nova is a coherent, tested foundation for a task-priced agent platform. It is not yet a complete or production-ready agent system. The strongest implemented seams are transparent RWF quoting, dependency-aware task planning, bounded scheduling, durable data models, and explicit provider contracts. The weakest seams are live execution, identity/security, provider integrations, mobile delivery, and production operations.
 
 **Current technical maturity: 68 / 100 — integrated, locally tested pre-alpha execution engine.**
 

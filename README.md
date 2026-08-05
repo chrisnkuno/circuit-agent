@@ -1,4 +1,4 @@
-# Circuit Agent
+# Circuit-Nova
 
 An early foundation for a task-priced, multi-interface AI agent system.
 
@@ -32,13 +32,15 @@ Users should know a task's expected RWF cost and maximum approved spend before a
 - Conservative token-to-RWF model reservation plus reconciliation from actual provider usage.
 - Bounded coding worker that writes scoped files, runs checks, observes cancellation checkpoints, captures content-addressed evidence, and terminates E2B in every exit path.
 - Convex heartbeat, sandbox identity, artifact metadata, approval records, and lifecycle transitions ready for deployment validation.
-- Minute-based expired-lease recovery cron ready to activate with Convex.
+- Minute-based expired-lease recovery and coding-dispatch crons, deployed and running on the Convex development environment.
 - Secret-safe provider readiness diagnostics at `/api/health`.
 - Desktop and mobile-viewport Playwright coverage for the current operational interface.
+- GitHub App repository provisioning: JWT app authentication, short-lived installation tokens, authoritative installation lookup (never trusting a browser redirect), fork/branch trust classification, namespaced patch branches, idempotent approval-gated PR creation, a state-bound install callback, and a signature-verified installation webhook.
+- A GitHub Actions workflow runs the test, typecheck, and build gates on every push and pull request.
 
 ## Activation status
 
-A live iterative coding task exercised CircuitNotion `gpt-5.6-luna` through six model turns and six E2B tool calls, created a JavaScript module and unit tests, and completed only after `node --test` passed two tests. The Google Calendar control plane, vault, webhook, and schedule worker are deployed to the Convex development environment. Final user-consent verification remains blocked until a Google Cloud OAuth web client ID and secret are configured; every other catalogue connector remains inactive. Production coding execution still requires dispatcher migration, payment authorization, durable repository provisioning, and provider-specific research/writing workers.
+The full production coding-dispatch path has completed live, end-to-end runs against real providers: `CodingAgentWorker` with `CircuitNotionCodingModelProvider` and a real E2B sandbox completed a plan-write-verify cycle, and the newer `IterativeCodingAgentWorker` with `CircuitNotionAgentTurnProvider` completed a 5-turn, 5-tool-call loop that wrote a source file and a passing test. The Convex dispatcher now runs on a one-minute cron, so a queued coding run executes automatically rather than requiring a manual trigger. The Google Calendar control plane, vault, webhook, and schedule worker are deployed to the Convex development environment. Final user-consent verification remains blocked until a Google Cloud OAuth web client ID and secret are configured; every other catalogue connector remains inactive. GitHub repository provisioning is built and unit-tested but has no registered App yet. Production readiness still requires migrating the dispatcher to the iterative worker, payment authorization, durable repository cloning into the E2B workspace, and provider-specific research/writing workers.
 
 ## Google Calendar activation
 
@@ -52,6 +54,20 @@ bunx convex dev --once
 
 The connector requests only `calendar.events.owned`, offline access, state, and PKCE. The client secret and vault key are Convex environment variables; OAuth and action payloads are encrypted before database insertion and never sent to the browser.
 
+## GitHub App activation
+
+Create a GitHub App with a **Setup URL** of `NEXT_PUBLIC_SITE_URL` + `/api/connectors/github/callback` and a **Webhook URL** of the Convex site URL + `/github/webhook`, subscribed to the `installation` and `installation_repositories` events. Then set the server-only values on the Convex deployment:
+
+```bash
+bunx convex env set GITHUB_APP_ID
+bunx convex env set GITHUB_APP_SLUG
+bunx convex env set GITHUB_APP_PRIVATE_KEY
+bunx convex env set GITHUB_WEBHOOK_SECRET
+bunx convex dev --once
+```
+
+Installation identity is never trusted from the browser redirect: the callback only carries a state-bound installation ID, which the server re-resolves against GitHub using the App's own JWT before recording anything. The App private key never leaves Convex environment state, and every repository action mints a fresh, short-lived installation token rather than persisting one.
+
 ## Development
 
 ```bash
@@ -63,13 +79,13 @@ bun run build
 bun run test:e2e
 ```
 
-To activate Convex, configure a deployment then generate its bindings before deployment:
+A Convex development deployment is configured and its generated bindings (`convex/_generated`) are committed, so `bun run typecheck` and `bun run build` work without any additional setup. After editing `convex/schema.ts` or any `convex/*.ts` function, regenerate bindings against your own deployment before typechecking:
 
 ```bash
-bunx convex dev
+bunx convex dev --once
 ```
 
-`convex/_generated` is intentionally absent until a Convex deployment is configured. The frontend and pure pricing logic can be verified before that activation; the Convex backend should be typechecked immediately after code generation.
+CI builds with placeholder `NEXT_PUBLIC_CONVEX_URL`/`NEXT_PUBLIC_CONVEX_SITE_URL` values, so the build gate never depends on a real deployment being reachable.
 
 ## System map
 

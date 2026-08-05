@@ -1,8 +1,8 @@
-# Circuit Agent foundation
+# Circuit-Nova foundation
 
 ## System boundaries
 
-Circuit Agent is organized around four independent concerns:
+Circuit-Nova is organized around four independent concerns:
 
 1. **Interface layer** — responsive web, native mobile, and future desktop clients create tasks, observe progress, and approve sensitive work.
 2. **Control plane** — Convex owns durable tasks, quotes, task events, payment-hold state, permissions, and future workflow scheduling.

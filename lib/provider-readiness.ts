@@ -12,12 +12,17 @@ export type ProviderConfiguration = {
   modelOutputRwfPerMillion?: string;
   circuitPayApiKey?: string;
   circuitPayWebhookSecret?: string;
+  githubAppId?: string;
+  githubAppSlug?: string;
+  githubAppPrivateKey?: string;
+  githubWebhookSecret?: string;
 };
 
 export type ReadinessReport = {
   controlPlane: boolean;
   codingExecution: boolean;
   payments: boolean;
+  repositoryProvisioning: boolean;
   missing: string[];
 };
 
@@ -44,6 +49,10 @@ export function assessProviderReadiness(config: ProviderConfiguration): Readines
     ["MODEL_OUTPUT_RWF_PER_MILLION", positiveInteger(config.modelOutputRwfPerMillion)],
     ["CIRCUIT_PAY_API_KEY", config.circuitPayApiKey],
     ["CIRCUIT_PAY_WEBHOOK_SECRET", config.circuitPayWebhookSecret],
+    ["GITHUB_APP_ID", config.githubAppId],
+    ["GITHUB_APP_SLUG", config.githubAppSlug],
+    ["GITHUB_APP_PRIVATE_KEY", config.githubAppPrivateKey],
+    ["GITHUB_WEBHOOK_SECRET", config.githubWebhookSecret],
   ] as const;
   const missing = requirements.filter(([, value]) => !value?.trim()).map(([name]) => name);
   const has = (name: (typeof requirements)[number][0]) => !missing.includes(name);
@@ -58,6 +67,7 @@ export function assessProviderReadiness(config: ProviderConfiguration): Readines
       && has("MODEL_INPUT_RWF_PER_MILLION")
       && has("MODEL_OUTPUT_RWF_PER_MILLION"),
     payments: has("CONVEX_DEPLOYMENT") && has("NEXT_PUBLIC_CONVEX_URL") && has("CIRCUIT_PAY_API_KEY") && has("CIRCUIT_PAY_WEBHOOK_SECRET"),
+    repositoryProvisioning: has("CONVEX_DEPLOYMENT") && has("NEXT_PUBLIC_CONVEX_URL") && has("GITHUB_APP_ID") && has("GITHUB_APP_SLUG") && has("GITHUB_APP_PRIVATE_KEY") && has("GITHUB_WEBHOOK_SECRET"),
     missing,
   };
 }

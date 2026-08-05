@@ -64,4 +64,16 @@ describe("provider readiness", () => {
     expect(report.payments).toBe(false);
     expect(report.missing).toContain("CIRCUIT_PAY_WEBHOOK_SECRET");
   });
+
+  it("requires the full GitHub App credential set before repository provisioning is ready", () => {
+    const incomplete = assessProviderReadiness({ convexDeployment: "dev:one", convexUrl: "https://example.convex.cloud", githubAppId: "123" });
+    expect(incomplete.repositoryProvisioning).toBe(false);
+    expect(incomplete.missing).toEqual(expect.arrayContaining(["GITHUB_APP_SLUG", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET"]));
+
+    const complete = assessProviderReadiness({
+      convexDeployment: "dev:one", convexUrl: "https://example.convex.cloud",
+      githubAppId: "123", githubAppSlug: "circuit-nova", githubAppPrivateKey: "-----BEGIN RSA PRIVATE KEY-----", githubWebhookSecret: "whsec",
+    });
+    expect(complete.repositoryProvisioning).toBe(true);
+  });
 });

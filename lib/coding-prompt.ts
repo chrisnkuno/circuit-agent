@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ALLOWED_SANDBOX_PROGRAMS } from "./sandbox-policy";
 
-export const CODING_PLANNER_PROMPT_VERSION = "coding-planner-v1";
+export const CODING_PLANNER_PROMPT_VERSION = "coding-planner-v2";
 
 const WorkspaceFileChangeSchema = z.object({
   path: z.string().min(1).max(240),
@@ -46,6 +46,7 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     "Return a minimal plan that changes only files necessary for the objective and verifies the result.",
     "All file paths must be absolute and remain under the supplied workspace root.",
     "Use only the allowed command programs. Commands receive argv directly; do not use shell syntax.",
+    "Never pass an inline-evaluation flag (-c, -e, --eval, -p, --print) to node, python, or python3; write the code to a file and run that file instead.",
     "Do not merge, deploy, push, send messages, access secrets, install remote packages, or make external changes.",
     "If required context is absent or the work is unsafe, return blocked or needs_clarification with no file changes or commands.",
   ].join("\n");

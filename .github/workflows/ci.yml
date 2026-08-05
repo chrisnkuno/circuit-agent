@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun test
+
+      - run: bun run typecheck
+
+      # Convex generated bindings are committed, so the build only needs
+      # placeholder values for the client env vars it reads at build time.
+      # No real Convex deployment or provider credentials are contacted.
+      - name: Write placeholder build env
+        run: |
+          cat > .env.local <<'EOF'
+          CONVEX_DEPLOYMENT=dev:placeholder
+          NEXT_PUBLIC_CONVEX_URL=https://placeholder.convex.cloud
+          NEXT_PUBLIC_CONVEX_SITE_URL=https://placeholder.convex.site
+          NEXT_PUBLIC_SITE_URL=http://localhost:3000
+          EOF
+
+      - run: bun run build
+
+      # Playwright e2e is intentionally not run here: the e2e suite exercises
+      # a real Convex deployment (auth sign-up, task persistence), which this
+      # workflow has no credentials for. Run `bun run test:e2e` locally against
+      # a configured dev deployment before merging changes that touch the
+      # workspace UI or Convex mutations it calls.

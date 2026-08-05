@@ -2,17 +2,17 @@
 
 ## Strategic thesis
 
-Circuit Agent’s initial customer is a mobile-first professional, founder, or small technical team that has meaningful work to complete but cannot continuously supervise an AI session. The first wedge is repository work because coding forces the product to prove permissions, isolation, long-running execution, verification, artifacts, cost control, and human approval in one workflow.
+Circuit-Nova’s initial customer is a mobile-first professional, founder, or small technical team that has meaningful work to complete but cannot continuously supervise an AI session. The first wedge is repository work because coding forces the product to prove permissions, isolation, long-running execution, verification, artifacts, cost control, and human approval in one workflow.
 
 The product promise is:
 
-> Give Circuit Agent an outcome, approve a clear RWF cap, leave the interface, and return to evidence-backed work you can inspect and control.
+> Give Circuit-Nova an outcome, approve a clear RWF cap, leave the interface, and return to evidence-backed work you can inspect and control.
 
 This is narrower and more defensible than “an agent that can do everything.” Everyday app workflows should inherit the proven execution contract rather than invent a second system.
 
 ## Philosophical direction
 
-Circuit Agent should be built around **legible autonomy**: the machine may act independently inside a boundary that the person can understand, price, interrupt, and audit.
+Circuit-Nova should be built around **legible autonomy**: the machine may act independently inside a boundary that the person can understand, price, interrupt, and audit.
 
 Five principles define the product:
 
@@ -22,11 +22,11 @@ Five principles define the product:
 4. **Durability over spectacle.** A task must survive a closed phone, a failed worker, and a provider outage. Animated agent activity is secondary.
 5. **Graceful limits over fabricated success.** Missing credentials, uncertain scope, exhausted budgets, and unsafe requests become explicit states.
 
-This direction positions Circuit Agent as a trusted execution layer for individuals and teams, with coding as the first demanding proof of reliability.
+This direction positions Circuit-Nova as a trusted execution layer for individuals and teams, with coding as the first demanding proof of reliability.
 
 ## Product boundaries and non-goals
 
-Until the coding vertical passes its exit gate, Circuit Agent is not trying to be:
+Until the coding vertical passes its exit gate, Circuit-Nova is not trying to be:
 
 - An unconstrained autonomous employee.
 - A social collection of agent personalities.

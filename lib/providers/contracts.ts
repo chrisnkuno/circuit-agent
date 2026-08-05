@@ -59,3 +59,46 @@ export interface CodingSandboxProvider extends ExecutableSandboxProvider {
 export interface InteractiveCodingSandboxProvider extends CodingSandboxProvider {
   readFile(sandboxId: string, path: string): Promise<string>;
 }
+
+export type RepositoryTarget = {
+  installationId: string;
+  owner: string;
+  repo: string;
+  ref: string;
+};
+
+export type ResolvedRepositoryRef = {
+  owner: string;
+  repo: string;
+  ref: string;
+  sha: string;
+};
+
+export type PatchBranchRequest = {
+  owner: string;
+  repo: string;
+  branchName: string;
+  fromSha: string;
+};
+
+export type PullRequestRequest = {
+  owner: string;
+  repo: string;
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+};
+
+export type PullRequestReceipt = {
+  number: number;
+  htmlUrl: string;
+  state: string;
+};
+
+/** GitHub App-backed repository access. Every method mints a fresh, short-lived installation token; nothing here is persisted. */
+export interface RepositoryProvider {
+  resolveRef(target: RepositoryTarget): Promise<ResolvedRepositoryRef>;
+  createPatchBranch(installationId: string, request: PatchBranchRequest): Promise<void>;
+  createPullRequest(installationId: string, request: PullRequestRequest): Promise<PullRequestReceipt>;
+}

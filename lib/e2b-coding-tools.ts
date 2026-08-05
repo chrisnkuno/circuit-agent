@@ -36,8 +36,8 @@ function isReadOnlyCommand(command: SandboxCommand): boolean {
 }
 
 export async function initializeE2BCodingWorkspace(options: { sandbox: InteractiveCodingSandboxProvider; sandboxId: string; workspaceRoot: string }): Promise<void> {
-  const path = workspacePath(options.workspaceRoot, ".circuit-agent-workspace");
-  await options.sandbox.writeFile(options.sandboxId, path, "Circuit Agent isolated workspace.\n");
+  const path = workspacePath(options.workspaceRoot, ".circuit-nova-workspace");
+  await options.sandbox.writeFile(options.sandboxId, path, "Circuit-Nova isolated workspace.\n");
 }
 
 export function createE2BCodingTools(options: {

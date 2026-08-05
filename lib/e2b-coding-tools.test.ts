@@ -38,7 +38,7 @@ describe("E2B coding tools", () => {
   it("initializes the workspace before the first read-only tool call", async () => {
     const fake = fakeSandbox();
     await initializeE2BCodingWorkspace({ sandbox: fake.sandbox, sandboxId: "sandbox-1", workspaceRoot: "/workspace/repo" });
-    expect(fake.writes).toEqual([{ path: "/workspace/repo/.circuit-agent-workspace", content: "Circuit Agent isolated workspace.\n" }]);
+    expect(fake.writes).toEqual([{ path: "/workspace/repo/.circuit-nova-workspace", content: "Circuit-Nova isolated workspace.\n" }]);
   });
 
   it("keeps search fixed-string and read-only", async () => {

@@ -77,7 +77,7 @@ export class OpenAICodingModelProvider implements CodingModelProvider {
       reasoning: { effort: request.reasoningEffort },
       text: { format: zodTextFormat(CodingPlanSchema, "coding_plan") },
       metadata: { task_id: request.taskId, step_id: request.stepId, prompt_version: "coding-planner-v1" },
-      prompt_cache_key: "circuit-agent-coding-planner-v1",
+      prompt_cache_key: "circuit-nova-coding-planner-v1",
       safety_identifier: request.safetyIdentifier,
       store: false,
     }, AbortSignal.timeout(request.timeoutMs));

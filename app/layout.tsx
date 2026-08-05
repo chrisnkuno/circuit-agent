@@ -3,7 +3,7 @@ import "./globals.css";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 
 export const metadata: Metadata = {
-  title: "Circuit Agent",
+  title: "Circuit-Nova",
   description: "A task-priced agent operating system.",
 };
 
