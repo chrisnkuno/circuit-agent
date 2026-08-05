@@ -186,12 +186,13 @@ Retries reuse the same idempotency key. A provider adapter that cannot prove saf
 - Remaining: migrate the Convex dispatcher from the legacy one-shot coding planner, add stable-prefix context compression, and route browser/data steps to dedicated workers.
 - Dispatcher migration is gated on durable repository provisioning and cross-step workspace reconstruction.
 
-### Slice 3 — skills and memory
+### Slice 3 — skills and memory (skills implemented; memory not started)
 
-- Store organization-approved skill manifests and versioned instructions.
+- Implemented versioned, organization-scoped skill proposals distilled from a completed, evidence-backed run (`lib/skills.ts`, `convex/skills.ts`), relevance-and-budget recall, and advisory-only prompt guidance the iterative worker composes when supplied. A version is never edited in place, so an approved version already used by a billed run stays immutable by construction.
+- Implemented human review as the only path to `approved`: `proposeFromRun` always inserts `proposed`; a separate `skill:manage`-gated `decide` mutation is the sole way to reach `approved` or `rejected`. Nothing can silently self-modify policy.
+- Remaining: wire `proposeFromRun` into a completed run's exit path, populate the iterative worker's `skills` field from `selectRelevantSkills` at request-assembly time, and migrate the Convex dispatcher to the iterative worker so any of this runs live.
 - Add tenant-scoped episodic and semantic memory with provenance, retention, and deletion.
 - Recall only task-relevant memory and record which memories influenced a run.
-- Propose learned skills for human review; never allow silent self-modification of policy.
 
 ### Slice 4 — schedules, channels, and delegation (control-plane foundation implemented)
 
@@ -223,4 +224,9 @@ Retries reuse the same idempotency key. A provider adapter that cannot prove saf
 
 **Deliberately not adopted.** OpenClaw's default posture is to run shell access, browser control, and message-sending "on a loop" without a human approval step, and a January 2026 disclosure (CVE-2026-25253, a cross-site WebSocket hijack) found over 21,000 self-hosted instances exposed to the public internet. That outcome is the concrete failure mode principle 2 in this document exists to prevent: Circuit-Nova's connector and coding-run writes go through `connectorActionIntents`/`approvals`, not an unattended loop, and nothing in the control plane is designed to be reachable without organization-scoped authentication.
 
-**Still worth taking.** Hermes's procedural-memory skills (distilling a solved task into a reusable, versioned skill) and its multi-backend terminal abstraction (seven interchangeable sandbox runtimes behind one interface) are both patterns Circuit-Nova has only sketched — Slice 3 for skills, and a single E2B implementation behind the already-narrow `SandboxProvider`/`CodingSandboxProvider` contracts for backends. Neither documents any spending control comparable to the RWF budget/reservation/settlement system here, which remains this project's clearest advantage over both.
+**Taken.** Hermes's procedural-memory skills and its multi-backend terminal abstraction are both implemented now, each to the same "pure logic plus durable approval gate" pattern the rest of this document uses.
+
+- `lib/skills.ts` distills a completed, evidence-backed run into a versioned, slugged skill draft (`distillSkillFromRun`), scores and budgets which approved skills are relevant to a new objective (`selectRelevantSkills`), and renders recalled skills as advisory-only guidance that explicitly cannot widen a tool, permission, budget, or connector grant (`renderSkillGuidance`, `composeSystemPromptWithSkills`) — the wording is deliberate, reinforcing invariant 7 inside the prompt itself. `convex/skills.ts` persists proposals against the new `skills` table and gates `approved`/`rejected` decisions behind a new `skill:manage` permission; a version is only ever created, never edited in place, so an approved version used by a billed run stays immutable by construction. `IterativeCodingAgentWorker` already composes any supplied `skills` into the system prompt the model receives (proven by a unit test asserting on the literal prompt content), but no caller populates that field yet — the iterative worker itself is still not the deployed dispatcher path (see Slice 2), and nothing yet calls `proposeFromRun` automatically after a completed run. Both are one call away once that migration happens.
+- `lib/providers/docker.ts` is a second `InteractiveCodingSandboxProvider` implementation, talking to the local Docker CLI as argv-only subprocess calls (`run`/`exec`/`cp`/`rm`, never a shell) and reusing the exact same `validateSandboxCommand`/`validateWorkspaceFile` policy E2B enforces. `lib/providers/factory.ts` exposes `createCodingSandboxProvider`, selected by `CODING_SANDBOX_PROVIDER` and defaulting to E2B so every existing deployment is unaffected. `convex/dispatcher.ts` still imports `createE2BProvider` directly rather than the new selector — swapping that one line is the remaining step to make the backend truly interchangeable in production.
+
+Neither Hermes nor OpenClaw documents any spending control comparable to the RWF budget/reservation/settlement system here, which remains this project's clearest advantage over both.

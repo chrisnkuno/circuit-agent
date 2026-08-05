@@ -15,4 +15,10 @@ describe("organization authorization", () => {
     expect(hasPermission("owner", "billing:manage")).toBe(true);
     expect(hasPermission("admin", "billing:manage")).toBe(false);
   });
+
+  it("grants skill approval to owners and admins but not members", () => {
+    expect(hasPermission("owner", "skill:manage")).toBe(true);
+    expect(hasPermission("admin", "skill:manage")).toBe(true);
+    expect(hasPermission("member", "skill:manage")).toBe(false);
+  });
 });

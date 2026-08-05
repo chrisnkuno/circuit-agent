@@ -7,12 +7,13 @@ export type Permission =
   | "agent:run"
   | "approval:decide"
   | "connector:manage"
+  | "skill:manage"
   | "billing:manage"
   | "organization:manage";
 
 const ROLE_PERMISSIONS: Record<OrganizationRole, ReadonlySet<Permission>> = {
-  owner: new Set<Permission>(["task:create", "task:read", "task:cancel", "agent:run", "approval:decide", "connector:manage", "billing:manage", "organization:manage"]),
-  admin: new Set<Permission>(["task:create", "task:read", "task:cancel", "agent:run", "approval:decide", "connector:manage"]),
+  owner: new Set<Permission>(["task:create", "task:read", "task:cancel", "agent:run", "approval:decide", "connector:manage", "skill:manage", "billing:manage", "organization:manage"]),
+  admin: new Set<Permission>(["task:create", "task:read", "task:cancel", "agent:run", "approval:decide", "connector:manage", "skill:manage"]),
   member: new Set<Permission>(["task:create", "task:read", "task:cancel", "agent:run"]),
   viewer: new Set<Permission>(["task:read"]),
 };

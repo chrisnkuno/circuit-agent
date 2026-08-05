@@ -229,6 +229,23 @@ export default defineSchema({
   }).index("by_channel_id", ["channelId"])
     .index("by_connection", ["connectionId"])
     .index("by_expiration", ["status", "expiration"]),
+  skills: defineTable({
+    organizationId: v.id("organizations"),
+    slug: v.string(),
+    version: v.number(),
+    title: v.string(),
+    taskKind: v.union(v.literal("coding"), v.literal("research"), v.literal("writing"), v.literal("operations")),
+    proceduralSummary: v.string(),
+    sourceRunId: v.id("agentRuns"),
+    sourceObjective: v.string(),
+    status: v.union(v.literal("proposed"), v.literal("approved"), v.literal("rejected"), v.literal("retired")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    decidedBy: v.optional(v.string()),
+    decidedAt: v.optional(v.number()),
+  }).index("by_organization", ["organizationId"])
+    .index("by_organization_status", ["organizationId", "status"])
+    .index("by_organization_slug", ["organizationId", "slug"]),
   githubInstallAttempts: defineTable({
     organizationId: v.id("organizations"),
     identitySubject: v.string(),

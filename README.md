@@ -37,6 +37,8 @@ Users should know a task's expected RWF cost and maximum approved spend before a
 - Desktop and mobile-viewport Playwright coverage for the current operational interface.
 - GitHub App repository provisioning: JWT app authentication, short-lived installation tokens, authoritative installation lookup (never trusting a browser redirect), fork/branch trust classification, namespaced patch branches, idempotent approval-gated PR creation, a state-bound install callback, and a signature-verified installation webhook.
 - A GitHub Actions workflow runs the test, typecheck, and build gates on every push and pull request.
+- Procedural-memory skills: evidence-gated distillation of a completed run into a versioned, slugged skill, relevance-and-budget recall, approval-gated Convex storage that can only ever add a new version, and advisory-only prompt composition the iterative worker already applies when skills are supplied.
+- A second, interchangeable sandbox backend (`DockerSandboxProvider`) behind the same `InteractiveCodingSandboxProvider` contract E2B implements, talking to the Docker CLI as argv-only subprocess calls under the identical command and file policy, selected by an explicit factory function that defaults to E2B.
 
 ## Activation status
 

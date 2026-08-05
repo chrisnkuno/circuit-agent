@@ -1,8 +1,10 @@
 import { E2BSandboxProvider } from "./e2b";
+import { DockerSandboxProvider } from "./docker";
 import { OpenAICodingModelProvider } from "./openai";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
 import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import type { CodingModelProvider } from "./model";
+import type { InteractiveCodingSandboxProvider } from "./contracts";
 import type { ModelPriceCatalog } from "../model-cost";
 
 export type ProviderEnvironment = {
@@ -11,6 +13,9 @@ export type ProviderEnvironment = {
   E2B_BROWSER_TEMPLATE?: string;
   E2B_DATA_TEMPLATE?: string;
   E2B_ALLOW_INTERNET?: string;
+  DOCKER_CODING_IMAGE?: string;
+  DOCKER_ALLOW_INTERNET?: string;
+  CODING_SANDBOX_PROVIDER?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   CIRCUITNOTION_API_KEY?: string;
@@ -34,6 +39,25 @@ export function createE2BProvider(environment: ProviderEnvironment): E2BSandboxP
     },
     allowInternetAccess: environment.E2B_ALLOW_INTERNET === "true",
   });
+}
+
+export function createDockerProvider(environment: ProviderEnvironment): DockerSandboxProvider | undefined {
+  const image = environment.DOCKER_CODING_IMAGE?.trim();
+  if (!image) return undefined;
+  return new DockerSandboxProvider({ image, allowInternetAccess: environment.DOCKER_ALLOW_INTERNET === "true" });
+}
+
+/**
+ * Sandbox backend selection is explicit but, unlike the model-provider selector below,
+ * defaults to the established E2B backend when unset: every deployment that predates this
+ * selector never set CODING_SANDBOX_PROVIDER, and it must keep behaving exactly as before.
+ * Set it to "docker" to run the second, interchangeable backend behind the same contract.
+ */
+export function createCodingSandboxProvider(environment: ProviderEnvironment): InteractiveCodingSandboxProvider | undefined {
+  const selection = environment.CODING_SANDBOX_PROVIDER?.trim() || "e2b";
+  if (selection === "docker") return createDockerProvider(environment);
+  if (selection === "e2b") return createE2BProvider(environment);
+  return undefined;
 }
 
 function parsePositiveInteger(value: string | undefined, name: string): number | undefined {

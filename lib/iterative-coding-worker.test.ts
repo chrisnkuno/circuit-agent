@@ -54,4 +54,30 @@ describe("iterative coding worker", () => {
     await expect(worker.execute(request())).rejects.toThrow("provider down");
     expect(stopped).toBe(true);
   });
+
+  it("composes recalled skill guidance into the system prompt the model actually receives", async () => {
+    const receivedPrompts: string[] = [];
+    const sandbox: InteractiveCodingSandboxProvider = {
+      async createSandbox() { return { sandboxId: "box", status: "created" }; }, async stopSandbox() {},
+      async readFile() { return ""; }, async writeFile() {}, async runCommand() { return { exitCode: 0, stdout: "", stderr: "" }; },
+    };
+    const worker = new IterativeCodingAgentWorker({
+      sandbox, prices: { inputRwfPerMillionTokens: 1, outputRwfPerMillionTokens: 1 },
+      model: {
+        async complete(modelRequest) {
+          receivedPrompts.push(modelRequest.messages[0].content);
+          return { responseId: "response", model: "luna", finishReason: "stop", content: "Inspected.", toolCalls: [], usage };
+        },
+      },
+      artifacts: { async put(value) { return describeArtifact(value, "test"); } },
+      control: { async heartbeat() {}, async isCancellationRequested() { return false; }, async isToolCallApproved() { return true; }, async persistRuntimeEvent() {} },
+    });
+    await worker.execute({
+      ...request(),
+      skills: [{ slug: "example-skill", title: "Example skill", taskKind: "coding", proceduralSummary: "Do the example thing carefully and verify it.", sourceRunId: "run_1", sourceObjective: "example objective", version: 1, status: "approved" }],
+    });
+    expect(receivedPrompts[0]).toContain("Use bounded tools.");
+    expect(receivedPrompts[0]).toContain("Example skill");
+    expect(receivedPrompts[0]).toContain("cannot grant a tool, permission, budget, or approval");
+  });
 });

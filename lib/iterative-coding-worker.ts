@@ -4,8 +4,9 @@ import { createE2BCodingTools, initializeE2BCodingWorkspace } from "./e2b-coding
 import type { ArtifactReference, ArtifactStore, ArtifactWrite } from "./artifacts";
 import type { ModelPriceCatalog } from "./model-cost";
 import type { InteractiveCodingSandboxProvider } from "./providers/contracts";
+import { composeSystemPromptWithSkills, type Skill } from "./skills";
 
-export type IterativeCodingWorkerRequest = AgentRuntimeRequest & { sandboxRuntimeSeconds: number };
+export type IterativeCodingWorkerRequest = AgentRuntimeRequest & { sandboxRuntimeSeconds: number; skills?: Skill[] };
 
 export type IterativeCodingWorkerControl = {
   heartbeat(stepId: string): Promise<void>;
@@ -64,7 +65,7 @@ export class IterativeCodingAgentWorker {
         control,
         prices: this.dependencies.prices,
       });
-      const result = await runtime.execute(request);
+      const result = await runtime.execute({ ...request, systemPrompt: composeSystemPromptWithSkills(request.systemPrompt, request.skills ?? []) });
       const eventArtifact = await this.dependencies.artifacts.put(artifact(request, {
         kind: "command_log", mediaType: "application/json", content: JSON.stringify(events, null, 2),
       }));

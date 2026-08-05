@@ -24,6 +24,7 @@ import type * as lib_artifactStore from "../lib/artifactStore.js";
 import type * as lib_authz from "../lib/authz.js";
 import type * as lib_workerControl from "../lib/workerControl.js";
 import type * as organizations from "../organizations.js";
+import type * as skills from "../skills.js";
 import type * as tasks from "../tasks.js";
 
 import type {
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   "lib/authz": typeof lib_authz;
   "lib/workerControl": typeof lib_workerControl;
   organizations: typeof organizations;
+  skills: typeof skills;
   tasks: typeof tasks;
 }>;
 
