@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { estimateTaskCost, formatRwf, type QualityTier, type TaskKind } from "@/lib/task-cost";
@@ -70,7 +71,7 @@ export default function Home() {
   }
 
   return <main>
-    <header className="topbar"><a className="brand" href="#top">CIRCUIT<span>NOVA</span></a><AuthPanel /></header>
+    <header className="topbar"><a className="brand" href="#top">CIRCUIT<span>NOVA</span></a><nav className="topbar-nav"><Link href="/terminal" className="terminal-nav-link">Agent terminal ↗</Link><AuthPanel /></nav></header>
     <section className="hero" id="top"><p className="eyebrow">TASK-PRICED AGENT OPERATING SYSTEM</p><h1>Know the cost.<br /><em>Keep the control.</em></h1><p className="lede">A durable agent workspace for coding and everyday execution—quoted in RWF before work begins, observable from your phone, and capped by your approval.</p></section>
     <section className="workspace" aria-label="Task quote builder">
       <div className="builder"><div className="section-label">01 / Define the work</div><h2>What should the agent complete?</h2>
