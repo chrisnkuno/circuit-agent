@@ -3,6 +3,7 @@ import { DockerSandboxProvider } from "./docker";
 import { OpenAICodingModelProvider } from "./openai";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
 import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
+import { CircuitNotionPresetsProvider } from "./circuitnotion-presets";
 import type { CodingModelProvider } from "./model";
 import type { InteractiveCodingSandboxProvider } from "./contracts";
 import type { ModelPriceCatalog } from "../model-cost";
@@ -22,6 +23,7 @@ export type ProviderEnvironment = {
   CIRCUITNOTION_MODEL?: string;
   CIRCUITNOTION_BASE_URL?: string;
   CIRCUITNOTION_RELAY_SECRET?: string;
+  CIRCUITNOTION_PRESETS_MODEL?: string;
   CODING_MODEL_PROVIDER?: string;
   MODEL_INPUT_RWF_PER_MILLION?: string;
   MODEL_OUTPUT_RWF_PER_MILLION?: string;
@@ -87,6 +89,20 @@ export function createCircuitNotionAgentProvider(environment: ProviderEnvironmen
   const model = environment.CIRCUITNOTION_MODEL?.trim();
   if (!apiKey || !model) return undefined;
   return new CircuitNotionAgentTurnProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined, relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined });
+}
+
+/**
+ * Deliberately a separate, unbilled model slot from the coding model above: dynamic terminal
+ * presets are a cheap suggestion call, not agent work performed on the user's behalf, so they
+ * default to a lighter model via their own explicit env var rather than reusing the (possibly
+ * much more expensive) coding model. Reuses the same API key/base URL/relay secret — the
+ * Cloudflare relay fix applies to every CircuitNotion call from Convex, not just coding ones.
+ */
+export function createDynamicPresetsProvider(environment: ProviderEnvironment): CircuitNotionPresetsProvider | undefined {
+  const apiKey = environment.CIRCUITNOTION_API_KEY?.trim();
+  const model = environment.CIRCUITNOTION_PRESETS_MODEL?.trim();
+  if (!apiKey || !model) return undefined;
+  return new CircuitNotionPresetsProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined, relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined });
 }
 
 /**

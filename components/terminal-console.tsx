@@ -7,6 +7,7 @@ import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import { formatRwf } from "@/lib/task-cost";
+import { presetContextKey } from "@/lib/dynamic-presets";
 import type { TaskKind } from "@/lib/task-cost";
 import {
   buildAboutLines,
@@ -58,7 +59,9 @@ type Branch = {
  * — see docs/gap-register.md), so presets that imply pre-existing code ("write a test" for
  * what?, "lint check" of what?) would be misleading. These two sets keep the presets honest:
  * the from-scratch set is genuinely self-contained; the existing-codebase set only appears
- * once an organization has a real connected repository to act on.
+ * once an organization has a real connected repository to act on. They're also the fallback
+ * whenever the dynamic, model-generated presets below aren't configured or fail — the terminal
+ * always has something sensible to show, real model call or not.
  */
 const PRESETS_NO_REPOSITORY = [
   { label: "Add a README", objective: "add a README.md that explains what's in the workspace" },
@@ -146,17 +149,36 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
   const inputRef = useRef<HTMLInputElement | null>(null);
   const scriptRunIdRef = useRef(0);
   const renderedEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const lastPresetContextKeyRef = useRef<string | null>(null);
 
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
   const startLiveRun = useAction(api.terminalRuns.startLiveCodingRun);
+  const generateDynamicPresets = useAction(api.terminalPresetsActions.generate);
   const tasks = useQuery(api.tasks.listRecent, organization ? { organizationId: organization._id } : "skip");
   const githubInstallations = useQuery(api.githubModel.listForOrganization, organization ? { organizationId: organization._id } : "skip");
+  const cachedDynamicPresets = useQuery(api.terminalPresets.getCached, organization ? { organizationId: organization._id } : "skip");
   const hasConnectedRepository = (githubInstallations ?? []).some((installation) => installation.status === "connected");
   const resumeRuns = useQuery(api.agentRuns.listForTask, resumeTaskId ? { taskId: resumeTaskId } : "skip");
-  const presets = hasConnectedRepository ? PRESETS_WITH_REPOSITORY : PRESETS_NO_REPOSITORY;
+  const [generatedPresets, setGeneratedPresets] = useState<{ label: string; objective: string }[] | null>(null);
+  const staticPresets = hasConnectedRepository ? PRESETS_WITH_REPOSITORY : PRESETS_NO_REPOSITORY;
+  const presets = generatedPresets ?? cachedDynamicPresets?.presets ?? staticPresets;
 
   useImperativeHandle(ref, () => ({ resumeTask: setResumeTaskId }), []);
+
+  // Regenerates the model-suggested presets only when repo-connection state or recent task
+  // history actually changes (a stable content hash, not a timer or every render) — real
+  // model call happens server-side too, this just decides whether it's worth asking at all.
+  useEffect(() => {
+    if (!organization || !tasks) return;
+    const contextKey = presetContextKey({ hasConnectedRepository, recentObjectives: tasks.slice(0, 5).map((task) => task.title) });
+    if (lastPresetContextKeyRef.current === contextKey) return;
+    lastPresetContextKeyRef.current = contextKey;
+    generateDynamicPresets({ organizationId: organization._id })
+      .then((result) => { if (result.presets) setGeneratedPresets(result.presets); })
+      .catch(() => { /* the static/cached presets above already cover this — no user-facing error for a suggestion */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [organization, tasks, hasConnectedRepository]);
 
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
   const anyBusy = scriptBusy || branches.some((branch) => branch.busy);

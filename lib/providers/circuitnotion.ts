@@ -19,7 +19,7 @@ export function buildCircuitNotionHeaders(relaySecret?: string): Record<string, 
   return headers;
 }
 
-type ChatCompletionResponse = {
+export type ChatCompletionResponse = {
   id: string;
   model: string;
   choices: Array<{
@@ -35,8 +35,8 @@ type ChatCompletionResponse = {
   } | null;
 };
 
-type ChatCompletionBody = Parameters<OpenAI["chat"]["completions"]["create"]>[0];
-type ChatCompletionCall = (body: ChatCompletionBody, signal: AbortSignal) => Promise<ChatCompletionResponse>;
+export type ChatCompletionBody = Parameters<OpenAI["chat"]["completions"]["create"]>[0];
+export type ChatCompletionCall = (body: ChatCompletionBody, signal: AbortSignal) => Promise<ChatCompletionResponse>;
 
 export type CircuitNotionCodingModelOptions = {
   apiKey: string;

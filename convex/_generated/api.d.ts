@@ -32,6 +32,8 @@ import type * as scheduledRunsModel from "../scheduledRunsModel.js";
 import type * as skills from "../skills.js";
 import type * as tasks from "../tasks.js";
 import type * as telegramActions from "../telegramActions.js";
+import type * as terminalPresets from "../terminalPresets.js";
+import type * as terminalPresetsActions from "../terminalPresetsActions.js";
 import type * as terminalRuns from "../terminalRuns.js";
 
 import type {
@@ -65,6 +67,8 @@ declare const fullApi: ApiFromModules<{
   skills: typeof skills;
   tasks: typeof tasks;
   telegramActions: typeof telegramActions;
+  terminalPresets: typeof terminalPresets;
+  terminalPresetsActions: typeof terminalPresetsActions;
   terminalRuns: typeof terminalRuns;
 }>;
 

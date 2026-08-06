@@ -289,6 +289,12 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_organization", ["organizationId"])
     .index("by_installation_id", ["installationId"]),
+  terminalPresets: defineTable({
+    organizationId: v.id("organizations"),
+    contextKey: v.string(),
+    presets: v.array(v.object({ label: v.string(), objective: v.string() })),
+    generatedAt: v.number(),
+  }).index("by_organization", ["organizationId"]),
   connectorScheduleRuns: defineTable({
     organizationId: v.id("organizations"),
     scheduleId: v.id("agentSchedules"),
