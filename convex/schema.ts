@@ -114,7 +114,9 @@ export default defineSchema({
     runId: v.optional(v.id("agentRuns")),
     stepId: v.optional(v.id("agentSteps")),
     actionIntentId: v.optional(v.id("connectorActionIntents")),
-    kind: v.union(v.literal("execute_step"), v.literal("budget_overage"), v.literal("merge"), v.literal("deploy"), v.literal("external_action")),
+    // "task_start" is the cost gate: a quoted task exists and is priced, but nothing is spent
+    // until a person accepts the quote. Accepting it is what authorizes the payment hold.
+    kind: v.union(v.literal("task_start"), v.literal("execute_step"), v.literal("budget_overage"), v.literal("merge"), v.literal("deploy"), v.literal("external_action")),
     status: v.union(v.literal("pending"), v.literal("approved"), v.literal("rejected"), v.literal("expired")),
     requestedRwf: v.optional(v.int64()),
     requestedAt: v.number(),

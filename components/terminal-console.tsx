@@ -1,11 +1,12 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
+import { hasPermission } from "@/lib/authz";
 import { formatRwf } from "@/lib/task-cost";
 import { presetContextKey } from "@/lib/dynamic-presets";
 import type { TaskKind } from "@/lib/task-cost";
@@ -33,6 +34,13 @@ type LogTone = TerminalLine["tone"] | "input" | "banner";
 type LogEntry = { id: string; tone: LogTone; text: string };
 type TrackState = { stages: Stage[]; outcome?: "completed" | "failed" };
 type RunDetail = { run: Doc<"agentRuns">; steps: Doc<"agentSteps">[]; events: Doc<"agentRunEvents">[]; artifacts: Doc<"agentArtifacts">[] };
+type PendingApproval = Doc<"approvals"> & {
+  taskTitle: string;
+  runObjective: string | null;
+  stepTitle: string | null;
+  estimateLowRwf: bigint | null;
+  estimateHighRwf: bigint | null;
+};
 
 const MAIN_BRANCH_ID = "main";
 
@@ -108,6 +116,24 @@ function stageStatusFromStepStatus(status: string): StageStatus {
   return "pending";
 }
 
+/** What the person is actually being asked to allow — never just the approval's id or kind. */
+function approvalSummary(approval: PendingApproval): string {
+  const subject = approval.stepTitle ?? approval.runObjective ?? approval.taskTitle;
+  if (approval.kind === "task_start") {
+    // The price is the whole point of this gate, so it leads — the objective follows it.
+    const range = approval.estimateLowRwf !== null && approval.estimateHighRwf !== null
+      ? `${formatRwf(Number(approval.estimateLowRwf))}–${formatRwf(Number(approval.estimateHighRwf))}`
+      : "an estimated amount";
+    const cap = approval.requestedRwf ? `, never above ${formatRwf(Number(approval.requestedRwf))}` : "";
+    return `spend ${range}${cap} on "${subject}"`;
+  }
+  if (approval.kind === "budget_overage") {
+    return approval.requestedRwf ? `raise the cap to ${formatRwf(Number(approval.requestedRwf))} for "${subject}"` : `raise the budget cap for "${subject}"`;
+  }
+  if (approval.kind === "external_action") return `run an external action for "${subject}"`;
+  return `run "${subject}"`;
+}
+
 function branchLabel(objective: string): string {
   const trimmed = objective.trim();
   const words = trimmed.split(/\s+/).slice(0, 4).join(" ");
@@ -151,8 +177,16 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
   const renderedEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const lastPresetContextKeyRef = useRef<string | null>(null);
 
+  const [decidingApprovalId, setDecidingApprovalId] = useState<Id<"approvals"> | null>(null);
+
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
+  const membership = useQuery(api.organizations.getCurrentMembership, session.data ? {} : "skip");
+  // listPending fails closed for a role without approval:decide, so only subscribe when the
+  // signed-in member can actually decide — a viewer sees no bar rather than a query error.
+  const canDecideApprovals = membership ? hasPermission(membership.membership.role, "approval:decide") : false;
+  const pendingApprovals = useQuery(api.approvals.listPending, organization && canDecideApprovals ? { organizationId: organization._id } : "skip");
+  const decideApproval = useMutation(api.approvals.decide);
   const startLiveRun = useAction(api.terminalRuns.startLiveCodingRun);
   const generateDynamicPresets = useAction(api.terminalPresetsActions.generate);
   const tasks = useQuery(api.tasks.listRecent, organization ? { organizationId: organization._id } : "skip");
@@ -180,6 +214,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organization, tasks, hasConnectedRepository]);
 
+  const openApprovals: PendingApproval[] = pendingApprovals ?? [];
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
   const runningCount = branches.filter((branch) => branch.busy).length;
   const anyBusy = scriptBusy || runningCount > 0;
@@ -296,8 +331,46 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
       if (task) appendLineTo(branchId, { tone: detail.run.status === "completed" ? "success" : "error", text: `run ${detail.run.status} — spent ${formatRwf(Number(task.spentRwf))} of ${formatRwf(Number(task.maxRwf))} cap` });
       updateBranch(branchId, { busy: false });
     } else if (detail.run.status === "awaiting_approval") {
-      appendLineTo(branchId, { tone: "warn", text: "run is awaiting approval on a step this terminal does not drive — open the main workspace to decide it" });
+      // A run still sitting behind its own cost gate already printed its quote and the reason
+      // it is waiting; repeating a generic "paused at an approval gate" line adds nothing.
+      if (openApprovals.some((approval) => approval.runId === detail.run._id && approval.kind === "task_start")) {
+        updateBranch(branchId, { busy: false });
+        return;
+      }
+      appendLineTo(branchId, {
+        tone: "warn",
+        text: canDecideApprovals
+          ? "run is paused at an approval gate — decide it in the approvals bar below to resume"
+          : "run is paused at an approval gate — your role cannot decide approvals; ask an admin or owner of this workspace",
+      });
       updateBranch(branchId, { busy: false });
+    }
+  }
+
+  /**
+   * Decides a real approval from the terminal. The decision is logged into the branch that is
+   * tracking the affected run (not whichever branch happens to be focused), because that is the
+   * branch whose live status is about to change — approvals.decide re-queues the run and kicks
+   * the dispatcher, so the branch goes busy again on its own.
+   */
+  async function submitApprovalDecision(approval: PendingApproval, decision: "approved" | "rejected") {
+    const branchId = branches.find((branch) => branch.runId === approval.runId)?.id ?? activeBranchId;
+    setDecidingApprovalId(approval._id);
+    appendLineTo(branchId, { tone: "input", text: `${decision === "approved" ? "approve" : "reject"} ${approvalSummary(approval)}` });
+    try {
+      await decideApproval({ approvalId: approval._id, decision });
+      const isCostGate = approval.kind === "task_start";
+      if (decision === "approved") {
+        appendLineTo(branchId, { tone: "success", text: isCostGate ? "quote accepted — the budget is held and the run is starting" : "approved — the run is back in the dispatch queue and a tick was requested" });
+        if (approval.runId) updateBranch(branchId, { busy: true, track: { stages: initialStages("coding") } });
+      } else {
+        appendLineTo(branchId, { tone: "warn", text: isCostGate ? "quote declined — nothing was charged and the task is cancelled" : "rejected — the task is blocked and no further work will run against it" });
+        if (isCostGate) updateBranch(branchId, { busy: false, track: null });
+      }
+    } catch (error) {
+      appendLineTo(branchId, { tone: "error", text: errorMessage(error) });
+    } finally {
+      setDecidingApprovalId(null);
     }
   }
 
@@ -349,21 +422,27 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
         label: branchLabel(objective),
         isMain: false,
         runId: null,
-        track: { stages: initialStages("coding") },
-        busy: true,
+        track: null,
+        // Not busy yet: this only prices the work. Nothing runs until the quote is accepted.
+        busy: false,
         log: [
           // The command echo lives in the branch it creates, not the branch that was active
           // when it was typed — a live browser test caught this landing in the wrong branch.
           { id: entryId(), tone: "input", text: raw },
-          { id: entryId(), tone: "system", text: `starting a real coding run — objective: "${objective}"` },
-          { id: entryId(), tone: "muted", text: "creating task, authorizing budget, compiling the run graph, and nudging the dispatcher…" },
+          { id: entryId(), tone: "system", text: `pricing a real coding run — objective: "${objective}"` },
+          { id: entryId(), tone: "muted", text: "compiling the run graph and quoting it before anything is charged…" },
         ],
       },
     ]);
     setActiveBranchId(branchId);
     try {
       const result = await startLiveRun({ organizationId: organization._id, objective, idempotencyKey: crypto.randomUUID() });
-      updateBranch(branchId, { runId: result.runId });
+      updateBranch(branchId, { runId: result.runId, busy: !result.awaitingCostApproval, track: result.awaitingCostApproval ? null : { stages: initialStages("coding") } });
+      if (result.awaitingCostApproval) {
+        appendLineTo(branchId, { tone: "system", text: `quote  ${formatRwf(result.quote.estimateLowRwf)} to ${formatRwf(result.quote.estimateHighRwf)}   ·   hard cap ${formatRwf(result.quote.maxRwf)}   ·   ${result.quote.confidence} confidence` });
+        for (const assumption of result.quote.assumptions) appendLineTo(branchId, { tone: "muted", text: `  · ${assumption}` });
+        appendLineTo(branchId, { tone: "warn", text: "nothing is charged and no worker has started — approve the quote below to run it, or reject to drop it" });
+      }
     } catch (error) {
       appendLineTo(branchId, { tone: "error", text: errorMessage(error) });
       updateBranch(branchId, (branch) => ({ track: branch.track && { ...branch.track, outcome: "failed" }, busy: false }));
@@ -483,6 +562,26 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
       </div>
       {/* Pinned below the scrolling log: the things you act with shouldn't scroll away. */}
       <div className="terminal-dock">
+        {/* Pending approvals sit above everything else in the dock: a run stays stopped until
+            one of these is decided, so it is the most urgent thing the terminal can show. */}
+        {openApprovals.length > 0 && (
+          <div className="terminal-approvals" role="region" aria-label="Pending approvals">
+            {openApprovals.map((approval) => (
+              <div className="terminal-approval" key={approval._id}>
+                <span className="terminal-approval-mark" aria-hidden="true">⚠</span>
+                <span className="terminal-approval-text" title={approvalSummary(approval)}>
+                  Approve to {approvalSummary(approval)}
+                </span>
+                <button type="button" className="terminal-approval-accept" disabled={decidingApprovalId === approval._id} onClick={() => void submitApprovalDecision(approval, "approved")}>
+                  {decidingApprovalId === approval._id ? "…" : "Approve"}
+                </button>
+                <button type="button" className="terminal-approval-reject" disabled={decidingApprovalId === approval._id} onClick={() => void submitApprovalDecision(approval, "rejected")}>
+                  Reject
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="terminal-presets">
           <span className="terminal-presets-label" title={isGeneratedPresets ? "Suggested for your workspace by a real model call" : "Starter tasks for an empty workspace"}>
             {isGeneratedPresets ? "◆" : "◇"}

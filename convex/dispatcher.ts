@@ -5,8 +5,8 @@ import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { planDispatch } from "../lib/dispatcher";
-import type { AgentRunPlan, AgentStep } from "../lib/agent-orchestration";
+import { planDispatch, qualifiedStepId, toDispatchPlan } from "../lib/dispatcher";
+import type { AgentRunPlan } from "../lib/agent-orchestration";
 import type { TaskBudget } from "../lib/agent-budget";
 import { CodingAgentWorker, estimateCodingPlanReservation } from "../lib/coding-worker";
 import { createCodingModelProvider, createE2BProvider, createModelPriceCatalog } from "../lib/providers/factory";
@@ -33,7 +33,12 @@ function buildStepRequest(taskTitle: string, runObjective: string, taskId: strin
     repositoryContext: REPOSITORY_CONTEXT,
     workspaceRoot: "/workspace/repo",
     maxCommands: 6,
-    maxOutputTokens: 4_000,
+    // A reasoning model spends output tokens on reasoning before it emits a single character of
+    // the plan JSON, and the provider fails the step closed on a truncated plan rather than
+    // execute half of one. 4,000 was not enough headroom: a live "reproduce" step died on
+    // "finish reason length". The extra ceiling only costs what is actually generated, and the
+    // per-step reservation it implies still sits far inside a standard task cap.
+    maxOutputTokens: 8_000,
     // A reasoning-capable model's response time varies a lot with how much it "thinks" —
     // one observed live call used 1024 reasoning tokens and still finished in ~14s, but the
     // same depth under worse conditions (provider load, a harder objective) can comfortably
@@ -128,13 +133,13 @@ export const dispatchTick = internalAction({
 
     const snapshot = await ctx.runQuery(internal.agentRuns.getDispatchSnapshot, {});
 
-    const plans: AgentRunPlan[] = snapshot.map(({ run, steps }) => ({
+    const plans: AgentRunPlan[] = snapshot.map(({ run, steps }) => toDispatchPlan({
       runId: run._id,
       title: run.objective,
       maxParallelism: run.maxParallelism,
       capabilityIds: run.capabilityIds,
-      steps: steps.map((step): AgentStep => ({
-        id: step.stepKey,
+      steps: steps.map((step) => ({
+        stepKey: step.stepKey,
         title: step.title,
         role: step.role,
         dependsOn: step.dependsOn,
@@ -147,7 +152,7 @@ export const dispatchTick = internalAction({
 
     const budgetsByRun: Record<string, TaskBudget | undefined> = {};
     const estimatedRwfByStep: Record<string, number | undefined> = {};
-    const requestByStepKey = new Map<string, CodingPlanRequest>();
+    const requestByStepId = new Map<string, CodingPlanRequest>();
 
     for (const { run, task, steps } of snapshot) {
       if (!task) continue;
@@ -156,18 +161,18 @@ export const dispatchTick = internalAction({
       for (const step of steps) {
         if (step.role !== "coding") continue;
         const request = buildStepRequest(task.title, run.objective, task._id, step._id);
-        requestByStepKey.set(step.stepKey, request);
-        estimatedRwfByStep[step.stepKey] = estimateCodingPlanReservation(request, prices).maximumRwf;
+        requestByStepId.set(qualifiedStepId(run._id, step.stepKey), request);
+        estimatedRwfByStep[qualifiedStepId(run._id, step.stepKey)] = estimateCodingPlanReservation(request, prices).maximumRwf;
       }
     }
 
     const decisions = planDispatch({ plans, globalParallelism: 4, codingExecutionReady, budgetsByRun, estimatedRwfByStep });
-    const stepByKey = new Map(snapshot.flatMap(({ steps }) => steps.map((step) => [step.stepKey, step] as const)));
+    const stepById = new Map(snapshot.flatMap(({ run, steps }) => steps.map((step) => [qualifiedStepId(run._id, step.stepKey), step] as const)));
 
     let dispatched = 0;
     for (const decision of decisions) {
       if (decision.action !== "dispatch" || !decision.step) continue;
-      const stepDoc = stepByKey.get(decision.step.id);
+      const stepDoc = stepById.get(decision.step.id);
       if (!stepDoc) continue;
       const workerId = `dispatcher_${crypto.randomUUID()}`;
       const claim = await ctx.runMutation(internal.agentRuns.claimStep, {
@@ -181,7 +186,7 @@ export const dispatchTick = internalAction({
       dispatched += 1;
 
       if (stepDoc.role === "coding" && model && sandbox && prices) {
-        const request = requestByStepKey.get(stepDoc.stepKey);
+        const request = requestByStepId.get(decision.step.id);
         if (request) {
           await runCodingStep(ctx, {
             runId: decision.runId as Id<"agentRuns">,

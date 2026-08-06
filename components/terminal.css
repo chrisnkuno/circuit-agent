@@ -564,6 +564,65 @@
   padding: 12px 16px 14px;
 }
 
+/* A stopped run is the loudest thing in the dock: amber, above the presets, never truncated
+   away from the two buttons that unblock it. */
+.terminal-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 11px;
+}
+
+.terminal-approval {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: rgba(255, 207, 107, 0.08);
+  border: 1px solid rgba(255, 207, 107, 0.34);
+  border-radius: var(--nova-radius-sm);
+  padding: 8px 10px;
+}
+
+.terminal-approval-mark { color: var(--nova-warn); font-size: 12px; flex-shrink: 0; }
+
+.terminal-approval-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--nova-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-approval-accept,
+.terminal-approval-reject {
+  font: inherit;
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 5px 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.terminal-approval-accept {
+  background: rgba(126, 255, 196, 0.12);
+  border: 1px solid rgba(126, 255, 196, 0.42);
+  color: var(--nova-mint);
+}
+.terminal-approval-accept:hover:not(:disabled) { background: rgba(126, 255, 196, 0.22); }
+
+.terminal-approval-reject {
+  background: transparent;
+  border: 1px solid var(--nova-border);
+  color: var(--nova-muted);
+}
+.terminal-approval-reject:hover:not(:disabled) { border-color: var(--nova-error); color: var(--nova-error); }
+
+.terminal-approval-accept:disabled,
+.terminal-approval-reject:disabled { opacity: 0.45; cursor: default; }
+
 .terminal-presets {
   display: flex;
   flex-wrap: wrap;
@@ -1006,6 +1065,22 @@
      vertically instead. */
   .terminal-track-art-wide { display: none; }
   .terminal-track-art-narrow { display: block; }
+
+  /* Side by side, the amount being approved is the first thing a phone truncates —
+     "Approve to s…" next to two live buttons is asking someone to authorise a spend
+     they cannot read. Stack instead: the full request wraps above its own buttons. */
+  .terminal-approval { flex-wrap: wrap; row-gap: 10px; }
+  .terminal-approval-text {
+    /* Wide enough to force the buttons onto their own row, narrow enough to stay
+       beside the warning glyph rather than stranding it on a line of its own. */
+    flex: 1 1 calc(100% - 24px);
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.45;
+  }
+  .terminal-approval-accept,
+  .terminal-approval-reject { flex: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

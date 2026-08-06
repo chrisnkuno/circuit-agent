@@ -102,3 +102,53 @@ test("mobile workflow stays within the viewport and preserves controls", async (
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+/**
+ * The money gate: a real coding command must price the work and stop. This test deliberately
+ * never accepts the quote, so it exercises the whole path without spending anything — which is
+ * also precisely the guarantee being asserted.
+ */
+test("quotes a real coding run and executes nothing until the price is accepted", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const email = `gate-${Date.now()}@circuitnova.test`;
+  await page.goto("/terminal");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByPlaceholder("Name").fill("Gate Runner");
+  await page.getByPlaceholder("Email").fill(email);
+  await page.getByPlaceholder("Password").fill("CorrectHorseBattery9");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByText("CHANNELS")).toBeVisible({ timeout: 30_000 });
+
+  const input = page.getByLabel("Terminal command input");
+  await input.fill("run coding create a file named quote-check.txt containing the word quoted");
+  await input.press("Enter");
+
+  const body = page.locator(".terminal-body");
+  await expect(body).toContainText("hard cap", { timeout: 30_000 });
+  await expect(body).toContainText("nothing is charged and no worker has started");
+
+  // The gate must name the amount it is asking for, not just that it wants approval.
+  const approval = page.locator(".terminal-approval");
+  await expect(approval).toContainText("never above", { timeout: 20_000 });
+
+  // The amount must survive truncation. Two things guarantee that: the request always leads
+  // with the price (so a clipped tail only ever costs the objective), and on a phone the row
+  // wraps instead of clipping — without that it read "Approve to s…", asking someone to
+  // authorise a spend they could not see.
+  await approval.scrollIntoViewIfNeeded();
+  const priceRow = approval.locator(".terminal-approval-text");
+  // \s, not a literal space: Intl currency formatting separates "RF" from the digits
+  // with a non-breaking space.
+  await expect(priceRow).toContainText(/^Approve to spend RF\s[\d,]+/);
+  if (testInfo.project.name.includes("mobile")) {
+    await expect(priceRow).toHaveCSS("white-space", "normal");
+    const clipped = await priceRow.evaluate((node) => node.scrollWidth > node.clientWidth + 1);
+    expect(clipped, "approval text clipped on a phone").toBe(false);
+  }
+
+  // Nothing may execute while the quote is unanswered.
+  await page.waitForTimeout(6_000);
+  await expect(body).not.toContainText("claimed by a worker");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+});

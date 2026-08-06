@@ -19,6 +19,36 @@ export type DispatchPlanningInput = {
   estimatedRwfByStep: Record<string, number | undefined>;
 };
 
+/** One persisted agent step as it is stored: `stepKey` is unique only within its own run. */
+export type PersistedStep = Omit<AgentStep, "id" | "dependsOn"> & { stepKey: string; dependsOn: string[] };
+
+/**
+ * Qualifies a run-local `stepKey` into the globally unique step id planDispatch requires.
+ * Every coding run uses the same four keys ("inspect", "reproduce", …), and planDispatch
+ * schedules across all active runs at once — it fails a run closed as `invalid_graph` rather
+ * than guess which run an ambiguous id belongs to. Feeding it bare stepKeys therefore jams
+ * *every* active run as soon as a second one exists. Matches the `runId:key` shape
+ * buildTaskPlan already produces; only the persisted rows drop the prefix.
+ */
+export function qualifiedStepId(runId: string, stepKey: string): string {
+  return `${runId}:${stepKey}`;
+}
+
+/** Rebuilds a dispatchable plan from persisted rows, restoring run-scoped step ids. */
+export function toDispatchPlan(input: { runId: string; title: string; maxParallelism: number; capabilityIds?: string[]; steps: PersistedStep[] }): AgentRunPlan {
+  return {
+    runId: input.runId,
+    title: input.title,
+    maxParallelism: input.maxParallelism,
+    capabilityIds: input.capabilityIds,
+    steps: input.steps.map(({ stepKey, dependsOn, ...step }) => ({
+      ...step,
+      id: qualifiedStepId(input.runId, stepKey),
+      dependsOn: dependsOn.map((dependency) => qualifiedStepId(input.runId, dependency)),
+    })),
+  };
+}
+
 /** Produces auditable dispatch decisions before any worker or provider is called. */
 export function planDispatch(input: DispatchPlanningInput): DispatchDecision[] {
   if (!Number.isInteger(input.globalParallelism) || input.globalParallelism < 1) throw new Error("globalParallelism must be a positive integer");

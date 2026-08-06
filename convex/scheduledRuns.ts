@@ -16,7 +16,7 @@ export const runDueCodingSchedules = internalAction({
     let failed = 0;
     for (const claim of claims) {
       try {
-        const result = await startCodingRun(ctx, { organizationId: claim.organizationId, objective: claim.objective, idempotencyKey: `${claim.runId}`, authorization: "trusted-organization" });
+        const result = await startCodingRun(ctx, { organizationId: claim.organizationId, objective: claim.objective, idempotencyKey: `${claim.runId}`, authorization: "trusted-organization", costApproval: "pre-authorized" });
         await ctx.runMutation(internal.scheduledRunsModel.completeCodingScheduleRun, { runId: claim.runId, workerId, status: "completed", summary: `Started task ${result.taskId} for "${claim.objective}".` });
         completed += 1;
       } catch (error) {

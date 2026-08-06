@@ -45,7 +45,7 @@ export const handleIncomingMessage = internalAction({
 
     if (parsed.kind === "run") {
       try {
-        await startCodingRun(ctx, { organizationId: link.organizationId, objective: parsed.objective, idempotencyKey: crypto.randomUUID(), authorization: "trusted-organization" });
+        await startCodingRun(ctx, { organizationId: link.organizationId, objective: parsed.objective, idempotencyKey: crypto.randomUUID(), authorization: "trusted-organization", costApproval: "pre-authorized" });
         await reply(args.chatId, `Started: "${parsed.objective}". I'll message you here when it finishes.`);
       } catch (error) {
         await reply(args.chatId, `Could not start that run: ${error instanceof Error ? error.message : "unknown error"}`);

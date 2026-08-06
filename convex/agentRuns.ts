@@ -157,12 +157,18 @@ export const claimStep = internalMutation({
     const run = await ctx.db.get(args.runId);
     const step = await ctx.db.get(args.stepId);
     if (!run || !step || step.runId !== args.runId) throw new Error("Run step not found");
-    if (run.status !== "queued" && run.status !== "running") throw new Error("Run is not dispatchable");
-    if (step.status !== "pending" && step.status !== "ready") throw new Error("Step is not claimable");
+    // Everything below is a lost race, not a caller mistake: dispatch ticks overlap by design
+    // (the cron ticks every minute and every new run nudges one), so between a tick's snapshot
+    // and its claim another tick can legitimately have taken this step, finished a dependency,
+    // filled the parallelism budget, or moved the run out of a dispatchable state. Reporting
+    // that as a status lets the loser skip the step; throwing aborted the entire tick — and
+    // surfaced as a spurious "run failed" to whoever happened to start a run at that moment.
+    if (run.status !== "queued" && run.status !== "running") return { status: "not_claimable" as const };
+    if (step.status !== "pending" && step.status !== "ready") return { status: "not_claimable" as const };
     const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", args.runId)).collect();
     const completedKeys = new Set(steps.filter((candidate) => candidate.status === "completed").map((candidate) => candidate.stepKey));
-    if (!step.dependsOn.every((dependency) => completedKeys.has(dependency))) throw new Error("Step dependencies are incomplete");
-    if (steps.filter((candidate) => candidate.status === "running").length >= run.maxParallelism) throw new Error("Run parallelism limit reached");
+    if (!step.dependsOn.every((dependency) => completedKeys.has(dependency))) return { status: "not_claimable" as const };
+    if (steps.filter((candidate) => candidate.status === "running").length >= run.maxParallelism) return { status: "not_claimable" as const };
     if (step.requiresApproval && step.approvalStatus !== "approved") {
       await ctx.db.patch(step._id, { status: "awaiting_approval" });
       await ctx.db.patch(run._id, { status: "awaiting_approval" });

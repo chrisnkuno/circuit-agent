@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCodingTaskPlan } from "./agent-orchestration";
-import { planDispatch } from "./dispatcher";
+import { planDispatch, qualifiedStepId, toDispatchPlan } from "./dispatcher";
 
 describe("dispatcher planning", () => {
   it("dispatches fairly while stopping an exhausted run", () => {
@@ -46,6 +46,28 @@ describe("dispatcher planning", () => {
     expect(decisions).toHaveLength(2);
     expect(decisions.every((decision) => decision.action === "invalid_graph")).toBe(true);
     expect(decisions[0].reason).toContain("globally unique");
+  });
+
+  // Regression: persisted steps store a run-local stepKey, and every coding run uses the same
+  // four keys. Handing those bare keys to planDispatch made each run look ambiguous to the
+  // other, so all of them were failed closed as invalid_graph and nothing was ever dispatched
+  // — the whole queue jammed the moment a second run existed.
+  it("dispatches concurrent runs that share the same persisted step keys", () => {
+    const persisted = [
+      { stepKey: "inspect", title: "Inspect", role: "coding" as const, dependsOn: [], status: "pending" as const, requiresApproval: false },
+      { stepKey: "reproduce", title: "Reproduce", role: "coding" as const, dependsOn: ["inspect"], status: "pending" as const, requiresApproval: false },
+    ];
+    const plans = ["runA", "runB"].map((runId) => toDispatchPlan({ runId, title: "objective", maxParallelism: 2, steps: persisted }));
+    const decisions = planDispatch({
+      plans,
+      globalParallelism: 4,
+      codingExecutionReady: true,
+      budgetsByRun: { runA: { maxRwf: 2400, spentRwf: 0, reservedRwf: 0 }, runB: { maxRwf: 2400, spentRwf: 0, reservedRwf: 0 } },
+      estimatedRwfByStep: { [qualifiedStepId("runA", "inspect")]: 200, [qualifiedStepId("runB", "inspect")]: 200 },
+    });
+    expect(decisions.map((decision) => decision.action)).toEqual(["dispatch", "dispatch"]);
+    // The dispatcher looks each decision's step back up by this id to claim the right row.
+    expect(decisions.map((decision) => decision.step?.id)).toEqual([qualifiedStepId("runA", "inspect"), qualifiedStepId("runB", "inspect")]);
   });
 
   it("allows work near the cap while preserving a warning reason", () => {
