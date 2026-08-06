@@ -272,6 +272,22 @@ export function renderStageTrack(stages: Stage[], spinnerFrame: string): string 
   return [top, label, glyph, bottom].join("\n");
 }
 
+/**
+ * A narrow-viewport alternative to renderStageTrack: the boxed pipeline needs ~57 columns,
+ * which clips on a phone-width screen even at the smallest legible font size. This lists the
+ * same stages vertically instead, needing only as many columns as the longest label.
+ */
+export function renderStageTrackVertical(stages: Stage[], spinnerFrame: string): string {
+  if (stages.length === 0) throw new Error("renderStageTrackVertical requires at least one stage");
+  const labelWidth = Math.max(...stages.map((stage) => stage.label.length));
+  const lines: string[] = [];
+  stages.forEach((stage, index) => {
+    lines.push(`${stage.label.toUpperCase().padEnd(labelWidth)}  ${glyphFor(stage.status, spinnerFrame)}`);
+    if (index < stages.length - 1) lines.push("│");
+  });
+  return lines.join("\n");
+}
+
 export const CELEBRATION_FRAMES = [
   "   ·        ✦        ·   \n ✧    ╔══════════════╗    · \n   ·  ║  TASK DONE ✓ ║  ✦ \n ·    ╚══════════════╝    · \n    ✦     ·      ✧        ",
   "   ✦        ·        ✧   \n ·    ╔══════════════╗    ✦ \n   ✧  ║  TASK DONE ✓ ║  · \n ✦    ╚══════════════╝    · \n    ·     ✧      ·        ",

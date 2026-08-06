@@ -273,10 +273,28 @@
   text-align: center;
 }
 
+.terminal-track-art-narrow { display: none; }
+
 @media (max-width: 640px) {
   .terminal-page-inner { padding: 20px 14px 40px; }
   .terminal-body { font-size: 12.5px; max-height: 62vh; }
   .terminal-banner { font-size: 9.5px; }
+
+  .terminal-page-header { flex-wrap: wrap; row-gap: 6px; }
+
+  /* The boxed pipeline needs ~57 columns, which clips a phone screen even at the smallest
+     legible font size; below this width, list the same real stage data vertically instead. */
+  .terminal-track-art-wide { display: none; }
+  .terminal-track-art-narrow { display: block; }
+
+  .terminal-auth-row { justify-content: stretch; }
+  .terminal-auth-row .auth-panel {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .terminal-auth-row .auth-panel input { width: 100%; }
+  .terminal-auth-row .auth-panel.signed-in { flex-direction: row; flex-wrap: wrap; justify-content: space-between; }
 }
 
 @media (prefers-reduced-motion: reduce) {

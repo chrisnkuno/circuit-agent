@@ -10,6 +10,7 @@ import {
   parseCommand,
   renderFailureBanner,
   renderStageTrack,
+  renderStageTrackVertical,
   stageKeysFor,
   type Stage,
 } from "./terminal-simulation";
@@ -167,6 +168,28 @@ describe("renderStageTrack", () => {
     const lines = track.split("\n");
     const widths = new Set(lines.map((line) => line.length));
     expect(widths.size).toBe(1);
+  });
+});
+
+describe("renderStageTrackVertical", () => {
+  it("rejects an empty stage list", () => {
+    expect(() => renderStageTrackVertical([], "⠋")).toThrow("at least one stage");
+  });
+
+  it("stays narrow enough for a phone screen even with the longest real label", () => {
+    const stages = stageKeysFor("coding").map((key) => stage({ key, label: key, status: "pending" }));
+    const track = renderStageTrackVertical(stages, "⠋");
+    const widths = track.split("\n").map((line) => line.length);
+    expect(Math.max(...widths)).toBeLessThanOrEqual(20);
+  });
+
+  it("shows every stage's real status without needing a fixed box width", () => {
+    const track = renderStageTrackVertical([
+      stage({ label: "inspect", status: "completed" }),
+      stage({ label: "checks", status: "failed" }),
+    ], "⠋");
+    expect(track).toContain("✓");
+    expect(track).toContain("✗");
   });
 });
 

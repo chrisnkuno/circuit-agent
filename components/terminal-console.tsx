@@ -20,6 +20,7 @@ import {
   parseCommand,
   renderFailureBanner,
   renderStageTrack,
+  renderStageTrackVertical,
   SPINNER_FRAMES,
   stageKeysFor,
   type Stage,
@@ -262,7 +263,8 @@ export function TerminalConsole() {
       </div>
       {track && (
         <div className={`terminal-track-panel${track.outcome ? ` terminal-track-${track.outcome}` : ""}`}>
-          <pre className="terminal-track-art">{renderStageTrack(track.stages, SPINNER_FRAMES[spinnerFrame])}</pre>
+          <pre className="terminal-track-art terminal-track-art-wide">{renderStageTrack(track.stages, SPINNER_FRAMES[spinnerFrame])}</pre>
+          <pre className="terminal-track-art terminal-track-art-narrow">{renderStageTrackVertical(track.stages, SPINNER_FRAMES[spinnerFrame])}</pre>
           {track.outcome === "completed" && <pre className="terminal-celebration">{CELEBRATION_FRAMES[celebrationFrame]}</pre>}
           {track.outcome === "failed" && <pre className="terminal-celebration terminal-failure-art">{renderFailureBanner()}</pre>}
         </div>
