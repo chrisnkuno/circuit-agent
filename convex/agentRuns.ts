@@ -3,66 +3,92 @@ import { internalMutation, internalQuery, mutation, query } from "./_generated/s
 import { validateTaskGraph } from "../lib/agent-orchestration";
 import { capabilityRegistry } from "../lib/capability-registry";
 import { requireOrganizationPermission } from "./lib/authz";
+import { internal } from "./_generated/api";
+import { formatRwf } from "../lib/task-cost";
+import type { MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 
 const role = v.union(v.literal("planner"), v.literal("coding"), v.literal("reviewer"), v.literal("research"), v.literal("operator"));
 const template = v.union(v.literal("coding"), v.literal("browser"), v.literal("data"));
 const taskKind = v.union(v.literal("coding"), v.literal("research"), v.literal("writing"), v.literal("operations"));
 const leadRole = { coding: "coding", research: "research", writing: "operator", operations: "operator" } as const;
 
+const taskRunArgs = {
+  taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(),
+  steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template), capabilityIds: v.optional(v.array(v.string())) })),
+};
+
+type TaskRunArgs = {
+  taskId: Id<"tasks">; kind?: "coding" | "research" | "writing" | "operations"; maxParallelism: number; objective: string;
+  steps: Array<{ stepKey: string; title: string; role: "planner" | "coding" | "reviewer" | "research" | "operator"; dependsOn: string[]; requiresApproval: boolean; sandboxTemplate?: "coding" | "browser" | "data"; capabilityIds?: string[] }>;
+};
+
+/** Shared insert logic behind both the authenticated public mutation and the internal, channel-authorized variant. `task` is passed in already-fetched since every caller needs it for its own kind/status checks first. */
+export async function insertTaskRun(ctx: MutationCtx, task: Doc<"tasks">, args: TaskRunArgs): Promise<Id<"agentRuns">> {
+  const kind = args.kind ?? "coding";
+  if (task.kind !== kind) throw new Error(`Run kind ${kind} does not match task kind ${task.kind}`);
+  if (task.status === "completed" || task.status === "cancelled") throw new Error("Task is already terminal");
+  if (!Number.isInteger(args.maxParallelism) || args.maxParallelism < 1 || args.maxParallelism > 8) throw new Error("maxParallelism must be between 1 and 8");
+  if (!args.objective.trim() || args.objective.length > 4_000) throw new Error("objective must contain 1 to 4000 characters");
+  const graphIssues = validateTaskGraph({
+    runId: "new-run",
+    title: "New coding run",
+    maxParallelism: args.maxParallelism,
+    steps: args.steps.map((step) => ({
+      id: step.stepKey,
+      title: step.title,
+      role: step.role,
+      dependsOn: step.dependsOn,
+      status: "pending",
+      requiresApproval: step.requiresApproval,
+      sandboxTemplate: step.sandboxTemplate,
+      capabilityIds: step.capabilityIds,
+    })),
+  });
+  if (graphIssues.length > 0) throw new Error(`Invalid task graph: ${graphIssues.map((issue) => issue.message).join("; ")}`);
+  const capabilityIds = [...new Set(args.steps.flatMap((step) => step.capabilityIds ?? []))];
+  capabilityRegistry.resolve(kind, capabilityIds);
+  for (const step of args.steps) {
+    const requiresCapabilityApproval = (step.capabilityIds ?? []).some((id) => capabilityRegistry.get(id)?.requiresApproval);
+    if (requiresCapabilityApproval && !step.requiresApproval) throw new Error(`Step ${step.stepKey} must require approval for its capabilities`);
+  }
+  const now = Date.now();
+  const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, createdAt: now });
+  for (const step of args.steps) {
+    const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
+    if (step.requiresApproval) {
+      await ctx.db.insert("approvals", {
+        taskId: task._id,
+        runId,
+        stepId,
+        kind: "execute_step",
+        status: "pending",
+        requestedAt: now,
+      });
+    }
+  }
+  await ctx.db.insert("agentRunEvents", { runId, type: "run_created", message: `${kind} run created with ${capabilityIds.length} scoped capabilities. Execution awaits the required providers and approvals.`, createdAt: now });
+  return runId;
+}
+
 /** Creates an auditable capability-scoped run. Workers still fail closed until their runtime is configured. */
 export const createTaskRun = mutation({
-  args: {
-    taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(),
-    steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template), capabilityIds: v.optional(v.array(v.string())) })),
-  },
+  args: taskRunArgs,
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.taskId);
     if (!task) throw new Error("Task not found");
-    const kind = args.kind ?? "coding";
-    if (task.kind !== kind) throw new Error(`Run kind ${kind} does not match task kind ${task.kind}`);
     await requireOrganizationPermission(ctx, task.organizationId, "agent:run");
-    if (task.status === "completed" || task.status === "cancelled") throw new Error("Task is already terminal");
-    if (!Number.isInteger(args.maxParallelism) || args.maxParallelism < 1 || args.maxParallelism > 8) throw new Error("maxParallelism must be between 1 and 8");
-    if (!args.objective.trim() || args.objective.length > 4_000) throw new Error("objective must contain 1 to 4000 characters");
-    const graphIssues = validateTaskGraph({
-      runId: "new-run",
-      title: "New coding run",
-      maxParallelism: args.maxParallelism,
-      steps: args.steps.map((step) => ({
-        id: step.stepKey,
-        title: step.title,
-        role: step.role,
-        dependsOn: step.dependsOn,
-        status: "pending",
-        requiresApproval: step.requiresApproval,
-        sandboxTemplate: step.sandboxTemplate,
-        capabilityIds: step.capabilityIds,
-      })),
-    });
-    if (graphIssues.length > 0) throw new Error(`Invalid task graph: ${graphIssues.map((issue) => issue.message).join("; ")}`);
-    const capabilityIds = [...new Set(args.steps.flatMap((step) => step.capabilityIds ?? []))];
-    capabilityRegistry.resolve(kind, capabilityIds);
-    for (const step of args.steps) {
-      const requiresCapabilityApproval = (step.capabilityIds ?? []).some((id) => capabilityRegistry.get(id)?.requiresApproval);
-      if (requiresCapabilityApproval && !step.requiresApproval) throw new Error(`Step ${step.stepKey} must require approval for its capabilities`);
-    }
-    const now = Date.now();
-    const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, createdAt: now });
-    for (const step of args.steps) {
-      const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
-      if (step.requiresApproval) {
-        await ctx.db.insert("approvals", {
-          taskId: task._id,
-          runId,
-          stepId,
-          kind: "execute_step",
-          status: "pending",
-          requestedAt: now,
-        });
-      }
-    }
-    await ctx.db.insert("agentRunEvents", { runId, type: "run_created", message: `${kind} run created with ${capabilityIds.length} scoped capabilities. Execution awaits the required providers and approvals.`, createdAt: now });
-    return runId;
+    return insertTaskRun(ctx, task, args);
+  },
+});
+
+/** Internal-only: the caller already resolved and trusts the task's organization via a verified channel link (see convex/channels.ts) — there is no better-auth session to check here. */
+export const createTaskRunInternal = internalMutation({
+  args: taskRunArgs,
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task not found");
+    return insertTaskRun(ctx, task, args);
   },
 });
 
@@ -275,6 +301,10 @@ export const recordStepOutcome = internalMutation({
     if (args.outcome === "failed") {
       await ctx.db.patch(run._id, { status: "failed", completedAt: now });
       await ctx.db.patch(task._id, { status: "blocked" });
+      await ctx.scheduler.runAfter(0, internal.telegramActions.notifyLinkedChannels, {
+        organizationId: task.organizationId,
+        message: `❌ "${task.title}" failed — spent ${formatRwf(Number(task.spentRwf + args.actualRwf))} of ${formatRwf(Number(task.maxRwf))} cap. ${args.summary}`,
+      });
     } else {
       const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
       const effectiveStatuses = steps.map((candidate) => candidate._id === step._id ? "completed" : candidate.status);
@@ -293,6 +323,10 @@ export const recordStepOutcome = internalMutation({
         if (allRunsComplete) {
           await ctx.db.patch(task._id, { status: "completed" });
           await ctx.db.insert("taskEvents", { taskId: task._id, type: "task_completed", message: "All agent runs completed.", createdAt: now });
+          await ctx.scheduler.runAfter(0, internal.telegramActions.notifyLinkedChannels, {
+            organizationId: task.organizationId,
+            message: `✅ "${task.title}" completed — spent ${formatRwf(Number(task.spentRwf + args.actualRwf))} of ${formatRwf(Number(task.maxRwf))} cap.`,
+          });
         }
       }
     }

@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { authComponent, createAuth } from "./auth";
+import { parseTelegramUpdate, verifyTelegramSecret } from "../lib/telegram";
 
 const http = httpRouter();
 
@@ -71,5 +72,25 @@ async function verifyGitHubSignature(payload: string, signatureHeader: string | 
   for (let i = 0; i < expected.length; i += 1) mismatch |= expected.charCodeAt(i) ^ provided.charCodeAt(i);
   return mismatch === 0;
 }
+
+http.route({
+  path: "/telegram/webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!secret) return new Response("Telegram webhook is not configured", { status: 401 });
+    if (!verifyTelegramSecret(request.headers.get("x-telegram-bot-api-secret-token"), secret)) {
+      return new Response("Webhook verification failed", { status: 401 });
+    }
+    let body: unknown;
+    try { body = await request.json(); } catch { return new Response("Invalid webhook payload", { status: 400 }); }
+    const message = parseTelegramUpdate(body);
+    if (message) {
+      await ctx.runAction((internal as any).telegramActions.handleIncomingMessage, { chatId: message.chatId, text: message.text });
+    }
+    // Telegram retries on anything but 200, including for update types we deliberately ignore.
+    return new Response(null, { status: 200 });
+  }),
+});
 
 export default http;

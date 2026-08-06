@@ -4,6 +4,7 @@ import "../../components/terminal.css";
 import { Starfield } from "@/components/starfield";
 import { TerminalConsole } from "@/components/terminal-console";
 import { AuthPanel } from "@/components/auth-panel";
+import { SchedulePanel } from "@/components/schedule-panel";
 
 export const metadata: Metadata = {
   title: "Circuit-Nova — Agent Terminal",
@@ -30,6 +31,7 @@ export default function TerminalPage() {
         </p>
         <TerminalConsole />
         <p className="terminal-footnote">A real coding run spends a small real amount against your workspace's RWF cap. Everything else stays a clearly-labeled preview.</p>
+        <SchedulePanel />
       </div>
     </div>
   );

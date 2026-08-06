@@ -32,6 +32,13 @@ type LogTone = TerminalLine["tone"] | "input" | "banner";
 type LogEntry = { id: string; tone: LogTone; text: string };
 type TrackState = { stages: Stage[]; outcome?: "completed" | "failed" };
 
+/** One-click shortcuts for a real run — each just submits the identical "run coding <objective>" command a person would type. */
+const PRESET_TASKS = [
+  { label: "Add a README", objective: "add a README.md that explains what's in the workspace" },
+  { label: "Write a test", objective: "write a unit test for a small pure function and verify it passes" },
+  { label: "Lint check", objective: "check the workspace for obvious style issues and report them" },
+];
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -283,6 +290,13 @@ export function TerminalConsole() {
             )}
           </div>
         ))}
+        <div className="terminal-presets">
+          {PRESET_TASKS.map((preset) => (
+            <button key={preset.label} type="button" className="terminal-preset-button" disabled={busy} onClick={() => submit(`run coding ${preset.objective}`)}>
+              {preset.label}
+            </button>
+          ))}
+        </div>
         <form className="terminal-input-row" onSubmit={handleSubmit}>
           <span className="terminal-prompt">$</span>
           <input

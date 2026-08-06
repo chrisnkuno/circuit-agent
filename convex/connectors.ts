@@ -102,17 +102,25 @@ export const recordActionResult = internalMutation({
   },
 });
 
+const executableWorkflowTemplates = new Set(["calendar-digest", "coding-task"]);
+
 export const createSchedule = mutation({
-  args: { organizationId: v.id("organizations"), title: v.string(), workflowTemplate: v.string(), cronExpression: v.string(), timezone: v.string(), connectorIds: v.array(v.string()) },
+  args: { organizationId: v.id("organizations"), title: v.string(), workflowTemplate: v.string(), cronExpression: v.string(), timezone: v.string(), connectorIds: v.array(v.string()), objective: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireOrganizationPermission(ctx, args.organizationId, "connector:manage");
     if (!args.title.trim() || !args.cronExpression.trim() || !args.timezone.trim()) throw new Error("Schedule title, cron expression, and timezone are required");
-    if (args.workflowTemplate !== "calendar-digest") throw new Error("Only calendar-digest is executable in the first connector slice");
+    if (!executableWorkflowTemplates.has(args.workflowTemplate)) throw new Error("Unknown workflow template");
     nextCronOccurrence(args.cronExpression, args.timezone, Date.now());
+    const now = Date.now();
+    if (args.workflowTemplate === "coding-task") {
+      const objective = args.objective?.trim();
+      if (!objective || objective.length > 500) throw new Error("A coding-task schedule requires an objective of 1 to 500 characters");
+      if (args.connectorIds.length > 0) throw new Error("coding-task schedules do not use connectors");
+      return ctx.db.insert("agentSchedules", { organizationId: args.organizationId, title: args.title.trim(), workflowTemplate: args.workflowTemplate, cronExpression: args.cronExpression, timezone: args.timezone, status: "paused", connectorIds: [], objective, createdAt: now, updatedAt: now });
+    }
     for (const connectorId of args.connectorIds) if (!connectorRegistry.get(connectorId)) throw new Error(`Unknown connector: ${connectorId}`);
     const connections = await ctx.db.query("connectorConnections").withIndex("by_organization", (q) => q.eq("organizationId", args.organizationId)).collect();
     for (const connectorId of args.connectorIds) if (!connections.some((item) => item.connectorId === connectorId && item.status === "connected")) throw new Error(`${connectorId} is not connected`);
-    const now = Date.now();
     return ctx.db.insert("agentSchedules", { organizationId: args.organizationId, title: args.title.trim(), workflowTemplate: args.workflowTemplate, cronExpression: args.cronExpression, timezone: args.timezone, status: "paused", connectorIds: [...new Set(args.connectorIds)], createdAt: now, updatedAt: now });
   },
 });

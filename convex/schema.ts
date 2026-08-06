@@ -25,6 +25,7 @@ export default defineSchema({
     maxRwf: v.int64(),
     spentRwf: v.int64(),
     reservedRwf: v.int64(),
+    expectedOutput: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_status", ["status"]).index("by_organization", ["organizationId"]),
   taskQuotes: defineTable({
@@ -184,6 +185,8 @@ export default defineSchema({
     timezone: v.string(),
     status: v.union(v.literal("paused"), v.literal("active"), v.literal("disabled")),
     connectorIds: v.array(v.string()),
+    /** Only meaningful for the "coding-task" template: the objective run on every occurrence. */
+    objective: v.optional(v.string()),
     nextRunAt: v.optional(v.number()),
     claimedBy: v.optional(v.string()),
     claimExpiresAt: v.optional(v.number()),
@@ -192,6 +195,25 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_organization", ["organizationId"])
     .index("by_status_next_run", ["status", "nextRunAt"]),
+  channelLinkAttempts: defineTable({
+    organizationId: v.id("organizations"),
+    identitySubject: v.string(),
+    channel: v.union(v.literal("telegram")),
+    codeHash: v.string(),
+    expiresAt: v.number(),
+    consumedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_code_hash", ["codeHash"])
+    .index("by_organization", ["organizationId"]),
+  channelLinks: defineTable({
+    organizationId: v.id("organizations"),
+    channel: v.union(v.literal("telegram")),
+    channelUserId: v.string(),
+    status: v.union(v.literal("linked"), v.literal("revoked")),
+    linkedAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_organization", ["organizationId"])
+    .index("by_channel_user", ["channel", "channelUserId"]),
   connectorVaultEntries: defineTable({
     organizationId: v.id("organizations"),
     kind: v.union(v.literal("oauth_tokens"), v.literal("oauth_pkce"), v.literal("action_payload")),

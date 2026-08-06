@@ -11,6 +11,8 @@
 import type * as agentRuns from "../agentRuns.js";
 import type * as approvals from "../approvals.js";
 import type * as auth from "../auth.js";
+import type * as channels from "../channels.js";
+import type * as codingRunPlan from "../codingRunPlan.js";
 import type * as connectors from "../connectors.js";
 import type * as crons from "../crons.js";
 import type * as devPayment from "../devPayment.js";
@@ -25,8 +27,11 @@ import type * as lib_artifactStore from "../lib/artifactStore.js";
 import type * as lib_authz from "../lib/authz.js";
 import type * as lib_workerControl from "../lib/workerControl.js";
 import type * as organizations from "../organizations.js";
+import type * as scheduledRuns from "../scheduledRuns.js";
+import type * as scheduledRunsModel from "../scheduledRunsModel.js";
 import type * as skills from "../skills.js";
 import type * as tasks from "../tasks.js";
+import type * as telegramActions from "../telegramActions.js";
 import type * as terminalRuns from "../terminalRuns.js";
 
 import type {
@@ -39,6 +44,8 @@ declare const fullApi: ApiFromModules<{
   agentRuns: typeof agentRuns;
   approvals: typeof approvals;
   auth: typeof auth;
+  channels: typeof channels;
+  codingRunPlan: typeof codingRunPlan;
   connectors: typeof connectors;
   crons: typeof crons;
   devPayment: typeof devPayment;
@@ -53,8 +60,11 @@ declare const fullApi: ApiFromModules<{
   "lib/authz": typeof lib_authz;
   "lib/workerControl": typeof lib_workerControl;
   organizations: typeof organizations;
+  scheduledRuns: typeof scheduledRuns;
+  scheduledRunsModel: typeof scheduledRunsModel;
   skills: typeof skills;
   tasks: typeof tasks;
+  telegramActions: typeof telegramActions;
   terminalRuns: typeof terminalRuns;
 }>;
 
