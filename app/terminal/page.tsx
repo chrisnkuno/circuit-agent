@@ -7,28 +7,24 @@ import { TerminalWorkspace } from "@/components/terminal-workspace";
 
 export const metadata: Metadata = {
   title: "Circuit-Nova — Agent Terminal",
-  description: "An interactive, simulated agent terminal for Circuit-Nova.",
+  description: "A real, task-priced agent terminal: real Convex tasks, real model calls, real sandboxes.",
 };
 
 export default function TerminalPage() {
   return (
     <div className="terminal-page">
       <Starfield />
-      <div className="terminal-page-inner">
-        <header className="terminal-page-header">
-          <Link className="terminal-back-link" href="/">
-            ← Back to workspace
+      <div className="nova-shell">
+        <header className="nova-topbar">
+          <Link className="nova-brand" href="/">
+            <span className="nova-brand-mark" aria-hidden="true">◈</span>
+            <span className="nova-brand-name">CIRCUIT<span className="nova-brand-dot">·</span>NOVA</span>
+            <span className="nova-brand-tag">agent terminal</span>
           </Link>
-          <span className="terminal-page-title">Agent Terminal</span>
+          <div className="nova-topbar-auth">
+            <AuthPanel />
+          </div>
         </header>
-        <div className="terminal-auth-row">
-          <AuthPanel />
-        </div>
-        <p className="terminal-page-lede">
-          Sign in, then <code>run coding &lt;objective&gt;</code> starts a real agent run: a real Convex task and budget, a real model call, and a
-          real E2B sandbox — not a script. Other task kinds still preview as a labeled simulation. Type <code>help</code> to start.
-        </p>
-        <p className="terminal-footnote">A real coding run spends a small real amount against your workspace's RWF cap. Everything else stays a clearly-labeled preview.</p>
         <TerminalWorkspace />
       </div>
     </div>

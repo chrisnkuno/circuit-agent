@@ -7,24 +7,25 @@ import { SchedulePanel } from "@/components/schedule-panel";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import type { Id } from "@/convex/_generated/dataModel";
 
-type LayoutMode = "stacked" | "split" | "focus";
+type LayoutMode = "split" | "focus" | "stacked";
 const LAYOUT_STORAGE_KEY = "circuit-nova-terminal-layout";
-const LAYOUT_MODES: { mode: LayoutMode; label: string }[] = [
-  { mode: "stacked", label: "Stacked" },
-  { mode: "split", label: "Split" },
-  { mode: "focus", label: "Focus" },
+
+/** Glyphs, not words — the arrangement is self-evident from the shape of the icon. */
+const LAYOUT_MODES: { mode: LayoutMode; label: string; glyph: string }[] = [
+  { mode: "split", label: "Split columns", glyph: "▮▯" },
+  { mode: "focus", label: "Focus console", glyph: "▰▯" },
+  { mode: "stacked", label: "Stacked rows", glyph: "▤" },
 ];
 
 /**
- * Console, task history, and the schedule/Telegram panel as three independently
- * positioned grid slots instead of one fixed vertical stack. The arrangement is a small,
- * fixed set of named CSS Grid layouts (not free-form drag) and the choice persists in
- * localStorage — "sticky" across visits without needing any backend schema.
+ * Console, task history, and the schedule/channel panel as three independently positioned
+ * grid slots. The arrangement is a small, fixed set of named CSS Grid layouts (not free-form
+ * drag) and the choice persists in localStorage — "sticky" across visits with no backend schema.
  */
 export function TerminalWorkspace() {
   const organization = useCurrentOrganization();
   const terminalRef = useRef<TerminalConsoleHandle>(null);
-  const [layout, setLayout] = useState<LayoutMode>("stacked");
+  const [layout, setLayout] = useState<LayoutMode>("split");
 
   useEffect(() => {
     const stored = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
@@ -36,31 +37,39 @@ export function TerminalWorkspace() {
     window.localStorage.setItem(LAYOUT_STORAGE_KEY, mode);
   }
 
+  // Signed out (or still provisioning) both side panels render nothing, so the aside would be
+  // a dead half-screen. Collapse to a single full-width console until there's real content.
+  const showAside = organization !== undefined;
+
   return (
-    <>
-      <div className="terminal-layout-switcher" role="group" aria-label="Panel layout">
-        {LAYOUT_MODES.map((option) => (
-          <button
-            key={option.mode}
-            type="button"
-            className={`terminal-layout-option${layout === option.mode ? " terminal-layout-option-active" : ""}`}
-            onClick={() => selectLayout(option.mode)}
-          >
-            {option.label}
-          </button>
-        ))}
+    <main className={`nova-layout nova-layout-${showAside ? layout : "stacked"}`}>
+      <div className="nova-slot nova-slot-console">
+        <TerminalConsole ref={terminalRef} />
       </div>
-      <div className={`terminal-layout terminal-layout-${layout}`}>
-        <div className="terminal-layout-slot terminal-layout-slot-console">
-          <TerminalConsole ref={terminalRef} />
-        </div>
-        <div className="terminal-layout-slot terminal-layout-slot-history">
-          <TaskHistory organizationId={organization?._id} onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)} />
-        </div>
-        <div className="terminal-layout-slot terminal-layout-slot-schedule">
+      {organization && (
+        <aside className="nova-slot nova-slot-aside">
+          <div className="nova-aside-rail">
+            <span className="nova-rail-label">Layout</span>
+            <div className="nova-layout-switcher" role="group" aria-label="Panel layout">
+              {LAYOUT_MODES.map((option) => (
+                <button
+                  key={option.mode}
+                  type="button"
+                  title={option.label}
+                  aria-label={option.label}
+                  aria-pressed={layout === option.mode}
+                  className={`nova-layout-option${layout === option.mode ? " nova-layout-option-active" : ""}`}
+                  onClick={() => selectLayout(option.mode)}
+                >
+                  {option.glyph}
+                </button>
+              ))}
+            </div>
+          </div>
+          <TaskHistory organizationId={organization._id} onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)} />
           <SchedulePanel />
-        </div>
-      </div>
-    </>
+        </aside>
+      )}
+    </main>
   );
 }

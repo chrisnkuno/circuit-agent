@@ -30,9 +30,13 @@ export function AuthPanel() {
   if (session.isPending) return <div className="auth-panel"><p>Checking session…</p></div>;
 
   if (session.data) {
+    // The workspace name is derived from the email (see ensureOrganization), so printing both
+    // is pure duplication — show the identity once and the workspace as a readiness state.
     return <div className="auth-panel signed-in">
-      <span>{session.data.user.email}</span>
-      {membership ? <b>{membership.organization.name}</b> : <b>Setting up workspace…</b>}
+      <b title={membership ? membership.organization.name : "Creating your workspace"}>
+        <span className={`auth-workspace-dot${membership ? " auth-workspace-ready" : ""}`} />
+        {session.data.user.email}
+      </b>
       <button className="outline" onClick={() => authClient.signOut()}>Sign out</button>
     </div>;
   }

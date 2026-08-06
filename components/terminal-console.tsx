@@ -181,7 +181,9 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
   }, [organization, tasks, hasConnectedRepository]);
 
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
-  const anyBusy = scriptBusy || branches.some((branch) => branch.busy);
+  const runningCount = branches.filter((branch) => branch.busy).length;
+  const anyBusy = scriptBusy || runningCount > 0;
+  const isGeneratedPresets = presets !== staticPresets;
 
   useEffect(() => {
     appendLineTo(MAIN_BRANCH_ID, { tone: "banner", text: buildBanner() });
@@ -420,12 +422,19 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
           <BranchRunTracker key={branch.runId} runId={branch.runId} onSnapshot={(detail) => handleRunSnapshot(branch.id, detail)} />
         ))}
       <div className="terminal-titlebar">
-        <span className="terminal-dot terminal-dot-red" />
-        <span className="terminal-dot terminal-dot-yellow" />
-        <span className="terminal-dot terminal-dot-green" />
+        <span className="terminal-dots" aria-hidden="true">
+          <span className="terminal-dot terminal-dot-red" />
+          <span className="terminal-dot terminal-dot-yellow" />
+          <span className="terminal-dot terminal-dot-green" />
+        </span>
         <span className="terminal-title">
-          circuit-nova — {session.data ? session.data.user.email : "guest"} — agent session
-          {anyBusy && <span className="terminal-orbit">{ORBIT_FRAMES[orbitFrame]}</span>}
+          <span className="terminal-title-path">~/{session.data ? session.data.user.email.split("@")[0] : "guest"}</span>
+          <span className="terminal-title-sep">/</span>
+          <span className="terminal-title-branch">{activeBranch.label}</span>
+        </span>
+        <span className={`terminal-status${anyBusy ? " terminal-status-live" : ""}`}>
+          {anyBusy ? <span className="terminal-orbit">{ORBIT_FRAMES[orbitFrame]}</span> : <span className="terminal-status-dot" />}
+          {anyBusy ? `${runningCount} running` : "idle"}
         </span>
       </div>
       {branches.length > 1 && (
@@ -470,9 +479,16 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
             )}
           </div>
         ))}
+        <div ref={logEndRef} />
+      </div>
+      {/* Pinned below the scrolling log: the things you act with shouldn't scroll away. */}
+      <div className="terminal-dock">
         <div className="terminal-presets">
+          <span className="terminal-presets-label" title={isGeneratedPresets ? "Suggested for your workspace by a real model call" : "Starter tasks for an empty workspace"}>
+            {isGeneratedPresets ? "◆" : "◇"}
+          </span>
           {presets.map((preset) => (
-            <button key={preset.label} type="button" className="terminal-preset-button" disabled={scriptBusy} onClick={() => submit(`run coding ${preset.objective}`)}>
+            <button key={preset.label} type="button" className="terminal-preset-button" disabled={scriptBusy} title={preset.objective} onClick={() => submit(`run coding ${preset.objective}`)}>
               {preset.label}
             </button>
           ))}
@@ -489,11 +505,11 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder={scriptBusy ? "a preview is playing — you can still start a real run" : 'type a command, e.g. "run coding fix the flaky retry test"'}
+            placeholder={scriptBusy ? "preview playing — you can still start a real run" : 'run coding <objective>   ·   help'}
             aria-label="Terminal command input"
           />
+          <button type="submit" className="terminal-send" disabled={!input.trim()} aria-label="Run command">↵</button>
         </form>
-        <div ref={logEndRef} />
       </div>
     </div>
   );

@@ -1,11 +1,25 @@
+/* ============================================================================
+   Circuit-Nova agent terminal — night-blue glass over a live starfield.
+   Panels are deliberately translucent (see --nova-panel) with a heavy backdrop
+   blur, so the animated sky reads through the chrome without costing legibility.
+   ========================================================================= */
+
 .terminal-page {
-  --nova-bg-deep: #05070f;
-  --nova-bg: #090d1c;
-  --nova-panel: rgba(12, 17, 38, 0.78);
-  --nova-border: rgba(126, 156, 255, 0.22);
-  --nova-border-strong: rgba(111, 227, 255, 0.45);
-  --nova-text: #dee6ff;
-  --nova-muted: #8390bf;
+  --nova-bg-deep: #04060e;
+  --nova-bg: #070b18;
+
+  /* Translucent glass. Alpha is low enough that stars read through, while the
+     blur+saturate below keeps monospace text crisp on top of moving points. */
+  --nova-panel: rgba(10, 15, 34, 0.55);
+  --nova-panel-solid: rgba(11, 16, 36, 0.74);
+  --nova-panel-raised: rgba(255, 255, 255, 0.035);
+  --nova-glass: blur(22px) saturate(150%);
+
+  --nova-border: rgba(126, 156, 255, 0.2);
+  --nova-border-strong: rgba(111, 227, 255, 0.42);
+  --nova-text: #e2e9ff;
+  --nova-muted: #8592c2;
+  --nova-faint: rgba(133, 146, 194, 0.55);
   --nova-cyan: #6fe3ff;
   --nova-violet: #b6a6ff;
   --nova-amber: #ffce7a;
@@ -13,9 +27,16 @@
   --nova-warn: #ffcf6b;
   --nova-error: #ff8f92;
   --nova-accent: #9fdcff;
+
+  --nova-radius: 16px;
+  --nova-radius-sm: 10px;
+
   min-height: 100vh;
   position: relative;
-  background: radial-gradient(ellipse 120% 80% at 50% -10%, #101a3a 0%, var(--nova-bg) 45%, var(--nova-bg-deep) 100%);
+  background:
+    radial-gradient(ellipse 100% 60% at 15% -5%, rgba(58, 84, 190, 0.22) 0%, transparent 60%),
+    radial-gradient(ellipse 90% 55% at 88% 8%, rgba(124, 84, 208, 0.16) 0%, transparent 62%),
+    radial-gradient(ellipse 130% 90% at 50% -10%, #0e1734 0%, var(--nova-bg) 48%, var(--nova-bg-deep) 100%);
   color: var(--nova-text);
   font-family: ui-sans-serif, system-ui, sans-serif;
   overflow-x: hidden;
@@ -28,157 +49,373 @@
   pointer-events: none;
 }
 
-.terminal-page-inner {
+/* ---------------------------------------------------------------- app shell */
+
+.nova-shell {
   position: relative;
   z-index: 1;
-  max-width: 900px;
+  max-width: 1560px;
   margin: 0 auto;
-  padding: 28px 20px 60px;
+  padding: 18px 24px 24px;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  gap: 16px;
 }
 
-.terminal-page-header {
+.nova-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 22px;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.terminal-back-link {
-  color: var(--nova-muted);
-  text-decoration: none;
-  font-size: 13px;
-  letter-spacing: 0.02em;
-  transition: color 0.15s ease;
-}
-.terminal-back-link:hover { color: var(--nova-cyan); }
-
-.terminal-page-title {
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  font-weight: 700;
-  color: var(--nova-accent);
-  text-transform: uppercase;
-}
-
-.terminal-auth-row {
+.nova-brand {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
+  align-items: baseline;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
 }
-.terminal-auth-row .auth-panel { position: relative; font-size: 12px; color: var(--nova-muted); }
-.terminal-auth-row .auth-panel input {
-  background: rgba(255, 255, 255, 0.04);
+
+.nova-brand-mark {
+  font-size: 17px;
+  color: var(--nova-cyan);
+  text-shadow: 0 0 18px rgba(111, 227, 255, 0.65);
+  transition: transform 0.25s ease;
+}
+.nova-brand:hover .nova-brand-mark { transform: rotate(90deg); }
+
+.nova-brand-name {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--nova-text);
+}
+.nova-brand-dot { color: var(--nova-cyan); }
+
+.nova-brand-tag {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--nova-faint);
+  border-left: 1px solid var(--nova-border);
+  padding-left: 10px;
+}
+
+.nova-topbar-auth { display: flex; justify-content: flex-end; }
+
+/* -------------------------------------------------------------- auth panel */
+
+.nova-topbar-auth .auth-panel {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nova-muted);
+  margin: 0;
+}
+.nova-topbar-auth .auth-panel p { margin: 0; }
+
+.nova-topbar-auth .auth-panel input {
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--nova-border);
   color: var(--nova-text);
-  border-radius: 6px;
-}
-.terminal-auth-row .auth-panel input::placeholder { color: var(--nova-muted); }
-.terminal-auth-row .auth-mode { border: 1px solid var(--nova-border); border-radius: 6px; overflow: hidden; }
-.terminal-auth-row .auth-mode button { background: transparent; color: var(--nova-muted); }
-.terminal-auth-row .auth-mode button.selected { background: var(--nova-cyan); color: #06131f; }
-.terminal-auth-row .auth-panel .outline { border: 1px solid var(--nova-border); background: transparent; color: var(--nova-text); border-radius: 6px; }
-.terminal-auth-row .auth-panel .primary { background: var(--nova-cyan); color: #06131f; border-radius: 6px; }
-.terminal-auth-row .auth-panel.signed-in b { color: var(--nova-accent); }
-.terminal-auth-row .auth-panel .notice {
-  position: absolute;
-  top: 40px;
-  right: 0;
-  background: var(--nova-panel);
-  border: 1px solid var(--nova-border);
-  color: var(--nova-warn);
   border-radius: 8px;
-  max-width: 260px;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 12.5px;
+  min-width: 0;
+  width: 168px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.nova-topbar-auth .auth-panel input:focus {
+  outline: none;
+  border-color: var(--nova-border-strong);
+  background: rgba(255, 255, 255, 0.07);
+}
+.nova-topbar-auth .auth-panel input::placeholder { color: var(--nova-faint); }
+
+.nova-topbar-auth .auth-mode {
+  display: flex;
+  border: 1px solid var(--nova-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.nova-topbar-auth .auth-mode button {
+  background: transparent;
+  color: var(--nova-muted);
+  border: 0;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.nova-topbar-auth .auth-mode button:hover { color: var(--nova-text); }
+.nova-topbar-auth .auth-mode button.selected { background: var(--nova-cyan); color: #06131f; font-weight: 600; }
+
+.nova-topbar-auth .auth-panel .outline {
+  border: 1px solid var(--nova-border);
+  background: transparent;
+  color: var(--nova-text);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.nova-topbar-auth .auth-panel .outline:hover { border-color: var(--nova-border-strong); }
+
+.nova-topbar-auth .auth-panel .primary {
+  background: var(--nova-cyan);
+  color: #06131f;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nova-topbar-auth .auth-panel .primary:disabled { opacity: 0.55; cursor: default; }
+
+.nova-topbar-auth .auth-panel.signed-in b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--nova-accent);
+  font-weight: 500;
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--nova-border);
+  border-radius: 999px;
+  background: rgba(111, 227, 255, 0.07);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Amber while the workspace is still being provisioned, mint once it exists. */
+.auth-workspace-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nova-warn);
+  box-shadow: 0 0 7px rgba(255, 207, 107, 0.7);
+}
+.auth-workspace-ready { background: var(--nova-mint); box-shadow: 0 0 7px rgba(126, 255, 196, 0.7); }
+
+.nova-topbar-auth .auth-panel .notice {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  background: var(--nova-panel-solid);
+  backdrop-filter: var(--nova-glass);
+  border: 1px solid var(--nova-warn);
+  color: var(--nova-warn);
+  border-radius: var(--nova-radius-sm);
+  max-width: 280px;
+  padding: 9px 12px;
+  font-size: 12px;
   z-index: 5;
 }
 
-.terminal-page-lede {
-  color: var(--nova-muted);
-  font-size: 14px;
-  line-height: 1.55;
-  max-width: 620px;
-  margin: 0 0 26px;
+/* ------------------------------------------------------------------ layout */
+
+/* Three fixed, named arrangements rather than free-form drag. "focus" widens
+   the console column by the golden ratio (1.618) instead of an arbitrary
+   fraction; "stacked" drops the aside below for a full-bleed console. */
+.nova-layout {
+  flex: 1;
+  display: grid;
+  gap: 16px;
+  align-items: stretch;
+  min-height: 0;
 }
+.nova-layout-split { grid-template-columns: minmax(0, 1fr) minmax(300px, 0.44fr); }
+.nova-layout-focus { grid-template-columns: minmax(0, 1.618fr) minmax(270px, 0.38fr); }
+.nova-layout-stacked { grid-template-columns: minmax(0, 1fr); }
+
+.nova-slot { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+.nova-slot-aside {
+  gap: 14px;
+  overflow-y: auto;
+  max-height: calc(100vh - 96px);
+  padding-right: 2px;
+}
+.nova-layout-stacked .nova-slot-aside {
+  max-height: none;
+  overflow: visible;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+}
+.nova-layout-stacked .nova-aside-rail { grid-column: 1 / -1; }
+
+.nova-aside-rail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.nova-rail-label {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--nova-faint);
+}
+
+.nova-layout-switcher { display: flex; gap: 4px; }
+
+.nova-layout-option {
+  background: transparent;
+  border: 1px solid var(--nova-border);
+  color: var(--nova-muted);
+  border-radius: 7px;
+  padding: 4px 9px;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.nova-layout-option:hover { border-color: var(--nova-border-strong); color: var(--nova-text); }
+.nova-layout-option-active {
+  background: rgba(111, 227, 255, 0.16);
+  border-color: var(--nova-border-strong);
+  color: var(--nova-cyan);
+}
+
+/* ----------------------------------------------------------- terminal glass */
 
 .terminal-window {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: var(--nova-panel);
+  backdrop-filter: var(--nova-glass);
+  -webkit-backdrop-filter: var(--nova-glass);
   border: 1px solid var(--nova-border);
-  border-radius: 14px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 30px 80px -30px rgba(20, 40, 120, 0.55), 0 0 40px -18px var(--nova-border-strong);
-  backdrop-filter: blur(14px);
+  border-radius: var(--nova-radius);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 30px 90px -32px rgba(6, 12, 40, 0.9),
+    0 0 60px -30px var(--nova-border-strong);
   overflow: hidden;
-  min-height: 520px;
   cursor: text;
 }
 
 .terminal-titlebar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 14px;
+  padding: 11px 16px;
   border-bottom: 1px solid var(--nova-border);
-  background: rgba(255, 255, 255, 0.02);
+  background: linear-gradient(rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  flex-shrink: 0;
 }
 
+.terminal-dots { display: flex; gap: 7px; }
 .terminal-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .terminal-dot-red { background: #ff5f57; }
 .terminal-dot-yellow { background: #febc2e; }
 .terminal-dot-green { background: #28c840; }
 
 .terminal-title {
-  margin-left: 10px;
-  font-size: 12px;
-  color: var(--nova-muted);
-  letter-spacing: 0.02em;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--nova-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.terminal-title-path { color: var(--nova-accent); }
+.terminal-title-sep { color: var(--nova-faint); }
+.terminal-title-branch { color: var(--nova-muted); overflow: hidden; text-overflow: ellipsis; }
+
+.terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--nova-faint);
+  border: 1px solid var(--nova-border);
+  border-radius: 999px;
+  padding: 3px 11px;
+  transition: all 0.2s ease;
+}
+.terminal-status-live { color: var(--nova-cyan); border-color: var(--nova-border-strong); background: rgba(111, 227, 255, 0.08); }
+
+.terminal-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--nova-faint);
 }
 
 .terminal-orbit {
   color: var(--nova-cyan);
+  font-family: ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
+
+/* ------------------------------------------------------------ branch tabs */
 
 .terminal-branches {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 8px 12px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--nova-border);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.018);
+  flex-shrink: 0;
 }
 
 .terminal-branch-tab {
   display: flex;
   align-items: center;
-  gap: 2px;
   border: 1px solid var(--nova-border);
   border-radius: 999px;
-  padding: 2px 4px 2px 4px;
+  padding: 1px 3px 1px 2px;
   background: transparent;
+  transition: all 0.15s ease;
 }
-.terminal-branch-tab-active { border-color: var(--nova-border-strong); background: rgba(111, 227, 255, 0.08); }
+.terminal-branch-tab:hover { border-color: rgba(111, 227, 255, 0.3); }
+.terminal-branch-tab-active {
+  border-color: var(--nova-border-strong);
+  background: rgba(111, 227, 255, 0.1);
+  box-shadow: 0 0 18px -8px var(--nova-cyan);
+}
 
 .terminal-branch-select {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   background: transparent;
   border: 0;
   color: var(--nova-muted);
   font: inherit;
   font-size: 11.5px;
-  padding: 3px 6px;
+  padding: 4px 9px;
   border-radius: 999px;
   cursor: pointer;
-  max-width: 220px;
+  max-width: 230px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -192,29 +429,38 @@
   border-radius: 999px;
   background: var(--nova-muted);
 }
-.terminal-branch-dot-running { background: var(--nova-cyan); box-shadow: 0 0 6px var(--nova-cyan); }
-.terminal-branch-dot-completed { background: var(--nova-mint); }
-.terminal-branch-dot-failed { background: var(--nova-error); }
-.terminal-branch-dot-idle { background: var(--nova-muted); }
+.terminal-branch-dot-running { background: var(--nova-cyan); box-shadow: 0 0 8px var(--nova-cyan); animation: nova-pulse 1.6s ease-in-out infinite; }
+.terminal-branch-dot-completed { background: var(--nova-mint); box-shadow: 0 0 7px rgba(126, 255, 196, 0.6); }
+.terminal-branch-dot-failed { background: var(--nova-error); box-shadow: 0 0 7px rgba(255, 143, 146, 0.6); }
+.terminal-branch-dot-idle { background: var(--nova-faint); }
+
+@keyframes nova-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 
 .terminal-branch-close {
   background: transparent;
   border: 0;
-  color: var(--nova-muted);
-  font-size: 13px;
+  color: var(--nova-faint);
+  font-size: 14px;
   line-height: 1;
-  padding: 2px 6px;
+  padding: 3px 7px;
   cursor: pointer;
   border-radius: 999px;
+  transition: color 0.15s ease;
 }
 .terminal-branch-close:hover { color: var(--nova-error); }
 
+/* ------------------------------------------------------------ stage track */
+
 .terminal-track-panel {
-  padding: 14px 16px 10px;
+  padding: 15px 18px 12px;
   border-bottom: 1px solid var(--nova-border);
   background: rgba(255, 255, 255, 0.015);
   overflow-x: auto;
   transition: background 0.3s ease;
+  flex-shrink: 0;
 }
 
 .terminal-track-art {
@@ -224,6 +470,7 @@
   font-size: 12.5px;
   line-height: 1.35;
   white-space: pre;
+  text-shadow: 0 0 22px rgba(159, 220, 255, 0.22);
 }
 
 .terminal-celebration {
@@ -239,42 +486,34 @@
   color: var(--nova-mint);
   text-shadow: 0 0 16px rgba(126, 255, 196, 0.4);
 }
-
-.terminal-track-completed {
-  background: rgba(126, 255, 196, 0.04);
-}
-
-.terminal-track-failed {
-  background: rgba(255, 143, 146, 0.04);
-}
-
-.terminal-failure-art {
-  color: var(--nova-error);
-}
+.terminal-track-completed { background: rgba(126, 255, 196, 0.05); }
+.terminal-track-failed { background: rgba(255, 143, 146, 0.05); }
+.terminal-failure-art { color: var(--nova-error); }
 
 @keyframes terminal-celebration-pop {
   from { opacity: 0; transform: scale(0.94); }
   to { opacity: 1; transform: scale(1); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .terminal-celebration { animation: none; }
-}
+.terminal-track-art-narrow { display: none; }
+
+/* -------------------------------------------------------------- log stream */
 
 .terminal-body {
   flex: 1;
-  padding: 18px 20px 16px;
+  min-height: 0;
+  padding: 18px 20px 14px;
   font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 13.5px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.7;
   overflow-y: auto;
-  max-height: 68vh;
+  overscroll-behavior: contain;
 }
 
 .terminal-banner {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   color: var(--nova-cyan);
-  text-shadow: 0 0 18px rgba(111, 227, 255, 0.35);
+  text-shadow: 0 0 20px rgba(111, 227, 255, 0.4);
   font-size: 12px;
   line-height: 1.4;
   white-space: pre;
@@ -299,7 +538,7 @@
 .terminal-line-warn { color: var(--nova-warn); }
 .terminal-line-error { color: var(--nova-error); }
 .terminal-line-accent { color: var(--nova-cyan); }
-.terminal-line-input { color: var(--nova-text); opacity: 0.92; }
+.terminal-line-input { color: var(--nova-text); }
 
 .terminal-prompt {
   color: var(--nova-cyan);
@@ -307,203 +546,363 @@
   margin-right: 2px;
 }
 
+.terminal-body::-webkit-scrollbar,
+.nova-slot-aside::-webkit-scrollbar { width: 9px; }
+.terminal-body::-webkit-scrollbar-track,
+.nova-slot-aside::-webkit-scrollbar-track { background: transparent; }
+.terminal-body::-webkit-scrollbar-thumb,
+.nova-slot-aside::-webkit-scrollbar-thumb { background: rgba(126, 156, 255, 0.22); border-radius: 6px; }
+.terminal-body::-webkit-scrollbar-thumb:hover,
+.nova-slot-aside::-webkit-scrollbar-thumb:hover { background: rgba(126, 156, 255, 0.38); }
+
+/* --------------------------------------------- pinned dock: presets + input */
+
+.terminal-dock {
+  flex-shrink: 0;
+  border-top: 1px solid var(--nova-border);
+  background: linear-gradient(rgba(255, 255, 255, 0.012), rgba(255, 255, 255, 0.038));
+  padding: 12px 16px 14px;
+}
+
 .terminal-presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 11px;
+}
+
+.terminal-presets-label {
+  font-size: 11px;
+  color: var(--nova-cyan);
+  cursor: help;
+  opacity: 0.75;
 }
 
 .terminal-preset-button {
   font: inherit;
   font-size: 12px;
-  background: rgba(111, 227, 255, 0.06);
+  background: rgba(111, 227, 255, 0.07);
   border: 1px solid var(--nova-border);
   color: var(--nova-accent);
   border-radius: 999px;
-  padding: 6px 12px;
+  padding: 6px 14px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: all 0.15s ease;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.terminal-preset-button:hover:not(:disabled) { background: rgba(111, 227, 255, 0.14); border-color: var(--nova-border-strong); }
-.terminal-preset-button:disabled { opacity: 0.5; cursor: default; }
+.terminal-preset-button:hover:not(:disabled) {
+  background: rgba(111, 227, 255, 0.16);
+  border-color: var(--nova-border-strong);
+  color: var(--nova-cyan);
+  transform: translateY(-1px);
+}
+.terminal-preset-button:disabled { opacity: 0.45; cursor: default; }
 
 .terminal-input-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 10px;
+  background: rgba(4, 8, 22, 0.5);
+  border: 1px solid var(--nova-border);
+  border-radius: var(--nova-radius-sm);
+  padding: 10px 12px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.terminal-input-row:focus-within {
+  border-color: var(--nova-border-strong);
+  box-shadow: 0 0 0 3px rgba(111, 227, 255, 0.08);
 }
 
 .terminal-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: 0;
   outline: none;
   color: var(--nova-text);
-  font: inherit;
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
   caret-color: var(--nova-cyan);
 }
+.terminal-input::placeholder { color: var(--nova-faint); }
 
-.terminal-input::placeholder { color: rgba(131, 144, 191, 0.55); }
-
-.terminal-body::-webkit-scrollbar { width: 10px; }
-.terminal-body::-webkit-scrollbar-track { background: transparent; }
-.terminal-body::-webkit-scrollbar-thumb { background: rgba(126, 156, 255, 0.25); border-radius: 6px; }
-
-.terminal-footnote {
-  margin-top: 16px;
-  font-size: 12px;
-  color: var(--nova-muted);
-  text-align: center;
-}
-
-.terminal-layout-switcher {
-  display: flex;
-  gap: 6px;
-  margin-top: 20px;
-  justify-content: flex-end;
-}
-
-.terminal-layout-option {
-  background: transparent;
+.terminal-send {
+  flex-shrink: 0;
+  background: rgba(111, 227, 255, 0.1);
   border: 1px solid var(--nova-border);
-  color: var(--nova-muted);
-  border-radius: 6px;
-  padding: 5px 10px;
-  font: inherit;
-  font-size: 11.5px;
+  color: var(--nova-cyan);
+  border-radius: 7px;
+  width: 30px;
+  height: 26px;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
-.terminal-layout-option:hover { border-color: var(--nova-border-strong); color: var(--nova-text); }
-.terminal-layout-option-active { background: var(--nova-cyan); color: #06131f; border-color: var(--nova-cyan); font-weight: 600; }
+.terminal-send:hover:not(:disabled) { background: var(--nova-cyan); color: #06131f; border-color: var(--nova-cyan); }
+.terminal-send:disabled { opacity: 0.3; cursor: default; }
 
-/* Three fixed, named arrangements rather than free-form drag — "split"/"focus" place task
-   history and the schedule panel beside the console instead of stacked beneath it. "focus"
-   widens the console column by the golden ratio (1.618) instead of an arbitrary fraction. */
-.terminal-layout {
-  display: grid;
-  gap: 20px;
-  margin-top: 8px;
-}
-.terminal-layout-stacked {
-  grid-template-columns: 1fr;
-  grid-template-areas: "console" "history" "schedule";
-}
-.terminal-layout-split {
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas: "console history" "console schedule";
-  align-items: start;
-}
-.terminal-layout-focus {
-  grid-template-columns: 1.618fr 1fr;
-  grid-template-areas: "console history" "console schedule";
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .terminal-layout-split, .terminal-layout-focus {
-    grid-template-columns: 1fr;
-    grid-template-areas: "console" "history" "schedule";
-  }
-}
+/* ------------------------------------------------------- shared side panel */
 
-.terminal-layout-slot-console { grid-area: console; }
-.terminal-layout-slot-history { grid-area: history; }
-.terminal-layout-slot-schedule { grid-area: schedule; }
-.terminal-layout-slot > .task-history,
-.terminal-layout-slot > .schedule-panel {
-  margin-top: 0;
-}
-/* The schedule panel's own two-card grid needs viewport-width room; in split/focus its slot
-   is narrower than the panel's normal full-width column, so keep it single-column there. */
-.terminal-layout-split .terminal-layout-slot-schedule .schedule-panel,
-.terminal-layout-focus .terminal-layout-slot-schedule .schedule-panel {
-  grid-template-columns: 1fr;
-}
-
-.schedule-panel {
-  margin-top: 24px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
+.task-history,
 .schedule-section {
   background: var(--nova-panel);
+  backdrop-filter: var(--nova-glass);
+  -webkit-backdrop-filter: var(--nova-glass);
   border: 1px solid var(--nova-border);
-  border-radius: 12px;
-  padding: 16px 18px;
+  border-radius: var(--nova-radius);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 20px 60px -34px rgba(6, 12, 40, 0.85);
+}
+
+.task-history { padding: 14px 16px 12px; }
+
+.task-history-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+
+.task-history-title {
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--nova-accent);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.task-history-count,
+.task-folder-count,
+.schedule-count {
+  font-size: 10px;
+  color: var(--nova-muted);
+  border: 1px solid var(--nova-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-folder + .task-folder {
+  margin-top: 4px;
+  border-top: 1px solid var(--nova-border);
+  padding-top: 4px;
+}
+
+.task-folder-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  border: 0;
+  color: var(--nova-text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 7px 2px;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s ease;
+}
+.task-folder-toggle:hover { color: var(--nova-cyan); }
+
+.task-folder-glyph {
+  display: inline-block;
+  color: var(--nova-faint);
+  font-size: 10px;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+.task-folder-glyph-open { transform: rotate(90deg); color: var(--nova-cyan); }
+
+.task-folder-label { flex: 1; }
+
+.task-list {
+  list-style: none;
+  margin: 2px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.task-card {
+  background: var(--nova-panel-raised);
+  border: 1px solid var(--nova-border);
+  border-radius: var(--nova-radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.task-card:hover { border-color: rgba(111, 227, 255, 0.3); background: rgba(255, 255, 255, 0.05); }
+
+.task-card-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.task-card-title {
+  /* min-width:0 lets the clamp apply to a flex child. Only the -webkit-box trio is used:
+     adding the standard `line-clamp` shorthand alongside it resets `display` back to
+     `block` in current Chrome, which silently disables the clamp entirely. */
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--nova-text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.task-card-status,
+.schedule-status {
+  flex-shrink: 0;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--nova-border);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.task-status-running { color: var(--nova-cyan); border-color: var(--nova-cyan); background: rgba(111, 227, 255, 0.1); }
+.task-status-awaiting_approval { color: var(--nova-warn); border-color: rgba(255, 207, 107, 0.55); }
+.task-status-quoted, .task-status-draft { color: var(--nova-muted); }
+.task-status-completed { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.55); background: rgba(126, 255, 196, 0.08); }
+.task-status-blocked, .task-status-cancelled { color: var(--nova-error); border-color: rgba(255, 143, 146, 0.5); }
+
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--nova-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-card-resume {
+  align-self: stretch;
+  background: transparent;
+  border: 1px solid var(--nova-border);
+  color: var(--nova-accent);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.task-card-resume:hover {
+  border-color: var(--nova-border-strong);
+  color: var(--nova-cyan);
+  background: rgba(111, 227, 255, 0.1);
+}
+
+/* ---------------------------------------------------------- schedule panel */
+
+.schedule-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.schedule-section { padding: 14px 16px; }
+
+.schedule-section-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 11px;
 }
 
 .schedule-section h3 {
-  margin: 0 0 4px;
-  font-size: 13px;
-  letter-spacing: 0.04em;
+  margin: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
   color: var(--nova-accent);
   text-transform: uppercase;
+  font-weight: 600;
 }
 
 .schedule-hint {
-  margin: 0 0 12px;
-  font-size: 12px;
-  color: var(--nova-muted);
-  line-height: 1.4;
+  margin: 0;
+  font-size: 11px;
+  color: var(--nova-faint);
+  line-height: 1.45;
 }
 
 .schedule-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 13px;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
 }
 
-.schedule-linked { color: var(--nova-mint); font-weight: 600; }
+.schedule-linked {
+  color: var(--nova-mint);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border: 1px solid rgba(126, 255, 196, 0.5);
+  background: rgba(126, 255, 196, 0.08);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
 
 .schedule-code-row code {
-  background: rgba(111, 227, 255, 0.1);
+  background: rgba(111, 227, 255, 0.11);
   border: 1px solid var(--nova-border);
-  border-radius: 6px;
-  padding: 2px 6px;
+  border-radius: 7px;
+  padding: 5px 9px;
   color: var(--nova-cyan);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 .schedule-form {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
 }
 
-.schedule-form input {
-  flex: 1 1 220px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--nova-border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  color: var(--nova-text);
-  font: inherit;
-  font-size: 13px;
-}
-.schedule-form input::placeholder { color: rgba(131, 144, 191, 0.55); }
-
+.schedule-form input,
 .schedule-form select {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(4, 8, 22, 0.45);
   border: 1px solid var(--nova-border);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: 8px;
+  padding: 8px 11px;
   color: var(--nova-text);
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
+  transition: border-color 0.15s ease;
 }
+.schedule-form input { flex: 1 1 100%; }
+.schedule-form select { flex: 1 1 auto; }
+.schedule-form input:focus,
+.schedule-form select:focus { outline: none; border-color: var(--nova-border-strong); }
+.schedule-form input::placeholder { color: var(--nova-faint); }
 
 .schedule-panel button.outline {
   border: 1px solid var(--nova-border);
   background: transparent;
   color: var(--nova-text);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 7px 12px;
   font: inherit;
-  font-size: 12px;
+  font-size: 11.5px;
   cursor: pointer;
+  transition: border-color 0.15s ease;
 }
 .schedule-panel button.outline:hover { border-color: var(--nova-border-strong); }
 
@@ -511,223 +910,108 @@
   background: var(--nova-cyan);
   color: #06131f;
   border: 0;
-  border-radius: 6px;
-  padding: 8px 14px;
+  border-radius: 8px;
+  padding: 8px 15px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
+  transition: opacity 0.15s ease;
 }
-.schedule-panel button.primary:disabled { opacity: 0.5; cursor: default; }
+.schedule-panel button.primary:disabled { opacity: 0.4; cursor: default; }
 
 .schedule-list {
   list-style: none;
-  margin: 14px 0 0;
+  margin: 12px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .schedule-list li {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  border-top: 1px solid var(--nova-border);
-  padding-top: 8px;
-}
-
-.schedule-objective { flex: 1; color: var(--nova-text); }
-
-.schedule-status {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--nova-border);
-}
-.schedule-status-active { color: var(--nova-mint); border-color: var(--nova-mint); }
-.schedule-status-paused { color: var(--nova-warn); border-color: var(--nova-warn); }
-.schedule-status-disabled { color: var(--nova-muted); }
-
-.schedule-notice {
-  grid-column: 1 / -1;
+  gap: 8px;
   font-size: 12px;
-  color: var(--nova-accent);
-  text-align: center;
-  margin: 4px 0 0;
-}
-
-@media (max-width: 640px) {
-  .schedule-panel { grid-template-columns: 1fr; }
-}
-
-.task-history {
-  margin-top: 24px;
-  background: var(--nova-panel);
+  background: var(--nova-panel-raised);
   border: 1px solid var(--nova-border);
-  border-radius: 12px;
-  padding: 16px 18px;
+  border-radius: var(--nova-radius-sm);
+  padding: 8px 10px;
 }
 
-.task-history-header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.task-history-title {
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  color: var(--nova-accent);
-  text-transform: uppercase;
-}
-
-.task-history-count {
-  font-size: 11px;
-  color: var(--nova-muted);
-  border: 1px solid var(--nova-border);
-  border-radius: 999px;
-  padding: 1px 7px;
-}
-
-.task-folder + .task-folder {
-  margin-top: 6px;
-  border-top: 1px solid var(--nova-border);
-  padding-top: 6px;
-}
-
-.task-folder-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: transparent;
-  border: 0;
-  color: var(--nova-text);
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 2px;
-  cursor: pointer;
-  text-align: left;
-}
-.task-folder-toggle:hover { color: var(--nova-cyan); }
-
-.task-folder-glyph {
-  display: inline-block;
-  color: var(--nova-muted);
-  transition: transform 0.15s ease;
-}
-.task-folder-glyph-open { transform: rotate(90deg); color: var(--nova-cyan); }
-
-.task-folder-label { flex: 1; }
-
-.task-folder-count {
-  font-size: 10px;
-  color: var(--nova-muted);
-  border: 1px solid var(--nova-border);
-  border-radius: 999px;
-  padding: 1px 6px;
-}
-
-.task-list {
-  list-style: none;
-  margin: 4px 0 8px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.task-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--nova-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.task-card-main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.task-card-title {
-  font-size: 12.5px;
+.schedule-objective {
+  flex: 1;
+  min-width: 0;
   color: var(--nova-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-card-status {
-  flex-shrink: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--nova-border);
-  font-weight: 600;
-}
-.task-status-running { color: var(--nova-cyan); border-color: var(--nova-cyan); }
-.task-status-awaiting_approval { color: var(--nova-warn); border-color: var(--nova-warn); }
-.task-status-quoted, .task-status-draft { color: var(--nova-muted); }
-.task-status-completed { color: var(--nova-mint); border-color: var(--nova-mint); }
-.task-status-blocked, .task-status-cancelled { color: var(--nova-error); border-color: var(--nova-error); }
+.schedule-status-active { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.5); }
+.schedule-status-paused { color: var(--nova-warn); border-color: rgba(255, 207, 107, 0.5); }
+.schedule-status-disabled { color: var(--nova-muted); }
 
-.task-card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--nova-muted);
-}
-
-.task-card-resume {
-  align-self: flex-start;
-  background: transparent;
-  border: 1px solid var(--nova-border);
-  color: var(--nova-accent);
-  border-radius: 6px;
-  padding: 5px 10px;
-  font: inherit;
+.schedule-notice {
   font-size: 11.5px;
-  cursor: pointer;
+  color: var(--nova-accent);
+  line-height: 1.45;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--nova-border);
+  border-radius: var(--nova-radius-sm);
+  background: rgba(111, 227, 255, 0.06);
 }
-.task-card-resume:hover { border-color: var(--nova-border-strong); color: var(--nova-cyan); background: rgba(111, 227, 255, 0.1); }
 
-.terminal-track-art-narrow { display: none; }
+/* ------------------------------------------------------------- responsive */
 
-@media (max-width: 640px) {
-  .terminal-page-inner { padding: 20px 14px 40px; }
-  .terminal-body { font-size: 12.5px; max-height: 62vh; }
+@media (max-width: 1080px) {
+  .nova-layout-split,
+  .nova-layout-focus { grid-template-columns: minmax(0, 1fr); }
+  .nova-slot-aside {
+    max-height: none;
+    overflow: visible;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    align-items: start;
+  }
+  .nova-slot-aside .nova-aside-rail { grid-column: 1 / -1; }
+  .terminal-window { min-height: 60vh; }
+}
+
+@media (max-width: 720px) {
+  .nova-shell { padding: 14px 13px 22px; gap: 13px; }
+  .nova-topbar { gap: 11px; }
+  .nova-brand-tag { display: none; }
+
+  .nova-topbar-auth { width: 100%; }
+  .nova-topbar-auth .auth-panel {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .nova-topbar-auth .auth-panel input { flex: 1 1 100%; width: auto; }
+  .nova-topbar-auth .auth-mode { flex: 1 1 100%; }
+  .nova-topbar-auth .auth-mode button { flex: 1; }
+  .nova-topbar-auth .auth-panel .primary { flex: 1 1 100%; }
+  .nova-topbar-auth .auth-panel.signed-in { justify-content: space-between; }
+
+  .nova-slot-aside { grid-template-columns: 1fr; }
+  .terminal-body { font-size: 12.5px; }
   .terminal-banner { font-size: 9.5px; }
+  .terminal-window { min-height: 68vh; }
 
-  .terminal-page-header { flex-wrap: wrap; row-gap: 6px; }
-
-  /* The boxed pipeline needs ~57 columns, which clips a phone screen even at the smallest
-     legible font size; below this width, list the same real stage data vertically instead. */
+  /* The boxed pipeline needs ~57 columns, which clips a phone screen even at the
+     smallest legible font size; below this width, list the same real stage data
+     vertically instead. */
   .terminal-track-art-wide { display: none; }
   .terminal-track-art-narrow { display: block; }
-
-  .terminal-auth-row { justify-content: stretch; }
-  .terminal-auth-row .auth-panel {
-    width: 100%;
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .terminal-auth-row .auth-panel input { width: 100%; }
-  .terminal-auth-row .auth-panel.signed-in { flex-direction: row; flex-wrap: wrap; justify-content: space-between; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .terminal-line { animation: none; }
+  .terminal-line,
+  .terminal-celebration { animation: none; }
+  .terminal-branch-dot-running { animation: none; }
+  .terminal-preset-button:hover:not(:disabled) { transform: none; }
+  .nova-brand:hover .nova-brand-mark { transform: none; }
 }

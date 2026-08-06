@@ -71,18 +71,18 @@ export function SchedulePanel() {
   return (
     <div className="schedule-panel">
       <div className="schedule-section">
-        <h3>Telegram</h3>
-        <p className="schedule-hint">Run and check tasks from Telegram instead of this page.</p>
+        <div className="schedule-section-head">
+          <h3>Channels</h3>
+          {linkedTelegram && <span className="schedule-linked">Telegram linked</span>}
+        </div>
         {linkedTelegram ? (
           <div className="schedule-row">
-            <span className="schedule-linked">Linked</span>
-            <button className="outline" onClick={() => revokeLink({ linkId: linkedTelegram._id })}>Unlink</button>
+            <button className="outline" onClick={() => revokeLink({ linkId: linkedTelegram._id })}>Unlink Telegram</button>
           </div>
         ) : linkCode ? (
           <div className="schedule-row schedule-code-row">
-            <span>
-              Send <code>/link {linkCode}</code> to the bot — code expires in 15 minutes.
-            </span>
+            <code>/link {linkCode}</code>
+            <span className="schedule-hint">→ send to the bot, expires in 15m</span>
           </div>
         ) : (
           <button className="outline" onClick={handleLinkTelegram}>Link Telegram</button>
@@ -90,8 +90,10 @@ export function SchedulePanel() {
       </div>
 
       <div className="schedule-section">
-        <h3>Recurring coding tasks</h3>
-        <p className="schedule-hint">Runs a real coding task on the schedule below, through the same dispatcher.</p>
+        <div className="schedule-section-head">
+          <h3>Recurring</h3>
+          {codingSchedules.length > 0 && <span className="schedule-count">{codingSchedules.length}</span>}
+        </div>
         <form className="schedule-form" onSubmit={handleCreateSchedule}>
           <input placeholder="Objective, e.g. run the lint check" value={objective} onChange={(event) => setObjective(event.target.value)} />
           <select value={cron} onChange={(event) => setCron(event.target.value)} aria-label="Schedule interval">
