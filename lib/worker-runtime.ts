@@ -85,6 +85,33 @@ export function retryDelayForFailure(error: unknown, attempt: number): number {
   return retryDelayMs(attempt, isCapacity ? CAPACITY_RETRY_BASE_MS : 1_000, isCapacity ? 120_000 : 60_000);
 }
 
+export type FailedCommand = {
+  program: string;
+  args: string[];
+  purpose?: string;
+  exitCode: number;
+  stdout?: string;
+  stderr?: string;
+};
+
+/**
+ * Describes the command that actually failed, for the step summary a person reads.
+ *
+ * The previous summary was the fixed string "A verification command failed." for every failure of
+ * this kind — which made the largest single class of run failures impossible to diagnose from the
+ * UI, the notifications, or the run ledger. The command, its exit code, and its output were all
+ * captured and then discarded. Stderr leads because a failing command explains itself there;
+ * stdout is the fallback for tools that report failures on stdout.
+ */
+export function summarizeCommandFailure(command: FailedCommand): string {
+  const invocation = [command.program, ...command.args].join(" ");
+  const output = (command.stderr?.trim() || command.stdout?.trim() || "").split("\n").filter(Boolean);
+  // The last lines are where an assertion or stack trace states the reason.
+  const tail = output.slice(-3).join(" · ");
+  const reason = tail ? ` — ${tail}` : "";
+  return truncateEvidence(`\`${invocation}\` exited ${command.exitCode}${reason}`, 500);
+}
+
 export function retryDelayMs(attempt: number, baseMs = 1_000, maximumMs = 60_000): number {
   if (!Number.isInteger(attempt) || attempt < 1) throw new Error("attempt must be a positive integer");
   return Math.min(maximumMs, baseMs * 2 ** (attempt - 1));

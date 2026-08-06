@@ -34,7 +34,19 @@ const blockedArguments = new Set([
   "-ok",
   "-okdir",
 ]);
-const allowedGitSubcommands = new Set(["diff", "log", "rev-parse", "show", "status"]);
+/**
+ * The command rules below are exported because the model must be told them, not merely judged by
+ * them. A planner that is told "git is allowed" and nothing more will propose `git init`, and the
+ * step dies on a policy it was never shown — observed live as the single largest fixable class of
+ * run failures. lib/coding-prompt.ts renders these into the prompt so the two cannot drift.
+ */
+export const ALLOWED_GIT_SUBCOMMANDS = ["diff", "log", "rev-parse", "show", "status"] as const;
+/** npm and bun may only run declared scripts or tests, never arbitrary lifecycle commands. */
+export const SCRIPT_RUNNER_SUBCOMMANDS = ["test", "run"] as const;
+export const INLINE_EVAL_FLAGS = ["-e", "--eval", "-p", "--print", "-c"] as const;
+export const INLINE_EVAL_PROGRAMS = ["node", "python", "python3"] as const;
+
+const allowedGitSubcommands = new Set<string>(ALLOWED_GIT_SUBCOMMANDS);
 
 function assertWorkspacePath(path: string, label: string): void {
   if ((path !== "/workspace" && !path.startsWith("/workspace/")) || path.split("/").includes("..")) {
@@ -58,17 +70,17 @@ export function validateSandboxCommand(command: SandboxCommand): void {
   if (command.args.some((argument) => argument.startsWith("/") && argument !== "/workspace" && !argument.startsWith("/workspace/"))) {
     throw new Error("Absolute command arguments must stay inside /workspace");
   }
-  if ((command.program === "node" || command.program === "python" || command.program === "python3") && command.args.some((argument) => ["-e", "--eval", "-p", "--print", "-c"].includes(argument))) {
+  if ((INLINE_EVAL_PROGRAMS as readonly string[]).includes(command.program) && command.args.some((argument) => (INLINE_EVAL_FLAGS as readonly string[]).includes(argument))) {
     throw new Error("Inline program evaluation is blocked");
   }
   if (command.program === "git") {
     const subcommand = command.args.find((argument) => !argument.startsWith("-"));
     if (!subcommand || !allowedGitSubcommands.has(subcommand)) throw new Error("Git command is not read-only");
   }
-  if (command.program === "bun" && command.args[0] && !["test", "run"].includes(command.args[0])) {
+  if (command.program === "bun" && command.args[0] && !(SCRIPT_RUNNER_SUBCOMMANDS as readonly string[]).includes(command.args[0])) {
     throw new Error("Bun command must run a declared script or test");
   }
-  if (command.program === "npm" && command.args[0] && !["test", "run"].includes(command.args[0])) {
+  if (command.program === "npm" && command.args[0] && !(SCRIPT_RUNNER_SUBCOMMANDS as readonly string[]).includes(command.args[0])) {
     throw new Error("npm command must run a declared script or test");
   }
 }

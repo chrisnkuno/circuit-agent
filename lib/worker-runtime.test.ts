@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyWorkerFailure, recoverExpiredLease, retryDelayForFailure, retryDelayMs, summarizeWorkerError, validateStepOutcome } from "./worker-runtime";
+import { classifyWorkerFailure, recoverExpiredLease, retryDelayForFailure, retryDelayMs, summarizeCommandFailure, summarizeWorkerError, validateStepOutcome } from "./worker-runtime";
 
 describe("worker lease recovery", () => {
   it("releases the exact reservation before retrying expired work", () => {
@@ -102,5 +102,35 @@ describe("provider spending capacity", () => {
 
   it("still bounds the wait so a stuck step cannot sit forever", () => {
     expect(retryDelayForFailure(refusal, 8)).toBeLessThanOrEqual(120_000);
+  });
+});
+
+describe("summarizeCommandFailure", () => {
+  // Every failure of this class used to read "A verification command failed." and nothing else,
+  // which is unactionable in the terminal, the notification, and the run ledger alike.
+  it("names the command and the reason it gave", () => {
+    const summary = summarizeCommandFailure({
+      program: "python3",
+      args: ["verify.py"],
+      exitCode: 1,
+      stdout: "",
+      stderr: 'Traceback (most recent call last):\n  File "verify.py", line 4\nAssertionError: expected hello world',
+    });
+    expect(summary).toContain("`python3 verify.py` exited 1");
+    expect(summary).toContain("AssertionError: expected hello world");
+  });
+
+  it("falls back to stdout for tools that report failure there", () => {
+    const summary = summarizeCommandFailure({ program: "npm", args: ["test"], exitCode: 1, stdout: "2 failing", stderr: "" });
+    expect(summary).toContain("2 failing");
+  });
+
+  it("still identifies the command when it said nothing at all", () => {
+    expect(summarizeCommandFailure({ program: "node", args: ["x.js"], exitCode: 127 })).toBe("`node x.js` exited 127");
+  });
+
+  it("stays bounded so it cannot flood a step summary or an email", () => {
+    const summary = summarizeCommandFailure({ program: "node", args: ["x.js"], exitCode: 1, stderr: "e".repeat(10_000) });
+    expect(summary.length).toBeLessThanOrEqual(500);
   });
 });

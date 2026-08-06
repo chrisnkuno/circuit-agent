@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ALLOWED_SANDBOX_PROGRAMS } from "./sandbox-policy";
+import { ALLOWED_GIT_SUBCOMMANDS, ALLOWED_SANDBOX_PROGRAMS, INLINE_EVAL_FLAGS, INLINE_EVAL_PROGRAMS, SCRIPT_RUNNER_SUBCOMMANDS } from "./sandbox-policy";
 
 export const CODING_PLANNER_PROMPT_VERSION = "coding-planner-v2";
 
@@ -46,7 +46,14 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     "Return a minimal plan that changes only files necessary for the objective and verifies the result.",
     "All file paths must be absolute and remain under the supplied workspace root.",
     "Use only the allowed command programs. Commands receive argv directly; do not use shell syntax.",
-    "Never pass an inline-evaluation flag (-c, -e, --eval, -p, --print) to node, python, or python3; write the code to a file and run that file instead.",
+    // Rendered from the enforcing constants (lib/sandbox-policy.ts) rather than restated by hand,
+    // so the rules the planner is given cannot drift from the rules it is judged by. Stating only
+    // the allowed *programs* was not enough: a planner told "git is allowed" proposes `git init`,
+    // and the step dies on a constraint it was never shown.
+    `Git is read-only here. The only permitted git subcommands are ${ALLOWED_GIT_SUBCOMMANDS.join(", ")}. Never run git init, add, commit, branch, checkout, push, or any other writing subcommand — there may be no repository at all, and creating one is not part of any objective.`,
+    `${INLINE_EVAL_PROGRAMS.join(", ")} must run a file. Never pass ${INLINE_EVAL_FLAGS.join(", ")}; write the code to a file and run that file instead.`,
+    `npm and bun may only be invoked as ${SCRIPT_RUNNER_SUBCOMMANDS.map((subcommand) => `"${subcommand}"`).join(" or ")} — never install, add, or any other subcommand.`,
+    "Every absolute path in a command argument must stay inside /workspace.",
     "Do not merge, deploy, push, send messages, access secrets, install remote packages, or make external changes.",
     "If required context is absent or the work is unsafe, return blocked or needs_clarification with no file changes or commands.",
   ].join("\n");
@@ -57,6 +64,11 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     workspaceRoot: input.workspaceRoot,
     maxCommands: input.maxCommands,
     allowedPrograms: ALLOWED_SANDBOX_PROGRAMS,
+    commandPolicy: {
+      gitSubcommands: ALLOWED_GIT_SUBCOMMANDS,
+      scriptRunnerSubcommands: SCRIPT_RUNNER_SUBCOMMANDS,
+      forbiddenInlineEvalFlags: INLINE_EVAL_FLAGS,
+    },
     requiredEvidence: ["model_plan", "command_log", "patch", "test_log"],
   };
   return { instructions, input: JSON.stringify(payload) };

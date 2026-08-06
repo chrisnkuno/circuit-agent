@@ -2,6 +2,7 @@ import { CodingPlanSchema } from "./coding-prompt";
 import { estimateModelCost, priceActualModelUsage, type ModelCostEstimate, type ModelPriceCatalog } from "./model-cost";
 import { buildCodingPlannerPrompt } from "./coding-prompt";
 import { truncateEvidence, type ArtifactReference, type ArtifactStore, type ArtifactWrite } from "./artifacts";
+import { summarizeCommandFailure } from "./worker-runtime";
 import type { CodingSandboxProvider, SandboxCommandResult } from "./providers/contracts";
 import type { CodingModelProvider, CodingPlanRequest, ModelUsage } from "./providers/model";
 
@@ -114,6 +115,7 @@ export class CodingAgentWorker {
     const evidence: ArtifactReference[] = [planArtifact];
     const commandLog: ReturnType<typeof commandRecord>[] = [];
     let commandsExecuted = 0;
+    let failure: ReturnType<typeof commandRecord> | undefined;
     let cancelled = false;
     let failed = false;
 
@@ -134,9 +136,13 @@ export class CodingAgentWorker {
           timeoutMs: command.timeoutMs,
         });
         commandsExecuted += 1;
-        commandLog.push(commandRecord(index, command, result));
+        const record = commandRecord(index, command, result);
+        commandLog.push(record);
         if (result.exitCode !== 0) {
           failed = true;
+          // Kept so the step summary can name what failed. Without it the only record of the
+          // reason is the command-log artifact, whose content is not persisted anywhere.
+          failure = record;
           break;
         }
       }
@@ -165,7 +171,13 @@ export class CodingAgentWorker {
 
     return {
       status: cancelled ? "cancelled" : failed ? "failed" : "completed",
-      summary: cancelled ? "Run cancelled at a safe checkpoint." : failed ? "A verification command failed." : plan.summary,
+      summary: cancelled
+        ? "Run cancelled at a safe checkpoint."
+        : failure
+          ? summarizeCommandFailure({ ...failure.command, purpose: failure.purpose, exitCode: failure.exitCode, stdout: failure.stdout, stderr: failure.stderr })
+          : failed
+            ? "A verification command failed."
+            : plan.summary,
       artifactReferences: evidence,
       modelUsage: modelResult.usage,
       actualModelRwf,
