@@ -18,7 +18,11 @@ import { createWorkerControl } from "./lib/workerControl";
 import { summarizeWorkerError } from "../lib/worker-runtime";
 
 const REPOSITORY_CONTEXT = "No repository is connected yet. There is no existing codebase to inspect; work only within the provided workspace using the allowed commands.";
-const CLAIM_LEASE_MS = 120_000;
+// The worker only heartbeats once before the model call and then again per sandbox command
+// (see lib/coding-worker.ts) — nothing renews the lease while the model call itself is in
+// flight. The lease must comfortably outlast the model timeout below plus sandbox setup and
+// verification time, or a slow-but-legitimate model response can race its own lease expiry.
+const CLAIM_LEASE_MS = 180_000;
 const SANDBOX_RUNTIME_SECONDS = 300;
 
 function buildStepRequest(taskTitle: string, runObjective: string, taskId: string, stepId: string): CodingPlanRequest {
@@ -30,7 +34,11 @@ function buildStepRequest(taskTitle: string, runObjective: string, taskId: strin
     workspaceRoot: "/workspace/repo",
     maxCommands: 6,
     maxOutputTokens: 4_000,
-    timeoutMs: 60_000,
+    // A reasoning-capable model's response time varies a lot with how much it "thinks" —
+    // one observed live call used 1024 reasoning tokens and still finished in ~14s, but the
+    // same depth under worse conditions (provider load, a harder objective) can comfortably
+    // exceed 60s. 60s produced a real "Request was aborted" failure in production.
+    timeoutMs: 90_000,
     reasoningEffort: "low",
     safetyIdentifier: `org_${taskId}`.slice(0, 64),
   };

@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
+import { TaskHistory } from "@/components/task-history";
 import { formatRwf } from "@/lib/task-cost";
 import type { TaskKind } from "@/lib/task-cost";
 import {
@@ -32,11 +33,25 @@ type LogTone = TerminalLine["tone"] | "input" | "banner";
 type LogEntry = { id: string; tone: LogTone; text: string };
 type TrackState = { stages: Stage[]; outcome?: "completed" | "failed" };
 
-/** One-click shortcuts for a real run — each just submits the identical "run coding <objective>" command a person would type. */
-const PRESET_TASKS = [
+/**
+ * One-click shortcuts for a real run — each just submits the identical "run coding
+ * <objective>" command a person would type. Every coding run currently starts from an empty
+ * E2B workspace (no GitHub App is registered yet, so no repository is ever actually cloned in
+ * — see docs/gap-register.md), so presets that imply pre-existing code ("write a test" for
+ * what?, "lint check" of what?) would be misleading. These two sets keep the presets honest:
+ * the from-scratch set is genuinely self-contained; the existing-codebase set only appears
+ * once an organization has a real connected repository to act on.
+ */
+const PRESETS_NO_REPOSITORY = [
   { label: "Add a README", objective: "add a README.md that explains what's in the workspace" },
-  { label: "Write a test", objective: "write a unit test for a small pure function and verify it passes" },
-  { label: "Lint check", objective: "check the workspace for obvious style issues and report them" },
+  { label: "Create a utility + test", objective: "create a small pure utility function and a test that verifies it, then run the test" },
+  { label: "Hello world script", objective: "create a small script that prints hello world and run it to verify" },
+];
+
+const PRESETS_WITH_REPOSITORY = [
+  { label: "Add a missing test", objective: "find a function without test coverage, write a test for it, and verify it passes" },
+  { label: "Lint check", objective: "run the project's lint or style check and report any issues" },
+  { label: "Fix a failing check", objective: "find and fix a currently failing test or check in the repository" },
 ];
 
 function delay(ms: number): Promise<void> {
@@ -83,6 +98,7 @@ export function TerminalConsole() {
   const [celebrationFrame, setCelebrationFrame] = useState(0);
   const [track, setTrack] = useState<TrackState | null>(null);
   const [activeRunId, setActiveRunId] = useState<Id<"agentRuns"> | null>(null);
+  const [resumeTaskId, setResumeTaskId] = useState<Id<"tasks"> | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const runIdRef = useRef(0);
@@ -93,6 +109,10 @@ export function TerminalConsole() {
   const startLiveRun = useAction(api.terminalRuns.startLiveCodingRun);
   const runDetail = useQuery(api.agentRuns.getRunDetail, activeRunId ? { runId: activeRunId } : "skip");
   const tasks = useQuery(api.tasks.listRecent, organization ? { organizationId: organization._id } : "skip");
+  const githubInstallations = useQuery(api.githubModel.listForOrganization, organization ? { organizationId: organization._id } : "skip");
+  const hasConnectedRepository = (githubInstallations ?? []).some((installation) => installation.status === "connected");
+  const resumeRuns = useQuery(api.agentRuns.listForTask, resumeTaskId ? { taskId: resumeTaskId } : "skip");
+  const presets = hasConnectedRepository ? PRESETS_WITH_REPOSITORY : PRESETS_NO_REPOSITORY;
 
   useEffect(() => {
     setLog([{ id: entryId(), tone: "banner", text: buildBanner() }]);
@@ -158,6 +178,31 @@ export function TerminalConsole() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runDetail, tasks]);
+
+  // Resuming a task from history: pick its latest run and hand it to the same live
+  // reactivity path a fresh "run coding" already uses, so resumed status is exactly
+  // as real as a run started in this session.
+  useEffect(() => {
+    if (!resumeTaskId || !resumeRuns) return;
+    const latest = [...resumeRuns].sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (latest) {
+      appendLine({ tone: "system", text: `resuming "${latest.objective}" — loading live status…` });
+      // If this is already the run being tracked (e.g. resuming a task that's still
+      // actively running), leave the track panel alone — clearing it here would blank
+      // it with nothing to repaint it, since the runDetail-driven effect below only
+      // fires again once activeRunId actually changes or a new event arrives.
+      if (latest._id !== activeRunId) {
+        renderedEventIds.current = new Set();
+        setTrack(null);
+        setBusy(true);
+        setActiveRunId(latest._id);
+      }
+    } else {
+      appendLine({ tone: "warn", text: "that task has no run yet." });
+    }
+    setResumeTaskId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeTaskId, resumeRuns]);
 
   function appendLine(line: { tone: LogTone; text: string }) {
     setLog((current) => [...current, { id: entryId(), ...line }]);
@@ -291,7 +336,7 @@ export function TerminalConsole() {
           </div>
         ))}
         <div className="terminal-presets">
-          {PRESET_TASKS.map((preset) => (
+          {presets.map((preset) => (
             <button key={preset.label} type="button" className="terminal-preset-button" disabled={busy} onClick={() => submit(`run coding ${preset.objective}`)}>
               {preset.label}
             </button>
@@ -315,6 +360,7 @@ export function TerminalConsole() {
         </form>
         <div ref={logEndRef} />
       </div>
+      <TaskHistory organizationId={organization?._id} onResumeTask={setResumeTaskId} />
     </div>
   );
 }
