@@ -70,6 +70,38 @@ The model prompt is versioned in code with typed inputs and representative tests
 
 Preflight model pricing has two values: an expected token estimate and a conservative byte-based reservation cap. Actual input, output, cached, cache-write, and reasoning token usage is recorded from the provider response and converted using versioned RWF-per-million-token configuration.
 
+## E2B usage, audited against the vendor documentation
+
+Verified against the [E2B docs](https://e2b.dev/docs) and the live account.
+
+What holds up: secured access (`secure: true`), egress disabled by default, identifying metadata on
+every sandbox, argv-only commands behind the sandbox policy, ordinary process failures surfaced as
+results rather than exceptions, and a `finally` kill on every path. The account confirms the last
+one — no sandbox this system created is left behind.
+
+Three findings worth acting on:
+
+1. **A sandbox per step is the wrong shape.** E2B recommends one sandbox per *task*, paused and
+   resumed between operations, and reserves one-sandbox-per-unit for genuinely parallel tasks. This
+   system creates and kills a sandbox per step, which is why `implement` cannot see anything
+   `reproduce` created — every step starts from an empty workspace and redoes its own setup. Pausing
+   is close to free: paused sandboxes are not billed, do not count toward the concurrency limit, are
+   kept indefinitely, and resume in about a second. This is the largest available improvement to
+   what a run can actually accomplish.
+2. **A timeout pauses a sandbox; it does not kill it.** `maxRuntimeSeconds` is treated here as a
+   hard lifetime cap, but on expiry E2B preserves full state indefinitely instead of destroying it.
+   The normal path is safe because the worker kills in a `finally`, but a worker that dies
+   abnormally leaves a paused sandbox that nothing will ever reclaim. Unbilled, but unbounded in
+   number — it needs an explicit reaper keyed on the metadata this system already sets.
+3. **The SDK clones repositories directly.** `sandbox.git.clone()` with inline credentials pairs
+   exactly with the short-lived installation tokens the GitHub App adapter already mints, which is
+   far less machinery than a bespoke provisioner. `dangerouslyAuthenticate()` must be avoided: it
+   writes credentials to disk inside the sandbox, where the agent itself can read them.
+
+Sandbox cost is per-second while running — roughly $0.109 per hour for the default 2 vCPU / 512 MiB
+— so a run that spends about a minute in a sandbox costs fractions of a cent. Sandbox time is not
+what makes a run expensive; model tokens are.
+
 ## Provider activation gates
 
 - Circuit Pay integration requires verified API authentication, payment-hold/checkout semantics, webhook signing, refunds, and idempotency behavior.
