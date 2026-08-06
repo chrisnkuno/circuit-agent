@@ -150,6 +150,7 @@ async function cancelRun(ctx: MutationCtx, run: Doc<"agentRuns">, task: Doc<"tas
   // run is not merely stale UI: deciding it would re-queue a cancelled run and authorize real
   // money against a task the person just stopped.
   await expirePendingApprovals(ctx, task._id, (approval) => approval.runId === run._id);
+  await releaseRunSandbox(ctx, run);
   await ctx.db.insert("agentRunEvents", { runId: run._id, type: "cancellation_requested", message: "Run cancelled. Active workers must stop at their next safe checkpoint.", createdAt: now });
   await ctx.scheduler.runAfter(0, internal.emailActions.notifyRunLifecycle, {
     organizationId: task.organizationId,
@@ -172,6 +173,21 @@ async function expirePendingApprovals(ctx: MutationCtx, taskId: Id<"tasks">, mat
     expired += 1;
   }
   return expired;
+}
+
+
+/**
+ * Destroys the sandbox a finished run was working in.
+ *
+ * Reuse makes this obligatory rather than tidy: a suspended sandbox is kept indefinitely by the
+ * provider, so a run that ends without this leaves a workspace nobody will ever collect. It is
+ * best-effort and always clears the record — a sandbox that is already gone is exactly the state
+ * this is trying to reach, and failing here must never hold up the run's own terminal transition.
+ */
+async function releaseRunSandbox(ctx: MutationCtx, run: Doc<"agentRuns">): Promise<void> {
+  if (!run.sandboxId) return;
+  await ctx.db.patch(run._id, { sandboxId: undefined });
+  await ctx.scheduler.runAfter(0, internal.sandboxCleanup.destroySandbox, { sandboxId: run.sandboxId, runId: run._id });
 }
 
 export const requestCancellation = mutation({
@@ -285,6 +301,7 @@ export const claimStep = internalMutation({
         workerId: args.workerId,
         reservationRwf: Number(args.estimatedRwf),
         attempts: step.attempts + 1,
+        reuseSandboxId: run.sandboxId,
         taskId: task._id,
         taskTitle: task.title,
         runObjective: run.objective,
@@ -349,6 +366,9 @@ export const heartbeatStep = internalMutation({
     const leaseExpiresAt = now + args.leaseMs;
     if (run.status === "cancelled") return { continueExecution: false, leaseExpiresAt: step.leaseExpiresAt };
     await ctx.db.patch(step._id, { heartbeatAt: now, leaseExpiresAt, sandboxId: args.sandboxId ?? step.sandboxId });
+    // The run, not just the step, remembers the sandbox: the step clears its own on completion,
+    // and the run is what hands the workspace to the next step and destroys it at the end.
+    if (args.sandboxId && run.sandboxId !== args.sandboxId) await ctx.db.patch(run._id, { sandboxId: args.sandboxId });
     return { continueExecution: true, leaseExpiresAt };
   },
 });
@@ -441,6 +461,7 @@ export const recordStepOutcome = internalMutation({
     await ctx.db.insert("agentRunEvents", { runId: run._id, type: `step_${args.outcome}`, message: args.summary, createdAt: now });
     if (args.outcome === "failed") {
       await ctx.db.patch(run._id, { status: "failed", completedAt: now });
+      await releaseRunSandbox(ctx, run);
       await ctx.db.patch(task._id, { status: "blocked" });
       await ctx.scheduler.runAfter(0, internal.telegramActions.notifyLinkedChannels, {
         organizationId: task.organizationId,
@@ -467,6 +488,7 @@ export const recordStepOutcome = internalMutation({
             ? "awaiting_approval"
             : "queued";
       await ctx.db.patch(run._id, runIsComplete ? { status: nextRunStatus, completedAt: now } : { status: nextRunStatus });
+      if (runIsComplete) await releaseRunSandbox(ctx, run);
       // The step that just finished is usually what unblocks the next one, so release it now
       // instead of leaving it to the one-minute cron. Waiting for the cron added up to a minute
       // of dead time between every pair of steps — the dominant cost of a short run, which spent
@@ -523,6 +545,7 @@ export const recoverExpiredLeases = internalMutation({
         await ctx.db.patch(step._id, { status: "failed", completedAt: now, summary: "Worker lease expired after the retry limit.", leaseExpiresAt: undefined, heartbeatAt: undefined, sandboxId: undefined, reservedRwf: undefined });
         await ctx.db.patch(run._id, { status: "failed", completedAt: now });
         await ctx.db.patch(task._id, { status: "blocked" });
+        await releaseRunSandbox(ctx, run);
         failed += 1;
       } else {
         await ctx.db.patch(step._id, { status: "pending", claimedBy: undefined, claimedAt: undefined, leaseExpiresAt: undefined, heartbeatAt: undefined, sandboxId: undefined, reservedRwf: undefined });

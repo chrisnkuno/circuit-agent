@@ -6,11 +6,12 @@ import type { CodingWorkerControl } from "../../lib/coding-worker";
 /** Bridges the worker's heartbeat/cancellation checkpoints to the lease-owning Convex mutations. */
 export function createWorkerControl(ctx: ActionCtx, params: { runId: Id<"agentRuns">; workerId: string; leaseMs: number }): CodingWorkerControl {
   return {
-    async heartbeat(stepId: string): Promise<void> {
+    async heartbeat(stepId: string, sandboxId?: string): Promise<void> {
       await ctx.runMutation(internal.agentRuns.heartbeatStep, {
         runId: params.runId,
         stepId: stepId as Id<"agentSteps">,
         workerId: params.workerId,
+        sandboxId,
         leaseMs: params.leaseMs,
       });
     },

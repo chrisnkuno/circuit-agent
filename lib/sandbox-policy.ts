@@ -19,6 +19,25 @@ export const ALLOWED_SANDBOX_PROGRAMS = [
 
 export type AllowedSandboxProgram = (typeof ALLOWED_SANDBOX_PROGRAMS)[number];
 
+/**
+ * What is *permitted* and what is *installed* are different questions, and conflating them costs
+ * real runs. The allowlist above is the security boundary — the set of programs this system is
+ * willing to run at all. The set below is what E2B's `base` template actually ships, probed
+ * directly in a live sandbox: bun, pytest, uv, cargo, go and rg are all absent. A planner told it
+ * may use `rg` picks it, the command exits 127, and the step fails for a reason that has nothing
+ * to do with the work.
+ *
+ * A richer custom template can widen this through E2B_TEMPLATE_PROGRAMS without touching the
+ * security boundary, which only ever narrows.
+ */
+export const BASE_TEMPLATE_PROGRAMS = ["npm", "git", "node", "python", "python3", "ls", "pwd", "find"] as const;
+
+/** The programs a planner may actually be offered: permitted by policy *and* present in the image. */
+export function availableSandboxPrograms(templatePrograms?: readonly string[]): AllowedSandboxProgram[] {
+  const present = new Set<string>(templatePrograms ?? BASE_TEMPLATE_PROGRAMS);
+  return ALLOWED_SANDBOX_PROGRAMS.filter((program) => present.has(program));
+}
+
 const allowedPrograms = new Set<string>(ALLOWED_SANDBOX_PROGRAMS);
 const blockedArguments = new Set([
   "-c",

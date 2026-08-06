@@ -30,6 +30,8 @@ import type * as lib_authz from "../lib/authz.js";
 import type * as lib_workerControl from "../lib/workerControl.js";
 import type * as notificationsModel from "../notificationsModel.js";
 import type * as organizations from "../organizations.js";
+import type * as sandboxCleanup from "../sandboxCleanup.js";
+import type * as sandboxCleanupModel from "../sandboxCleanupModel.js";
 import type * as scheduledRuns from "../scheduledRuns.js";
 import type * as scheduledRunsModel from "../scheduledRunsModel.js";
 import type * as skills from "../skills.js";
@@ -68,6 +70,8 @@ declare const fullApi: ApiFromModules<{
   "lib/workerControl": typeof lib_workerControl;
   notificationsModel: typeof notificationsModel;
   organizations: typeof organizations;
+  sandboxCleanup: typeof sandboxCleanup;
+  sandboxCleanupModel: typeof sandboxCleanupModel;
   scheduledRuns: typeof scheduledRuns;
   scheduledRunsModel: typeof scheduledRunsModel;
   skills: typeof skills;

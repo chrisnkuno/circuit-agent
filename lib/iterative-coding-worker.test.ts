@@ -20,7 +20,7 @@ describe("iterative coding worker", () => {
     const writes: ArtifactWrite[] = [];
     const sandbox: InteractiveCodingSandboxProvider = {
       async createSandbox() { calls.push("create"); return { sandboxId: "box", status: "created" }; },
-      async stopSandbox() { calls.push("stop"); },
+      async stopSandbox() { calls.push("stop"); }, async suspendSandbox() {},
       async readFile() { return "workspace"; },
       async writeFile(_id, path) { calls.push(`write:${path}`); },
       async runCommand() { return { exitCode: 0, stdout: "", stderr: "" }; },
@@ -42,7 +42,7 @@ describe("iterative coding worker", () => {
   it("terminates the sandbox when the model fails", async () => {
     let stopped = false;
     const sandbox: InteractiveCodingSandboxProvider = {
-      async createSandbox() { return { sandboxId: "box", status: "created" }; }, async stopSandbox() { stopped = true; },
+      async createSandbox() { return { sandboxId: "box", status: "created" }; }, async stopSandbox() { stopped = true; }, async suspendSandbox() {},
       async readFile() { return ""; }, async writeFile() {}, async runCommand() { return { exitCode: 0, stdout: "", stderr: "" }; },
     };
     const worker = new IterativeCodingAgentWorker({
@@ -58,7 +58,7 @@ describe("iterative coding worker", () => {
   it("composes recalled skill guidance into the system prompt the model actually receives", async () => {
     const receivedPrompts: string[] = [];
     const sandbox: InteractiveCodingSandboxProvider = {
-      async createSandbox() { return { sandboxId: "box", status: "created" }; }, async stopSandbox() {},
+      async createSandbox() { return { sandboxId: "box", status: "created" }; }, async stopSandbox() {}, async suspendSandbox() {},
       async readFile() { return ""; }, async writeFile() {}, async runCommand() { return { exitCode: 0, stdout: "", stderr: "" }; },
     };
     const worker = new IterativeCodingAgentWorker({

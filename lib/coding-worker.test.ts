@@ -22,7 +22,7 @@ const baseRequest = {
   modelReservationRwf: 100,
 };
 
-function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage } = {}) {
+function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean } = {}) {
   const calls: string[] = [];
   const writes: ArtifactWrite[] = [];
   let cancellationChecks = 0;
@@ -47,12 +47,14 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
   const sandbox: CodingSandboxProvider = {
     createSandbox: async () => { calls.push("create"); return { sandboxId: "sandbox_1", status: "created" }; },
     writeFile: async () => { calls.push("write"); },
-    runCommand: async (_sandboxId: string, command: SandboxCommand) => {
-      calls.push(`run:${command.program}:${command.args[0]}`);
+    runCommand: async (sandboxId: string, command: SandboxCommand) => {
+      calls.push(`run:${command.program}:${command.args[0] ?? ""}`);
+      if (options.reuseUnreachable && sandboxId === "sandbox_gone") throw new Error("sandbox not found");
       if (command.program === "git") return { exitCode: 0, stdout: "diff --git a/src/value.ts b/src/value.ts", stderr: "" };
       return { exitCode: options.commandExitCode ?? 0, stdout: "ok", stderr: options.commandExitCode ? "failed" : "" };
     },
     stopSandbox: async () => { calls.push("stop"); },
+    suspendSandbox: async () => { calls.push("suspend"); },
   };
   const artifacts: ArtifactStore = {
     put: async (value) => { writes.push(value); return describeArtifact(value, "test-artifact"); },
@@ -68,13 +70,17 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
 }
 
 describe("coding agent worker", () => {
-  it("writes model changes, runs bounded checks, captures evidence, and always stops E2B", async () => {
+  it("writes model changes, runs bounded checks, captures evidence, and always releases the sandbox", async () => {
     const test = setup();
     const result = await test.worker.execute(baseRequest);
     expect(result).toMatchObject({ status: "completed", actualModelRwf: 6, commandsExecuted: 2 });
     expect(result.artifactReferences.map((artifact) => artifact.kind)).toEqual(["model_plan", "patch", "command_log"]);
     expect(test.calls).toContain("write");
-    expect(test.calls.at(-1)).toBe("stop");
+    // Suspended rather than destroyed, and the id handed back, so the next step of this run
+    // continues in the same workspace instead of an empty one.
+    expect(test.calls.at(-1)).toBe("suspend");
+    expect(test.calls).not.toContain("stop");
+    expect(result.sandboxId).toBe("sandbox_1");
   });
 
   it("stops after a failed check and returns honest failure evidence", async () => {
@@ -82,14 +88,29 @@ describe("coding agent worker", () => {
     const result = await test.worker.execute(baseRequest);
     expect(result).toMatchObject({ status: "failed", commandsExecuted: 1 });
     expect(test.calls.filter((call) => call.startsWith("run:bun"))).toHaveLength(1);
-    expect(test.calls.at(-1)).toBe("stop");
+    expect(test.calls.at(-1)).toBe("suspend");
   });
 
-  it("honors cancellation checkpoints and still cleans up the sandbox", async () => {
+  it("honors cancellation checkpoints and still releases the sandbox", async () => {
     const test = setup({ cancelledAfterChecks: 3 });
     const result = await test.worker.execute(baseRequest);
     expect(result.status).toBe("cancelled");
-    expect(test.calls.at(-1)).toBe("stop");
+    expect(test.calls.at(-1)).toBe("suspend");
+  });
+
+  it("continues in the sandbox the previous step left, instead of creating another", async () => {
+    const test = setup();
+    const result = await test.worker.execute({ ...baseRequest, reuseSandboxId: "sandbox_prev" });
+    expect(test.calls).not.toContain("create");
+    expect(result.sandboxId).toBe("sandbox_prev");
+  });
+
+  it("starts clean when the previous sandbox is gone rather than failing paid-for work", async () => {
+    const test = setup({ reuseUnreachable: true });
+    const result = await test.worker.execute({ ...baseRequest, reuseSandboxId: "sandbox_gone" });
+    expect(test.calls).toContain("create");
+    expect(result.sandboxId).toBe("sandbox_1");
+    expect(result.status).toBe("completed");
   });
 
   it("blocks execution when actual model usage exceeds its reservation", async () => {

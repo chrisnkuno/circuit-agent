@@ -58,6 +58,7 @@ type StepRunParams = {
   workerId: string;
   reservationRwf: number;
   request: CodingPlanRequest;
+  reuseSandboxId?: string;
   model: CodingModelProvider;
   sandbox: CodingSandboxProvider;
   prices: ModelPriceCatalog;
@@ -79,6 +80,7 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
   try {
     result = await worker.execute({
       ...params.request,
+      reuseSandboxId: params.reuseSandboxId,
       runId: params.runId,
       sandboxRuntimeSeconds: SANDBOX_RUNTIME_SECONDS,
       modelReservationRwf: params.reservationRwf,
@@ -154,6 +156,7 @@ export const executeClaimedStep = internalAction({
     workerId: v.string(),
     reservationRwf: v.number(),
     attempts: v.number(),
+    reuseSandboxId: v.optional(v.string()),
     taskId: v.id("tasks"),
     taskTitle: v.string(),
     runObjective: v.string(),
@@ -182,6 +185,7 @@ export const executeClaimedStep = internalAction({
       workerId: args.workerId,
       reservationRwf: args.reservationRwf,
       request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId),
+      reuseSandboxId: args.reuseSandboxId,
       attempts: args.attempts,
       model,
       sandbox,

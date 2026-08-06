@@ -8,15 +8,29 @@ type SandboxHandle = {
   files: { write(path: string, content: string): Promise<unknown>; read(path: string): Promise<string> };
 };
 
+export type OwnedSandbox = { sandboxId: string; startedAtMs: number };
+
 type E2BClient = {
   create(template: string, options: Record<string, unknown>): Promise<SandboxHandle>;
+  list(options: Record<string, unknown>): Promise<Array<{ sandboxId: string; startedAt?: Date | string; metadata?: Record<string, unknown> }>>;
   connect(sandboxId: string, options: Record<string, unknown>): Promise<SandboxHandle>;
+  pause(sandboxId: string, options: Record<string, unknown>): Promise<boolean>;
   kill(sandboxId: string, options: Record<string, unknown>): Promise<boolean>;
 };
 
 const defaultClient: E2BClient = {
   create: (template, options) => Sandbox.create(template, options),
   connect: (sandboxId, options) => Sandbox.connect(sandboxId, options),
+  pause: (sandboxId, options) => Sandbox.pause(sandboxId, options),
+  list: async (options) => {
+    const paginator = Sandbox.list(options as never);
+    const page = await paginator.nextItems();
+    return page.map((item: Record<string, any>) => ({
+      sandboxId: item.sandboxId ?? item.sandboxID,
+      startedAt: item.startedAt,
+      metadata: item.metadata,
+    }));
+  },
   kill: (sandboxId, options) => Sandbox.kill(sandboxId, options),
 };
 
@@ -77,6 +91,30 @@ export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
     validateWorkspaceFile(path, "");
     const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: 30_000 });
     return sandbox.files.read(path);
+  }
+
+  /**
+   * Pauses without a memory snapshot: only the filesystem is preserved, which is exactly what the
+   * next step needs and nothing more. Keeping memory would snapshot running processes at roughly
+   * four seconds per gigabyte, to restore a process tree the next step never inherits anyway.
+   */
+  async suspendSandbox(sandboxId: string): Promise<void> {
+    await this.client.pause(sandboxId, { apiKey: this.options.apiKey, keepMemory: false });
+  }
+
+  /**
+   * Sandboxes this system created, in any state. The `purpose` metadata written at creation is the
+   * only ownership marker — an account is shared with other projects, and reaping something this
+   * system did not create would destroy someone else's work.
+   */
+  async listOwnedSandboxes(): Promise<OwnedSandbox[]> {
+    const all = await this.client.list({ apiKey: this.options.apiKey });
+    return all
+      .filter((item) => typeof item.metadata?.purpose === "string" && Boolean(item.sandboxId))
+      .map((item) => ({
+        sandboxId: item.sandboxId,
+        startedAtMs: item.startedAt ? new Date(item.startedAt).getTime() : 0,
+      }));
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {

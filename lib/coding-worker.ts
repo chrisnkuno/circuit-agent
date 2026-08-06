@@ -3,11 +3,15 @@ import { estimateModelCost, priceActualModelUsage, type ModelCostEstimate, type 
 import { buildCodingPlannerPrompt } from "./coding-prompt";
 import { truncateEvidence, type ArtifactReference, type ArtifactStore, type ArtifactWrite } from "./artifacts";
 import { summarizeCommandFailure } from "./worker-runtime";
-import type { CodingSandboxProvider, SandboxCommandResult } from "./providers/contracts";
+import type { CodingSandboxProvider, SandboxCommandResult, SandboxSession } from "./providers/contracts";
 import type { CodingModelProvider, CodingPlanRequest, ModelUsage } from "./providers/model";
 
 export type CodingWorkerControl = {
-  heartbeat(stepId: string): Promise<void>;
+  /**
+   * `sandboxId` is reported as soon as one exists so the control plane can show which sandbox is
+   * live and, more importantly, still knows about it if this worker dies before releasing it.
+   */
+  heartbeat(stepId: string, sandboxId?: string): Promise<void>;
   isCancellationRequested(runId: string): Promise<boolean>;
 };
 
@@ -15,6 +19,12 @@ export type CodingWorkerRequest = CodingPlanRequest & {
   runId: string;
   sandboxRuntimeSeconds: number;
   modelReservationRwf: number;
+  /**
+   * The sandbox this run's previous step left behind, if any. Reusing it is what lets a step build
+   * on the workspace an earlier step created; without it every step starts from an empty directory
+   * and silently redoes the setup work of the one before it.
+   */
+  reuseSandboxId?: string;
 };
 
 export type CodingWorkerResult = {
@@ -24,6 +34,8 @@ export type CodingWorkerResult = {
   modelUsage: ModelUsage;
   actualModelRwf: number;
   commandsExecuted: number;
+  /** The sandbox left suspended for the next step, so the caller can hand it back or destroy it. */
+  sandboxId?: string;
 };
 
 export type CodingWorkerDependencies = {
@@ -107,11 +119,34 @@ export class CodingAgentWorker {
       return { status: "cancelled", summary: "Run was cancelled before sandbox creation.", artifactReferences: [planArtifact], modelUsage: modelResult.usage, actualModelRwf, commandsExecuted: 0 };
     }
 
-    const session = await this.dependencies.sandbox.createSandbox({
-      taskId: request.taskId,
-      template: "coding",
-      maxRuntimeSeconds: request.sandboxRuntimeSeconds,
-    });
+    // Resume the run's existing sandbox when there is one, and fall back to a fresh sandbox if it
+    // has gone away. A sandbox that expired, was reaped, or was killed out from under us is a
+    // reason to start clean — never a reason to fail work that has already been paid for.
+    let session: SandboxSession;
+    if (request.reuseSandboxId) {
+      try {
+        session = { sandboxId: request.reuseSandboxId, status: "running" };
+        await this.dependencies.sandbox.runCommand(session.sandboxId, {
+          program: "pwd",
+          args: [],
+          cwd: request.workspaceRoot,
+          timeoutMs: 30_000,
+        });
+      } catch {
+        session = await this.dependencies.sandbox.createSandbox({
+          taskId: request.taskId,
+          template: "coding",
+          maxRuntimeSeconds: request.sandboxRuntimeSeconds,
+        });
+      }
+    } else {
+      session = await this.dependencies.sandbox.createSandbox({
+        taskId: request.taskId,
+        template: "coding",
+        maxRuntimeSeconds: request.sandboxRuntimeSeconds,
+      });
+    }
+    await this.dependencies.control.heartbeat(request.stepId, session.sandboxId);
     const evidence: ArtifactReference[] = [planArtifact];
     const commandLog: ReturnType<typeof commandRecord>[] = [];
     let commandsExecuted = 0;
@@ -166,7 +201,10 @@ export class CodingAgentWorker {
         content: JSON.stringify(commandLog, null, 2),
       })));
     } finally {
-      await this.dependencies.sandbox.stopSandbox(session.sandboxId);
+      // Suspended, not destroyed: the next step of this run continues in this workspace. The run's
+      // terminal transition is what destroys it (convex/agentRuns.ts), with a reaper behind that
+      // for workers that never get to say anything at all.
+      await this.dependencies.sandbox.suspendSandbox(session.sandboxId);
     }
 
     return {
@@ -182,6 +220,7 @@ export class CodingAgentWorker {
       modelUsage: modelResult.usage,
       actualModelRwf,
       commandsExecuted,
+      sandboxId: session.sandboxId,
     };
   }
 }

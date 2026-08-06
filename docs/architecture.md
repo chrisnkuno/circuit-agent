@@ -81,19 +81,27 @@ one — no sandbox this system created is left behind.
 
 Three findings worth acting on:
 
-1. **A sandbox per step is the wrong shape.** E2B recommends one sandbox per *task*, paused and
-   resumed between operations, and reserves one-sandbox-per-unit for genuinely parallel tasks. This
-   system creates and kills a sandbox per step, which is why `implement` cannot see anything
-   `reproduce` created — every step starts from an empty workspace and redoes its own setup. Pausing
-   is close to free: paused sandboxes are not billed, do not count toward the concurrency limit, are
-   kept indefinitely, and resume in about a second. This is the largest available improvement to
-   what a run can actually accomplish.
-2. **A timeout pauses a sandbox; it does not kill it.** `maxRuntimeSeconds` is treated here as a
-   hard lifetime cap, but on expiry E2B preserves full state indefinitely instead of destroying it.
-   The normal path is safe because the worker kills in a `finally`, but a worker that dies
-   abnormally leaves a paused sandbox that nothing will ever reclaim. Unbilled, but unbounded in
-   number — it needs an explicit reaper keyed on the metadata this system already sets.
-3. **The SDK clones repositories directly.** `sandbox.git.clone()` with inline credentials pairs
+1. **A run owns one sandbox, suspended between its steps.** *(Fixed.)* E2B recommends one sandbox
+   per task rather than per step, and pausing is close to free — unbilled, not counted against
+   concurrency, kept indefinitely, resumed in about a second. The run now records its sandbox and
+   hands it to each successive step, so a step continues in the workspace the previous one left
+   instead of an empty directory. A step whose sandbox has gone away falls back to a fresh one
+   rather than failing work that has already been paid for. Confirmed through the lifecycle
+   webhooks: a four-step run emits one `created`, three `resumed` and four `paused`, where it
+   previously emitted four creates and four kills.
+2. **A timeout pauses a sandbox; it does not kill it.** *(Fixed.)* On expiry E2B preserves full
+   state indefinitely instead of destroying it, so reuse would leak workspaces without an explicit
+   end. Every terminal transition of a run — completed, failed, cancelled, or failed out by lease
+   recovery — now destroys its sandbox, and a ten-minute reaper collects anything abandoned by a
+   worker that died before it could say so. The reaper keeps only sandboxes carrying this system's
+   own metadata, because the account is shared with other projects.
+3. **The image ships fewer tools than the policy permits.** *(Fixed.)* Probed live: of the fourteen
+   programs the sandbox policy allows, `base` ships eight — `bun`, `pytest`, `uv`, `cargo`, `go` and
+   `rg` are absent. Offering one produces an exit 127 the planner could never have predicted, which
+   is exactly how a run died on `rg: command not found`. The planner is now offered the intersection
+   of what is permitted and what is installed; a custom template can widen the second set without
+   touching the first, which only ever narrows.
+4. **The SDK clones repositories directly.** `sandbox.git.clone()` with inline credentials pairs
    exactly with the short-lived installation tokens the GitHub App adapter already mints, which is
    far less machinery than a bespoke provisioner. `dangerouslyAuthenticate()` must be avoided: it
    writes credentials to disk inside the sandbox, where the agent itself can read them.

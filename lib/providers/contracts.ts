@@ -32,6 +32,14 @@ export type SandboxSession = {
 
 export interface SandboxProvider {
   createSandbox(request: SandboxRequest): Promise<SandboxSession>;
+  /**
+   * Releases the sandbox between steps while preserving its filesystem, so the next step of the
+   * same run continues in the workspace the previous one left behind instead of an empty one.
+   * Backends differ in what this costs: E2B pauses (unbilled, uncounted against concurrency, and
+   * resumable in about a second), while a container backend simply keeps the container.
+   */
+  suspendSandbox(sandboxId: string): Promise<void>;
+  /** Destroys the sandbox and everything in it. Nothing survives, and nothing keeps accruing. */
   stopSandbox(sandboxId: string): Promise<void>;
 }
 

@@ -67,6 +67,9 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_task", ["taskId"]),
   agentRuns: defineTable({
+    // The sandbox this run is working in, carried across its steps. Recorded as soon as a worker
+    // reports one so an abandoned sandbox is still known to the system that must destroy it.
+    sandboxId: v.optional(v.string()),
     taskId: v.id("tasks"),
     parentRunId: v.optional(v.id("agentRuns")),
     delegationDepth: v.optional(v.number()),
@@ -80,7 +83,7 @@ export default defineSchema({
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
     cancelRequestedAt: v.optional(v.number()),
-  }).index("by_task", ["taskId"]).index("by_status", ["status"]),
+  }).index("by_task", ["taskId"]).index("by_status", ["status"]).index("by_sandbox", ["sandboxId"]),
   agentSteps: defineTable({
     runId: v.id("agentRuns"),
     stepKey: v.string(),

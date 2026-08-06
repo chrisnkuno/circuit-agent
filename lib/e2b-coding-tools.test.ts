@@ -7,7 +7,7 @@ function fakeSandbox() {
   const writes: Array<{ path: string; content: string }> = [];
   const sandbox: InteractiveCodingSandboxProvider = {
     async createSandbox() { return { sandboxId: "sandbox-1", status: "created" }; },
-    async stopSandbox() {},
+    async stopSandbox() {}, async suspendSandbox() {},
     async readFile(_id, path) { return `read:${path}`; },
     async writeFile(_id, path, content) { writes.push({ path, content }); },
     async runCommand(_id, command) { commands.push(command); return { exitCode: 0, stdout: "ok", stderr: "" }; },

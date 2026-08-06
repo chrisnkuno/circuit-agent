@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALLOWED_GIT_SUBCOMMANDS, INLINE_EVAL_FLAGS, SCRIPT_RUNNER_SUBCOMMANDS, validateSandboxCommand } from "./sandbox-policy";
+import { ALLOWED_GIT_SUBCOMMANDS, ALLOWED_SANDBOX_PROGRAMS, availableSandboxPrograms, BASE_TEMPLATE_PROGRAMS, INLINE_EVAL_FLAGS, SCRIPT_RUNNER_SUBCOMMANDS, validateSandboxCommand } from "./sandbox-policy";
 import { buildCodingPlannerPrompt, CodingPlanSchema } from "./coding-prompt";
 
 describe("coding planner prompt", () => {
@@ -61,5 +61,44 @@ describe("the planner is told the rules it is judged by", () => {
     for (const flag of INLINE_EVAL_FLAGS) {
       expect(() => validateSandboxCommand({ program: "python3", args: [flag, "print(1)"], timeoutMs: 1_000 }), flag).toThrow();
     }
+  });
+});
+
+describe("the planner is only offered tools that exist", () => {
+  const prompt = buildCodingPlannerPrompt({
+    objective: "search the workspace",
+    repositoryContext: "No repository is connected yet.",
+    workspaceRoot: "/workspace/repo",
+    maxCommands: 6,
+  });
+
+  it("never advertises a program the image does not ship", () => {
+    // Probed live in an E2B `base` sandbox: these are permitted by policy but absent from the
+    // image, and offering one produces an exit 127 the planner could not have predicted.
+    for (const absent of ["rg", "bun", "cargo", "go", "uv", "pytest"]) {
+      expect(prompt.instructions).not.toContain(` ${absent},`);
+      expect(JSON.parse(prompt.input).allowedPrograms).not.toContain(absent);
+    }
+  });
+
+  it("offers exactly the intersection of what is permitted and what is installed", () => {
+    const offered = JSON.parse(prompt.input).allowedPrograms;
+    expect(offered).toEqual(availableSandboxPrograms());
+    for (const program of offered) expect(ALLOWED_SANDBOX_PROGRAMS).toContain(program);
+    for (const program of BASE_TEMPLATE_PROGRAMS) expect(offered).toContain(program);
+  });
+
+  it("lets a richer template widen the set without widening the security boundary", () => {
+    const custom = buildCodingPlannerPrompt({
+      objective: "build the crate",
+      repositoryContext: "x",
+      workspaceRoot: "/workspace/repo",
+      maxCommands: 6,
+      templatePrograms: ["cargo", "git", "python3", "definitely-not-permitted"],
+    });
+    const offered = JSON.parse(custom.input).allowedPrograms;
+    expect(offered).toContain("cargo");
+    // A template claiming a program the policy forbids must not smuggle it through.
+    expect(offered).not.toContain("definitely-not-permitted");
   });
 });

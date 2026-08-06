@@ -85,6 +85,13 @@ export class DockerSandboxProvider implements InteractiveCodingSandboxProvider {
     return result.stdout;
   }
 
+  /**
+   * A container already survives between commands, so releasing it between steps means leaving it
+   * alone. `docker pause` would only freeze processes while still holding the container's memory,
+   * which buys nothing here and risks a step resuming into a frozen process tree.
+   */
+  async suspendSandbox(): Promise<void> {}
+
   async stopSandbox(sandboxId: string): Promise<void> {
     await this.run(["rm", "-f", sandboxId], { timeoutMs: 30_000 });
   }

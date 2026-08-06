@@ -10,5 +10,9 @@ crons.interval("claim due Google Calendar schedules", { minutes: 5 }, internal.g
 // and keeps going instead of failing the whole tick.
 crons.interval("dispatch queued coding work", { minutes: 1 }, internal.dispatcher.dispatchTick, {});
 crons.interval("claim due coding-task schedules", { minutes: 1 }, internal.scheduledRuns.runDueCodingSchedules, {});
+// Sandboxes are suspended between a run's steps and destroyed when it ends, but a worker that dies
+// abnormally never gets to destroy anything — and a suspended sandbox is kept by the provider
+// forever. This asks the provider what actually exists and collects what no live run still owns.
+crons.interval("reap abandoned sandboxes", { minutes: 10 }, internal.sandboxCleanup.reapAbandonedSandboxes, {});
 
 export default crons;

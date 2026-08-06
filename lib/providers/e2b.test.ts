@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { CommandExitError } from "e2b";
 import { E2BSandboxProvider } from "./e2b";
 
+const listResult: Array<{ sandboxId: string; startedAt?: string; metadata?: Record<string, unknown> }> = [];
+
 function fakeClient() {
   const calls: Array<{ method: string; value: unknown }> = [];
   const handle = {
@@ -21,6 +23,8 @@ function fakeClient() {
       create: async (template: string, options: unknown) => { calls.push({ method: "create", value: { template, options } }); return handle; },
       connect: async (sandboxId: string, options: unknown) => { calls.push({ method: "connect", value: { sandboxId, options } }); return handle; },
       kill: async (sandboxId: string, options: unknown) => { calls.push({ method: "kill", value: { sandboxId, options } }); return true; },
+      pause: async (sandboxId: string, options: unknown) => { calls.push({ method: "pause", value: { sandboxId, options } }); return true; },
+      list: async (options: unknown) => { calls.push({ method: "list", value: { options } }); return listResult; },
     },
   };
 }
@@ -83,5 +87,42 @@ describe("E2B sandbox provider", () => {
     const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
     await provider.stopSandbox("sandbox_1");
     expect(fake.calls[0]).toMatchObject({ method: "kill", value: { sandboxId: "sandbox_1", options: { apiKey: "e2b_test" } } });
+  });
+});
+
+describe("suspending a sandbox between steps", () => {
+  it("pauses without a memory snapshot, so the next step inherits the files and nothing else", async () => {
+    const fake = fakeClient();
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+    await provider.suspendSandbox("sandbox-1");
+    const paused = fake.calls.find((call) => call.method === "pause");
+    expect(paused?.value).toMatchObject({ sandboxId: "sandbox-1" });
+    // keepMemory defaults to true and would snapshot the process tree at roughly four seconds per
+    // gigabyte — paid for on every step boundary, to restore state the next step never inherits.
+    expect((paused?.value as { options: Record<string, unknown> }).options).toMatchObject({ keepMemory: false });
+  });
+
+  it("is a different operation from destroying it", async () => {
+    const fake = fakeClient();
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+    await provider.suspendSandbox("sandbox-1");
+    expect(fake.calls.some((call) => call.method === "kill")).toBe(false);
+  });
+});
+
+describe("reaping ownership", () => {
+  it("only ever lists sandboxes this system created", async () => {
+    listResult.length = 0;
+    listResult.push(
+      { sandboxId: "ours", startedAt: "2026-08-06T20:00:00Z", metadata: { purpose: "coding", taskId: "t1" } },
+      // Accounts are shared with other projects; destroying their work would be unrecoverable.
+      { sandboxId: "someone-elses", startedAt: "2026-08-06T20:00:00Z", metadata: { product: "alive-translate" } },
+      { sandboxId: "unlabelled", startedAt: "2026-08-06T20:00:00Z" },
+    );
+    const fake = fakeClient();
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+    const owned = await provider.listOwnedSandboxes();
+    expect(owned.map((item) => item.sandboxId)).toEqual(["ours"]);
+    expect(owned[0].startedAtMs).toBe(Date.parse("2026-08-06T20:00:00Z"));
   });
 });
