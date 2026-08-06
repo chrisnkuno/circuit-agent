@@ -358,6 +358,69 @@
   text-align: center;
 }
 
+.terminal-layout-switcher {
+  display: flex;
+  gap: 6px;
+  margin-top: 20px;
+  justify-content: flex-end;
+}
+
+.terminal-layout-option {
+  background: transparent;
+  border: 1px solid var(--nova-border);
+  color: var(--nova-muted);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.terminal-layout-option:hover { border-color: var(--nova-border-strong); color: var(--nova-text); }
+.terminal-layout-option-active { background: var(--nova-cyan); color: #06131f; border-color: var(--nova-cyan); font-weight: 600; }
+
+/* Three fixed, named arrangements rather than free-form drag — "split"/"focus" place task
+   history and the schedule panel beside the console instead of stacked beneath it. "focus"
+   widens the console column by the golden ratio (1.618) instead of an arbitrary fraction. */
+.terminal-layout {
+  display: grid;
+  gap: 20px;
+  margin-top: 8px;
+}
+.terminal-layout-stacked {
+  grid-template-columns: 1fr;
+  grid-template-areas: "console" "history" "schedule";
+}
+.terminal-layout-split {
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas: "console history" "console schedule";
+  align-items: start;
+}
+.terminal-layout-focus {
+  grid-template-columns: 1.618fr 1fr;
+  grid-template-areas: "console history" "console schedule";
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .terminal-layout-split, .terminal-layout-focus {
+    grid-template-columns: 1fr;
+    grid-template-areas: "console" "history" "schedule";
+  }
+}
+
+.terminal-layout-slot-console { grid-area: console; }
+.terminal-layout-slot-history { grid-area: history; }
+.terminal-layout-slot-schedule { grid-area: schedule; }
+.terminal-layout-slot > .task-history,
+.terminal-layout-slot > .schedule-panel {
+  margin-top: 0;
+}
+/* The schedule panel's own two-card grid needs viewport-width room; in split/focus its slot
+   is narrower than the panel's normal full-width column, so keep it single-column there. */
+.terminal-layout-split .terminal-layout-slot-schedule .schedule-panel,
+.terminal-layout-focus .terminal-layout-slot-schedule .schedule-panel {
+  grid-template-columns: 1fr;
+}
+
 .schedule-panel {
   margin-top: 24px;
   display: grid;

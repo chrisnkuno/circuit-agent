@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
-import { TaskHistory } from "@/components/task-history";
 import { formatRwf } from "@/lib/task-cost";
 import type { TaskKind } from "@/lib/task-cost";
 import {
@@ -128,7 +127,9 @@ function BranchRunTracker({ runId, onSnapshot }: { runId: Id<"agentRuns">; onSna
   return null;
 }
 
-export function TerminalConsole() {
+export type TerminalConsoleHandle = { resumeTask: (taskId: Id<"tasks">) => void };
+
+export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(function TerminalConsole(_props, ref) {
   const [branches, setBranches] = useState<Branch[]>(() => [
     { id: MAIN_BRANCH_ID, label: "main", isMain: true, runId: null, track: null, busy: false, log: [] },
   ]);
@@ -154,6 +155,8 @@ export function TerminalConsole() {
   const hasConnectedRepository = (githubInstallations ?? []).some((installation) => installation.status === "connected");
   const resumeRuns = useQuery(api.agentRuns.listForTask, resumeTaskId ? { taskId: resumeTaskId } : "skip");
   const presets = hasConnectedRepository ? PRESETS_WITH_REPOSITORY : PRESETS_NO_REPOSITORY;
+
+  useImperativeHandle(ref, () => ({ resumeTask: setResumeTaskId }), []);
 
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
   const anyBusy = scriptBusy || branches.some((branch) => branch.busy);
@@ -470,7 +473,6 @@ export function TerminalConsole() {
         </form>
         <div ref={logEndRef} />
       </div>
-      <TaskHistory organizationId={organization?._id} onResumeTask={setResumeTaskId} />
     </div>
   );
-}
+});

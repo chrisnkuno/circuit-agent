@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import "../../components/terminal.css";
 import { Starfield } from "@/components/starfield";
-import { TerminalConsole } from "@/components/terminal-console";
 import { AuthPanel } from "@/components/auth-panel";
-import { SchedulePanel } from "@/components/schedule-panel";
+import { TerminalWorkspace } from "@/components/terminal-workspace";
 
 export const metadata: Metadata = {
   title: "Circuit-Nova — Agent Terminal",
@@ -29,9 +28,8 @@ export default function TerminalPage() {
           Sign in, then <code>run coding &lt;objective&gt;</code> starts a real agent run: a real Convex task and budget, a real model call, and a
           real E2B sandbox — not a script. Other task kinds still preview as a labeled simulation. Type <code>help</code> to start.
         </p>
-        <TerminalConsole />
         <p className="terminal-footnote">A real coding run spends a small real amount against your workspace's RWF cap. Everything else stays a clearly-labeled preview.</p>
-        <SchedulePanel />
+        <TerminalWorkspace />
       </div>
     </div>
   );
