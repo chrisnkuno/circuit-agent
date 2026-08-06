@@ -3,6 +3,7 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { authComponent, createAuth } from "./auth";
 import { parseTelegramUpdate, verifyTelegramSecret } from "../lib/telegram";
+import { E2B_DELIVERY_HEADER, E2B_SIGNATURE_HEADER, isSandboxTerminated, parseE2BLifecycleEvent, verifyE2BSignature } from "../lib/e2b-webhook";
 
 const http = httpRouter();
 
@@ -90,6 +91,39 @@ http.route({
     }
     // Telegram retries on anything but 200, including for update types we deliberately ignore.
     return new Response(null, { status: 200 });
+  }),
+});
+
+http.route({
+  path: "/e2b/webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const secret = process.env.E2B_WEBHOOK_SECRET;
+    if (!secret) return new Response("E2B webhook is not configured", { status: 401 });
+    // The raw body, exactly as sent: the signature covers those bytes, so re-serializing parsed
+    // JSON would verify something the sender never signed.
+    const payload = await request.text();
+    if (!(await verifyE2BSignature(secret, payload, request.headers.get(E2B_SIGNATURE_HEADER)))) {
+      return new Response("Webhook verification failed", { status: 401 });
+    }
+    const event = parseE2BLifecycleEvent(payload);
+    // A delivery this system does not model is accepted, not retried: E2B retries any non-2xx
+    // three times, and re-sending an event nothing will ever act on just costs both sides.
+    if (!event) return new Response(null, { status: 204 });
+    const deliveryId = request.headers.get(E2B_DELIVERY_HEADER) ?? event.id;
+    try {
+      await ctx.runMutation((internal as any).e2bWebhook.applySandboxLifecycleEvent, {
+        deliveryId,
+        eventId: event.id,
+        eventType: event.type,
+        sandboxId: event.sandboxId,
+        terminated: isSandboxTerminated(event),
+      });
+      return new Response(null, { status: 204 });
+    } catch {
+      // A 5xx asks E2B to retry, which is what we want for a transient write failure.
+      return new Response("Webhook processing failed", { status: 500 });
+    }
   }),
 });
 

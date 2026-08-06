@@ -32,7 +32,15 @@ export const ensureOrganization = mutation({
       .withIndex("by_subject", (q) => q.eq("identitySubject", identity.subject))
       .filter((q) => q.eq(q.field("status"), "active"))
       .first();
-    if (existing) return existing.organizationId;
+    if (existing) {
+      // Self-healing contact details: members created before notifications existed have no
+      // address, and a member who changes their sign-in email should not keep receiving mail
+      // at the old one. Both converge here on the next sign-in.
+      if (identity.email && existing.notificationEmail !== identity.email) {
+        await ctx.db.patch(existing._id, { notificationEmail: identity.email });
+      }
+      return existing.organizationId;
+    }
 
     const now = Date.now();
     const label = identity.name ?? identity.email ?? "Workspace";
@@ -45,7 +53,7 @@ export const ensureOrganization = mutation({
     }
 
     const organizationId = await ctx.db.insert("organizations", { name: `${label}'s workspace`, slug, createdAt: now });
-    await ctx.db.insert("memberships", { organizationId, identitySubject: identity.subject, role: "owner", status: "active", createdAt: now });
+    await ctx.db.insert("memberships", { organizationId, identitySubject: identity.subject, role: "owner", status: "active", notificationEmail: identity.email, createdAt: now });
     return organizationId;
   },
 });

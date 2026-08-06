@@ -151,6 +151,14 @@ async function cancelRun(ctx: MutationCtx, run: Doc<"agentRuns">, task: Doc<"tas
   // money against a task the person just stopped.
   await expirePendingApprovals(ctx, task._id, (approval) => approval.runId === run._id);
   await ctx.db.insert("agentRunEvents", { runId: run._id, type: "cancellation_requested", message: "Run cancelled. Active workers must stop at their next safe checkpoint.", createdAt: now });
+  await ctx.scheduler.runAfter(0, internal.emailActions.notifyRunLifecycle, {
+    organizationId: task.organizationId,
+    event: "cancelled",
+    taskTitle: task.title,
+    objective: run.objective,
+    spentRwf: Number(task.spentRwf),
+    maxRwf: Number(task.maxRwf),
+  });
   return true;
 }
 
@@ -254,6 +262,18 @@ export const claimStep = internalMutation({
     await ctx.db.patch(step._id, { status: "running", claimedBy: args.workerId, claimedAt: now, heartbeatAt: now, leaseExpiresAt: now + args.leaseMs, reservedRwf: args.estimatedRwf, attempts: step.attempts + 1 });
     await ctx.db.patch(run._id, { status: "running", startedAt: run.startedAt ?? now });
     await ctx.db.insert("agentRunEvents", { runId: run._id, type: "step_claimed", message: `${step.title} claimed by a worker.`, createdAt: now });
+    // Only the transition into running is a "started" event. Every later step claim is progress
+    // within a run that already announced itself, and mailing each one would be noise.
+    if (!run.startedAt) {
+      await ctx.scheduler.runAfter(0, internal.emailActions.notifyRunLifecycle, {
+        organizationId: task.organizationId,
+        event: "started",
+        taskTitle: task.title,
+        objective: run.objective,
+        spentRwf: Number(task.spentRwf),
+        maxRwf: Number(task.maxRwf),
+      });
+    }
     // Scheduled from inside the claim transaction: if the claim commits, the executor is
     // guaranteed to run, and if it rolls back nothing was ever claimed. Scheduling from the
     // calling action instead would leave a window where a step is claimed and leased but has
@@ -426,6 +446,15 @@ export const recordStepOutcome = internalMutation({
         organizationId: task.organizationId,
         message: `❌ "${task.title}" failed — spent ${formatRwf(Number(task.spentRwf + args.actualRwf))} of ${formatRwf(Number(task.maxRwf))} cap. ${args.summary}`,
       });
+      await ctx.scheduler.runAfter(0, internal.emailActions.notifyRunLifecycle, {
+        organizationId: task.organizationId,
+        event: "failed",
+        taskTitle: task.title,
+        objective: run.objective,
+        spentRwf: Number(task.spentRwf + args.actualRwf),
+        maxRwf: Number(task.maxRwf),
+        detail: args.summary,
+      });
     } else {
       const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
       const effectiveStatuses = steps.map((candidate) => candidate._id === step._id ? "completed" : candidate.status);
@@ -454,6 +483,15 @@ export const recordStepOutcome = internalMutation({
           await ctx.scheduler.runAfter(0, internal.telegramActions.notifyLinkedChannels, {
             organizationId: task.organizationId,
             message: `✅ "${task.title}" completed — spent ${formatRwf(Number(task.spentRwf + args.actualRwf))} of ${formatRwf(Number(task.maxRwf))} cap.`,
+          });
+          await ctx.scheduler.runAfter(0, internal.emailActions.notifyRunLifecycle, {
+            organizationId: task.organizationId,
+            event: "completed",
+            taskTitle: task.title,
+            objective: run.objective,
+            spentRwf: Number(task.spentRwf + args.actualRwf),
+            maxRwf: Number(task.maxRwf),
+            detail: args.summary,
           });
         }
       }

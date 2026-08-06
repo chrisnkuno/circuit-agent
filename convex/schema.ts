@@ -10,6 +10,10 @@ export default defineSchema({
   memberships: defineTable({
     organizationId: v.id("organizations"),
     identitySubject: v.string(),
+    // Where lifecycle notifications go. Optional because it is only known once the member has
+    // signed in at least since this field existed; a member without one is simply not emailed
+    // rather than emailed at a guessed address.
+    notificationEmail: v.optional(v.string()),
     role: v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer")),
     status: v.union(v.literal("active"), v.literal("suspended")),
     createdAt: v.number(),
@@ -48,6 +52,14 @@ export default defineSchema({
     idempotencyKey: v.string(),
     createdAt: v.number(),
   }).index("by_task", ["taskId"]).index("by_idempotency_key", ["idempotencyKey"]),
+  // Inbound provider webhooks retry on any non-2xx (E2B: three times, ten seconds apart), so
+  // duplicate deliveries are routine. The provider's own delivery id is the idempotency key.
+  webhookDeliveries: defineTable({
+    provider: v.literal("e2b"),
+    deliveryId: v.string(),
+    eventType: v.string(),
+    receivedAt: v.number(),
+  }).index("by_provider_delivery", ["provider", "deliveryId"]),
   taskEvents: defineTable({
     taskId: v.id("tasks"),
     type: v.string(),
@@ -91,7 +103,7 @@ export default defineSchema({
     summary: v.optional(v.string()),
     artifactReferences: v.optional(v.array(v.string())),
     createdAt: v.number(),
-  }).index("by_run", ["runId"]).index("by_run_step_key", ["runId", "stepKey"]).index("by_status_lease", ["status", "leaseExpiresAt"]),
+  }).index("by_run", ["runId"]).index("by_run_step_key", ["runId", "stepKey"]).index("by_status_lease", ["status", "leaseExpiresAt"]).index("by_sandbox", ["sandboxId"]),
   agentArtifacts: defineTable({
     taskId: v.id("tasks"),
     runId: v.id("agentRuns"),
