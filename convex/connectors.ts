@@ -3,6 +3,7 @@ import { connectorRegistry, type ConnectorPermission } from "../lib/connectors";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireOrganizationPermission } from "./lib/authz";
 import { nextCronOccurrence } from "../lib/schedule";
+import { createApproval } from "./approvals";
 
 const permission = v.union(v.literal("read"), v.literal("draft"), v.literal("execute"));
 
@@ -84,7 +85,7 @@ export const proposeActionIntent = internalMutation({
       connectorId: args.connectorId, actionId: args.actionId, permission: action.permission, risk: action.risk,
       status: action.requiresApproval ? "awaiting_approval" : "proposed", idempotencyKey: args.idempotencyKey, inputSummary: args.inputSummary, createdAt: now, updatedAt: now,
     });
-    if (action.requiresApproval) await ctx.db.insert("approvals", { taskId: args.taskId, runId: args.runId, stepId: args.stepId, actionIntentId: intentId, kind: "external_action", status: "pending", requestedAt: now });
+    if (action.requiresApproval) await createApproval(ctx, { taskId: args.taskId, runId: args.runId, stepId: args.stepId, actionIntentId: intentId, kind: "external_action" });
     await ctx.db.insert("connectorEvents", { organizationId: args.organizationId, connectionId: args.connectionId, actionIntentId: intentId, type: "action_proposed", message: action.requiresApproval ? "External action is awaiting approval." : "Read action is ready for execution.", createdAt: now });
     return intentId;
   },

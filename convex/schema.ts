@@ -110,6 +110,12 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_run", ["runId"]),
   approvals: defineTable({
+    // Denormalized from the owning task so pending approvals can be read per organization.
+    // Optional only to keep rows written before this field was added readable; every new row
+    // sets it. Without it, listing one organization's approvals meant scanning every pending
+    // approval in the deployment and filtering in JS — work that grows with other tenants'
+    // load and stops working entirely past Convex's 1024-document collect ceiling.
+    organizationId: v.optional(v.id("organizations")),
     taskId: v.id("tasks"),
     runId: v.optional(v.id("agentRuns")),
     stepId: v.optional(v.id("agentSteps")),
@@ -122,7 +128,7 @@ export default defineSchema({
     requestedAt: v.number(),
     decidedAt: v.optional(v.number()),
     decidedBy: v.optional(v.string()),
-  }).index("by_task", ["taskId"]).index("by_status", ["status"]),
+  }).index("by_task", ["taskId"]).index("by_status", ["status"]).index("by_organization_status", ["organizationId", "status"]),
   usageLedger: defineTable({
     taskId: v.id("tasks"),
     runId: v.optional(v.id("agentRuns")),

@@ -5,6 +5,7 @@ import { capabilityRegistry } from "../lib/capability-registry";
 import { requireOrganizationPermission } from "./lib/authz";
 import { internal } from "./_generated/api";
 import { formatRwf } from "../lib/task-cost";
+import { createApproval } from "./approvals";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -12,6 +13,12 @@ const role = v.union(v.literal("planner"), v.literal("coding"), v.literal("revie
 const template = v.union(v.literal("coding"), v.literal("browser"), v.literal("data"));
 const taskKind = v.union(v.literal("coding"), v.literal("research"), v.literal("writing"), v.literal("operations"));
 const leadRole = { coding: "coding", research: "research", writing: "operator", operations: "operator" } as const;
+
+// Bounds for the live run subscription. A coding run has 4-6 steps and roughly a dozen events,
+// so these are generous ceilings for real runs rather than limits anyone should hit.
+const RUN_EVENT_WINDOW = 200;
+const MAX_RUN_STEPS = 64;
+const MAX_RUN_ARTIFACTS = 200;
 
 const taskRunArgs = {
   taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(),
@@ -57,14 +64,7 @@ export async function insertTaskRun(ctx: MutationCtx, task: Doc<"tasks">, args: 
   for (const step of args.steps) {
     const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
     if (step.requiresApproval) {
-      await ctx.db.insert("approvals", {
-        taskId: task._id,
-        runId,
-        stepId,
-        kind: "execute_step",
-        status: "pending",
-        requestedAt: now,
-      });
+      await createApproval(ctx, { taskId: task._id, runId, stepId, kind: "execute_step" });
     }
   }
   await ctx.db.insert("agentRunEvents", { runId, type: "run_created", message: `${kind} run created with ${capabilityIds.length} scoped capabilities. Execution awaits the required providers and approvals.`, createdAt: now });
@@ -113,14 +113,58 @@ export const getRunDetail = query({
     const task = await ctx.db.get(run.taskId);
     if (!task) throw new Error("Task not found");
     await requireOrganizationPermission(ctx, task.organizationId, "task:read");
-    const [steps, events, artifacts] = await Promise.all([
-      ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
-      ctx.db.query("agentRunEvents").withIndex("by_run", (q) => q.eq("runId", run._id)).order("asc").collect(),
-      ctx.db.query("agentArtifacts").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+    // Every new event re-runs this subscription and re-sends whatever it returns, so an
+    // unbounded .collect() here costs O(events²) bandwidth over a run and hits Convex's
+    // 1024-document ceiling on a long one. Only the most recent slice is ever needed: clients
+    // render an append-only log and de-duplicate by event id, so a bounded window shows the
+    // same thing for any realistic run and degrades honestly instead of failing on a huge one.
+    const [steps, recentEvents, artifacts] = await Promise.all([
+      ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).take(MAX_RUN_STEPS),
+      ctx.db.query("agentRunEvents").withIndex("by_run", (q) => q.eq("runId", run._id)).order("desc").take(RUN_EVENT_WINDOW),
+      ctx.db.query("agentArtifacts").withIndex("by_run", (q) => q.eq("runId", run._id)).take(MAX_RUN_ARTIFACTS),
     ]);
-    return { run, steps, events, artifacts };
+    return { run, steps, events: recentEvents.reverse(), artifacts, eventsTruncated: recentEvents.length === RUN_EVENT_WINDOW };
   },
 });
+
+/**
+ * Soft-cancels one run: it stops at the next worker checkpoint rather than being killed
+ * mid-command, so a sandbox is never abandoned with work half-applied and the run's evidence
+ * stays truthful about how far it actually got.
+ */
+async function cancelRun(ctx: MutationCtx, run: Doc<"agentRuns">, task: Doc<"tasks">): Promise<boolean> {
+  if (["completed", "failed", "cancelled"].includes(run.status)) return false;
+  const now = Date.now();
+  await ctx.db.patch(run._id, { status: "cancelled", cancelRequestedAt: now, completedAt: now });
+  const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
+  for (const step of steps) {
+    if (["pending", "ready", "awaiting_approval"].includes(step.status)) await ctx.db.patch(step._id, { status: "cancelled" });
+  }
+  const taskRuns = await ctx.db.query("agentRuns").withIndex("by_task", (q) => q.eq("taskId", task._id)).collect();
+  const allRunsTerminal = taskRuns.every((candidate) => candidate._id === run._id || ["completed", "failed", "blocked", "cancelled"].includes(candidate.status));
+  if (allRunsTerminal) {
+    const hasFailedRun = taskRuns.some((candidate) => candidate._id !== run._id && (candidate.status === "failed" || candidate.status === "blocked"));
+    await ctx.db.patch(task._id, { status: hasFailedRun ? "blocked" : "cancelled" });
+  }
+  // Withdraw anything still asking to be approved for this run. A pending gate outliving its
+  // run is not merely stale UI: deciding it would re-queue a cancelled run and authorize real
+  // money against a task the person just stopped.
+  await expirePendingApprovals(ctx, task._id, (approval) => approval.runId === run._id);
+  await ctx.db.insert("agentRunEvents", { runId: run._id, type: "cancellation_requested", message: "Run cancelled. Active workers must stop at their next safe checkpoint.", createdAt: now });
+  return true;
+}
+
+/** Marks matching pending approvals for a task as expired, so nothing can be decided after the fact. */
+async function expirePendingApprovals(ctx: MutationCtx, taskId: Id<"tasks">, matches: (approval: Doc<"approvals">) => boolean): Promise<number> {
+  const approvals = await ctx.db.query("approvals").withIndex("by_task", (q) => q.eq("taskId", taskId)).collect();
+  let expired = 0;
+  for (const approval of approvals) {
+    if (approval.status !== "pending" || !matches(approval)) continue;
+    await ctx.db.patch(approval._id, { status: "expired", decidedAt: Date.now() });
+    expired += 1;
+  }
+  return expired;
+}
 
 export const requestCancellation = mutation({
   args: { runId: v.id("agentRuns") },
@@ -130,20 +174,36 @@ export const requestCancellation = mutation({
     const task = await ctx.db.get(run.taskId);
     if (!task) throw new Error("Task not found");
     await requireOrganizationPermission(ctx, task.organizationId, "task:cancel");
-    if (["completed", "failed", "cancelled"].includes(run.status)) return;
-    const now = Date.now();
-    await ctx.db.patch(runId, { status: "cancelled", cancelRequestedAt: now, completedAt: now });
-    const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
-    for (const step of steps) {
-      if (["pending", "ready", "awaiting_approval"].includes(step.status)) await ctx.db.patch(step._id, { status: "cancelled" });
+    await cancelRun(ctx, run, task);
+  },
+});
+
+/**
+ * Stops a task from the task list, where a person thinks in tasks and has no run id to hand.
+ * A task can own more than one run, so every non-terminal one is cancelled — stopping "the
+ * task" while a second run of it kept spending would be a lie.
+ */
+export const requestTaskCancellation = mutation({
+  args: { taskId: v.id("tasks") },
+  returns: v.object({ cancelledRuns: v.number() }),
+  handler: async (ctx, { taskId }) => {
+    const task = await ctx.db.get(taskId);
+    if (!task) throw new Error("Task not found");
+    await requireOrganizationPermission(ctx, task.organizationId, "task:cancel");
+    const runs = await ctx.db.query("agentRuns").withIndex("by_task", (q) => q.eq("taskId", taskId)).collect();
+    let cancelledRuns = 0;
+    for (const run of runs) {
+      if (await cancelRun(ctx, run, task)) cancelledRuns += 1;
     }
-    const taskRuns = await ctx.db.query("agentRuns").withIndex("by_task", (q) => q.eq("taskId", task._id)).collect();
-    const allRunsTerminal = taskRuns.every((candidate) => candidate._id === runId || ["completed", "failed", "blocked", "cancelled"].includes(candidate.status));
-    if (allRunsTerminal) {
-      const hasFailedRun = taskRuns.some((candidate) => candidate._id !== runId && (candidate.status === "failed" || candidate.status === "blocked"));
-      await ctx.db.patch(task._id, { status: hasFailedRun ? "blocked" : "cancelled" });
+    // A task with no run at all (quoted, never accepted) still has to become stoppable.
+    if (cancelledRuns === 0 && !["completed", "cancelled"].includes(task.status)) {
+      await ctx.db.patch(taskId, { status: "cancelled" });
+      await ctx.db.insert("taskEvents", { taskId, type: "task_cancelled", message: "The task was stopped before any run started.", createdAt: Date.now() });
     }
-    await ctx.db.insert("agentRunEvents", { runId, type: "cancellation_requested", message: "Run cancelled. Active workers must stop at their next safe checkpoint.", createdAt: now });
+    // Anything still pending against this task — including gates that never named a run — goes
+    // with it, so a stopped task leaves nothing decidable behind.
+    await expirePendingApprovals(ctx, taskId, () => true);
+    return { cancelledRuns };
   },
 });
 
@@ -184,7 +244,7 @@ export const claimStep = internalMutation({
     }
     if (task.spentRwf + task.reservedRwf + args.estimatedRwf > task.maxRwf) {
       const requestedTotalCapRwf = task.spentRwf + task.reservedRwf + args.estimatedRwf;
-      await ctx.db.insert("approvals", { taskId: task._id, runId: run._id, stepId: step._id, kind: "budget_overage", status: "pending", requestedRwf: requestedTotalCapRwf, requestedAt: Date.now() });
+      await createApproval(ctx, { taskId: task._id, runId: run._id, stepId: step._id, kind: "budget_overage", requestedRwf: requestedTotalCapRwf });
       await ctx.db.patch(run._id, { status: "awaiting_approval" });
       return { status: "budget_approval_required" as const };
     }
@@ -194,7 +254,62 @@ export const claimStep = internalMutation({
     await ctx.db.patch(step._id, { status: "running", claimedBy: args.workerId, claimedAt: now, heartbeatAt: now, leaseExpiresAt: now + args.leaseMs, reservedRwf: args.estimatedRwf, attempts: step.attempts + 1 });
     await ctx.db.patch(run._id, { status: "running", startedAt: run.startedAt ?? now });
     await ctx.db.insert("agentRunEvents", { runId: run._id, type: "step_claimed", message: `${step.title} claimed by a worker.`, createdAt: now });
+    // Scheduled from inside the claim transaction: if the claim commits, the executor is
+    // guaranteed to run, and if it rolls back nothing was ever claimed. Scheduling from the
+    // calling action instead would leave a window where a step is claimed and leased but has
+    // no executor, recoverable only by waiting out its lease.
+    if (step.role === "coding") {
+      await ctx.scheduler.runAfter(0, internal.dispatcher.executeClaimedStep, {
+        runId: run._id,
+        stepId: step._id,
+        workerId: args.workerId,
+        reservationRwf: Number(args.estimatedRwf),
+        attempts: step.attempts + 1,
+        taskId: task._id,
+        taskTitle: task.title,
+        runObjective: run.objective,
+      });
+    }
     return { status: "claimed" as const };
+  },
+});
+
+/**
+ * Hands a claimed step back to the queue after an infrastructure failure, instead of failing the
+ * whole run. A provider timeout, a socket reset, or a bot-challenge page says nothing about
+ * whether the work is achievable — only that this attempt could not reach the provider — so the
+ * step releases its reservation and waits out a backoff rather than burning the run.
+ *
+ * The step keeps the attempt it already consumed at claim time, so this shares one attempt budget
+ * with lease recovery and cannot loop forever.
+ */
+export const releaseStepForRetry = internalMutation({
+  args: { runId: v.id("agentRuns"), stepId: v.id("agentSteps"), workerId: v.string(), reason: v.string(), retryAfterMs: v.number() },
+  returns: v.object({ released: v.boolean() }),
+  handler: async (ctx, args) => {
+    if (!Number.isInteger(args.retryAfterMs) || args.retryAfterMs < 0 || args.retryAfterMs > 10 * 60_000) {
+      throw new Error("retryAfterMs must be an integer between 0 and 10 minutes");
+    }
+    const [run, step] = await Promise.all([ctx.db.get(args.runId), ctx.db.get(args.stepId)]);
+    if (!run || !step || step.runId !== run._id) throw new Error("Run step not found");
+    // Lost the lease (recovery already reclaimed it, or the run was cancelled): whoever owns it
+    // now is responsible for its outcome, so this attempt must not write over them.
+    if (step.status !== "running" || step.claimedBy !== args.workerId) return { released: false };
+    const task = await ctx.db.get(run.taskId);
+    if (!task) throw new Error("Task not found");
+    const now = Date.now();
+    const reservationRwf = step.reservedRwf ?? 0n;
+    if (reservationRwf > task.reservedRwf) throw new Error("Step reservation exceeds task reserved balance");
+    await ctx.db.patch(task._id, { reservedRwf: task.reservedRwf - reservationRwf });
+    await ctx.db.patch(step._id, { status: "pending", claimedBy: undefined, claimedAt: undefined, leaseExpiresAt: undefined, heartbeatAt: undefined, sandboxId: undefined, reservedRwf: undefined });
+    if (run.status !== "cancelled") {
+      const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
+      const othersRunning = steps.some((candidate) => candidate._id !== step._id && candidate.status === "running");
+      await ctx.db.patch(run._id, { status: othersRunning ? "running" : "queued" });
+    }
+    await ctx.db.insert("agentRunEvents", { runId: run._id, type: "step_retry_scheduled", message: `${step.title} will be retried after a transient failure: ${args.reason}`, createdAt: now });
+    if (run.status !== "cancelled") await ctx.scheduler.runAfter(args.retryAfterMs, internal.dispatcher.dispatchTick, {});
+    return { released: true };
   },
 });
 
@@ -323,6 +438,13 @@ export const recordStepOutcome = internalMutation({
             ? "awaiting_approval"
             : "queued";
       await ctx.db.patch(run._id, runIsComplete ? { status: nextRunStatus, completedAt: now } : { status: nextRunStatus });
+      // The step that just finished is usually what unblocks the next one, so release it now
+      // instead of leaving it to the one-minute cron. Waiting for the cron added up to a minute
+      // of dead time between every pair of steps — the dominant cost of a short run, which spent
+      // roughly three minutes of wall-clock on well under one minute of actual work.
+      if (!runIsComplete && (nextRunStatus === "queued" || nextRunStatus === "running")) {
+        await ctx.scheduler.runAfter(0, internal.dispatcher.dispatchTick, {});
+      }
       if (runIsComplete) {
         const taskRuns = await ctx.db.query("agentRuns").withIndex("by_task", (q) => q.eq("taskId", task._id)).collect();
         const allRunsComplete = taskRuns.every((candidate) => candidate._id === run._id || candidate.status === "completed");

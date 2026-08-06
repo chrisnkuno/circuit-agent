@@ -4,7 +4,32 @@ import { requireOrganizationPermission } from "./lib/authz";
 import { formatRwf } from "../lib/task-cost";
 import { internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+/** More than this waiting at once is a queue to triage elsewhere, not a terminal dock to render. */
+const MAX_PENDING_APPROVALS = 50;
+
+type NewApproval = {
+  taskId: Id<"tasks">;
+  kind: Doc<"approvals">["kind"];
+  runId?: Id<"agentRuns">;
+  stepId?: Id<"agentSteps">;
+  actionIntentId?: Id<"connectorActionIntents">;
+  requestedRwf?: bigint;
+};
+
+/**
+ * The only way to raise an approval. Every approval must carry the organization that owns it or
+ * it is invisible to the tenant-scoped index that lists it — an approval nobody can see is a run
+ * stopped forever. Deriving that from the task here means a new approval kind cannot forget it;
+ * the first version of this change did exactly that at one of five call sites, and the gate went
+ * silently undecidable.
+ */
+export async function createApproval(ctx: MutationCtx, approval: NewApproval): Promise<Id<"approvals">> {
+  const task = await ctx.db.get(approval.taskId);
+  if (!task) throw new Error("Task not found");
+  return ctx.db.insert("approvals", { ...approval, organizationId: task.organizationId, status: "pending", requestedAt: Date.now() });
+}
 
 /**
  * Pending approvals for one organization, each carried with the context a person needs to
@@ -15,10 +40,14 @@ export const listPending = query({
   args: { organizationId: v.id("organizations") },
   handler: async (ctx, { organizationId }) => {
     await requireOrganizationPermission(ctx, organizationId, "approval:decide");
-    const pending = await ctx.db.query("approvals").withIndex("by_status", (q) => q.eq("status", "pending")).collect();
+    const pending = await ctx.db
+      .query("approvals")
+      .withIndex("by_organization_status", (q) => q.eq("organizationId", organizationId).eq("status", "pending"))
+      .take(MAX_PENDING_APPROVALS);
     const decorated = [];
     for (const approval of pending) {
       const task = await ctx.db.get(approval.taskId);
+      // The index is denormalized, so the owning task stays the authority on tenancy.
       if (task?.organizationId !== organizationId) continue;
       const [run, step, quote] = await Promise.all([
         approval.runId ? ctx.db.get(approval.runId) : null,
@@ -40,6 +69,31 @@ export const listPending = query({
 });
 
 /**
+ * One-shot backfill for approvals written before `organizationId` existed on the row. The
+ * by_organization_status index cannot see them, so without this they would be invisible to the
+ * organization that owns them. Idempotent and bounded: run it until it reports 0 remaining.
+ */
+export const backfillApprovalOrganizations = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  returns: v.object({ patched: v.number(), remaining: v.number() }),
+  handler: async (ctx, { limit }) => {
+    const batch = Math.min(Math.max(limit ?? 200, 1), 500);
+    const candidates = await ctx.db
+      .query("approvals")
+      .withIndex("by_organization_status", (q) => q.eq("organizationId", undefined))
+      .take(batch + 1);
+    let patched = 0;
+    for (const approval of candidates.slice(0, batch)) {
+      const task = await ctx.db.get(approval.taskId);
+      if (!task) continue;
+      await ctx.db.patch(approval._id, { organizationId: task.organizationId });
+      patched += 1;
+    }
+    return { patched, remaining: candidates.length > batch ? 1 : 0 };
+  },
+});
+
+/**
  * Records the cost gate for a freshly quoted run. Internal because the only legitimate caller is
  * the run-creation path that just wrote the task and its quote (convex/codingRunPlan.ts) — a
  * client cannot invent an approval for work that was never priced.
@@ -54,7 +108,7 @@ export const requestTaskStartApproval = internalMutation({
     // duplicates the quote the person is already looking at.
     await ctx.db.patch(runId, { status: "awaiting_approval" });
     await ctx.db.insert("agentRunEvents", { runId, type: "quote_pending", message: `Quoted at up to ${formatRwf(Number(requestedRwf))}. Nothing runs until the quote is accepted.`, createdAt: now });
-    return ctx.db.insert("approvals", { taskId, runId, kind: "task_start", status: "pending", requestedRwf, requestedAt: now });
+    return createApproval(ctx, { taskId, runId, kind: "task_start", requestedRwf });
   },
 });
 
@@ -106,6 +160,10 @@ export const decide = mutation({
     if (!approval || approval.status !== "pending") throw new Error("Pending approval not found");
     const task = await ctx.db.get(approval.taskId);
     if (!task) throw new Error("Task not found");
+    // Cancellation withdraws pending approvals, but a client that was already showing one can
+    // still submit it. Approving here would authorize money against a task nobody expects to
+    // run, so a terminal task refuses the decision outright rather than trusting the caller's view.
+    if (["completed", "cancelled"].includes(task.status)) throw new Error("This task is no longer active");
     const { identity } = await requireOrganizationPermission(ctx, task.organizationId, "approval:decide");
     const now = Date.now();
     await ctx.db.patch(approvalId, { status: decision, decidedAt: now, decidedBy: identity.subject });

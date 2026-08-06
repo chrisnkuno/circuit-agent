@@ -29,7 +29,9 @@ test("signs up, bootstraps a workspace, and reserves a real task cap in Convex",
   await page.getByRole("button", { name: "Create account" }).click();
 
   await expect(page.getByText(email)).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText(/'s workspace/)).toBeVisible({ timeout: 15_000 });
+  // The workspace name is no longer printed beside the identity — it became a readiness dot
+  // (see components/auth-panel.tsx), so readiness is what this waits on.
+  await expect(page.locator(".auth-workspace-dot.auth-workspace-ready")).toBeVisible({ timeout: 15_000 });
 
   await page.getByRole("button", { name: /Reserve task cap/i }).click();
   await expect(page.getByText(/persisted in Convex/i)).toBeVisible({ timeout: 15_000 });
@@ -151,4 +153,38 @@ test("quotes a real coding run and executes nothing until the price is accepted"
   await expect(body).not.toContainText("claimed by a worker");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
+});
+
+/**
+ * Stopping a task from the task list. Uses a quoted-but-unaccepted task, which is stoppable and
+ * costs nothing to create, so this covers the control without spending on a run.
+ */
+test("stops a task from the task list", async ({ page }) => {
+  test.setTimeout(120_000);
+  const email = `stop-${Date.now()}@circuitnova.test`;
+  await page.goto("/terminal");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByPlaceholder("Name").fill("Stop Runner");
+  await page.getByPlaceholder("Email").fill(email);
+  await page.getByPlaceholder("Password").fill("CorrectHorseBattery9");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByText("CHANNELS")).toBeVisible({ timeout: 30_000 });
+
+  const input = page.getByLabel("Terminal command input");
+  await input.fill("run coding create a file named stoppable.txt containing the word stop");
+  await input.press("Enter");
+
+  const card = page.locator(".task-card").first();
+  await expect(card).toContainText("awaiting approval", { timeout: 30_000 });
+
+  await card.getByRole("button", { name: "Stop" }).click();
+
+  // The stopped task moves out of "Active", so the list must follow it rather than let the
+  // card a person just acted on silently disappear.
+  const stopped = page.locator(".task-card").first();
+  await expect(stopped).toContainText("cancelled", { timeout: 30_000 });
+  // A stopped task is terminal, so it must no longer offer to be stopped again.
+  await expect(stopped.getByRole("button", { name: "Stop" })).toHaveCount(0);
+  // ...and its pending cost gate must be withdrawn rather than left decidable.
+  await expect(page.locator(".terminal-approval")).toHaveCount(0, { timeout: 30_000 });
 });

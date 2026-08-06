@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { hasPermission, type Permission } from "../lib/authz";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { nextCronOccurrence } from "../lib/schedule";
+import { createApproval } from "./approvals";
 
 const envelopeArgs = {
   algorithm: v.literal("aes-256-gcm"), keyVersion: v.number(), iv: v.string(), ciphertext: v.string(), authTag: v.string(),
@@ -106,7 +107,7 @@ export const proposeEventIntent = internalMutation({
     const now = Date.now();
     const payloadId = await ctx.db.insert("connectorVaultEntries", { organizationId: args.organizationId, kind: "action_payload", ...args.payload, createdAt: now, updatedAt: now });
     const intentId = await ctx.db.insert("connectorActionIntents", { organizationId: args.organizationId, taskId: args.taskId, connectionId: connection._id, connectorId: "google-calendar", actionId: "events.create", permission: "execute", risk: "write", status: "awaiting_approval", idempotencyKey: scopedKey, inputSummary: args.inputSummary, payloadReference: `vault://convex/${payloadId}`, createdAt: now, updatedAt: now });
-    await ctx.db.insert("approvals", { taskId: task._id, actionIntentId: intentId, kind: "external_action", status: "pending", requestedAt: now });
+    await createApproval(ctx, { taskId: task._id, actionIntentId: intentId, kind: "external_action" });
     await ctx.db.insert("connectorEvents", { organizationId: args.organizationId, connectionId: connection._id, actionIntentId: intentId, type: "calendar_event_proposed", message: "Calendar event proposal is awaiting explicit approval.", createdAt: now });
     return intentId;
   },

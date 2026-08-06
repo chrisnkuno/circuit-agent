@@ -52,6 +52,18 @@ Each running step owns its RWF reservation and a time-bounded worker lease. Comp
 
 `planDispatch` combines validated run graphs, fair global scheduling, provider readiness, approval gates, and per-run budgets into an explicit decision before any worker is called. Convex exposes an internal-only dispatch snapshot and runs lease recovery every minute once the deployment is activated.
 
+Step identity is run-scoped (`runId:stepKey`) wherever the scheduler sees it. Persisted steps store only a run-local `stepKey`, and every coding run reuses the same four keys, so handing those raw keys to a scheduler that reasons across all active runs makes each run look ambiguous to the others.
+
+## Dispatch and execution
+
+Dispatch is a control loop, not a worker. A tick decides and claims; it never executes. Claiming a step schedules its executor inside the same transaction, so a claim and its execution cannot come apart — if the claim commits, the executor is guaranteed to run, and if it rolls back nothing was claimed.
+
+Each step therefore executes in its own action. That is what makes concurrency real (scheduled actions run in parallel, rather than queueing behind each other inside one tick), bounds the blast radius of a slow provider to the step that called it, and keeps any single action far from Convex's ten-minute ceiling.
+
+The loop is driven by events rather than polled. A completed step, a granted approval, and an expired backoff each wake the dispatcher directly; the one-minute cron remains only as a floor for anything those signals miss.
+
+Failure is classified before it is recorded. A worker that reaches a verdict — a failing check, a refused command — has answered the question, and that answer stands. A worker that never reached the provider has not, so a transient failure returns the step to the queue under a shared attempt budget with lease recovery. Provider spending capacity is treated as its own case: because the model provider reserves each request's maximum cost, concurrent steps hold that ceiling simultaneously, and a step refused for funds a sibling is merely holding waits on a long backoff instead of failing the run.
+
 `CodingAgentWorker` is the credential-independent execution engine behind a future Convex Node action. It asks the OpenAI Responses API adapter for a schema-validated plan, writes only workspace-scoped files, executes argv commands through a defense-in-depth policy, heartbeats between operations, checks cancellation, captures content-addressed evidence, and stops E2B in a `finally` block.
 
 The model prompt is versioned in code with typed inputs and representative tests, following current OpenAI guidance for [code-managed production prompts](https://developers.openai.com/api/docs/guides/text#version-prompts-in-code). Coding plans use [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs), and the configured model remains explicit rather than silently following an alias.

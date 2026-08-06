@@ -848,6 +848,83 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Live worker state, shown only while a task actually has a step in flight. The dot pulses
+   only when a heartbeat is genuinely recent — a stalled lease must not look healthy. */
+.task-card-live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: rgba(126, 255, 196, 0.06);
+  border: 1px solid rgba(126, 255, 196, 0.2);
+  min-width: 0;
+}
+.task-card-live-starting { background: rgba(111, 227, 255, 0.06); border-color: rgba(111, 227, 255, 0.22); }
+.task-card-live-stalled { background: rgba(255, 207, 107, 0.07); border-color: rgba(255, 207, 107, 0.3); }
+
+.task-card-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--nova-mint);
+  animation: task-live-pulse 1.8s ease-in-out infinite;
+}
+.task-card-live-starting .task-card-live-dot { background: var(--nova-cyan); }
+.task-card-live-stalled .task-card-live-dot { background: var(--nova-warn); animation: none; }
+
+@keyframes task-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.task-card-live-step {
+  flex: 1;
+  min-width: 0;
+  color: var(--nova-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-live-step small { color: var(--nova-faint); font-variant-numeric: tabular-nums; }
+
+.task-card-live-sandbox {
+  color: var(--nova-muted);
+  font-size: 10.5px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-card-actions { display: flex; gap: 6px; }
+.task-card-actions .task-card-resume { flex: 1; }
+
+.task-card-stop {
+  background: transparent;
+  border: 1px solid var(--nova-border);
+  color: var(--nova-muted);
+  border-radius: 7px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.task-card-stop:hover:not(:disabled) {
+  border-color: var(--nova-error);
+  color: var(--nova-error);
+  background: rgba(255, 143, 146, 0.08);
+}
+.task-card-stop:disabled { opacity: 0.5; cursor: default; }
+
+.task-history-error {
+  font-size: 11px;
+  color: var(--nova-error);
+  margin: 0 0 4px;
+}
+
 .task-card-resume {
   align-self: stretch;
   background: transparent;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recoverExpiredLease, retryDelayMs, summarizeWorkerError, validateStepOutcome } from "./worker-runtime";
+import { classifyWorkerFailure, recoverExpiredLease, retryDelayForFailure, retryDelayMs, summarizeWorkerError, validateStepOutcome } from "./worker-runtime";
 
 describe("worker lease recovery", () => {
   it("releases the exact reservation before retrying expired work", () => {
@@ -44,5 +44,63 @@ describe("summarizeWorkerError", () => {
 
   it("falls back to a generic message for a non-Error throw", () => {
     expect(summarizeWorkerError("boom")).toBe("Worker execution failed");
+  });
+});
+
+describe("classifyWorkerFailure", () => {
+  it("retries failures that only describe not reaching the provider", () => {
+    const transient = [
+      "Request was aborted.",
+      "The operation timed out",
+      "socket hang up",
+      "fetch failed: ECONNRESET",
+      "Provider returned 503 Service Unavailable",
+      "Rate limit exceeded, retry later",
+      "Model is temporarily overloaded",
+      "Provider returned an HTML error page instead of a JSON response (likely a gateway or bot-protection block).",
+      "Sandbox create failed",
+    ];
+    for (const message of transient) {
+      expect(classifyWorkerFailure(new Error(message)), message).toBe("transient");
+    }
+  });
+
+  it("never retries a verdict the work already reached", () => {
+    // Each of these fails identically on every attempt, so a retry only spends money again.
+    const permanent = [
+      "Command contains an argument blocked by the sandbox policy",
+      "Git command is not read-only",
+      "Model response did not contain a coding plan matching the required schema after one retry",
+      "model refused: unsafe request",
+      "Usage exceeds approved task cap",
+      "Model response ended with finish reason length",
+    ];
+    for (const message of permanent) {
+      expect(classifyWorkerFailure(new Error(message)), message).toBe("permanent");
+    }
+  });
+
+  it("treats an unrecognized failure as permanent so a new failure mode cannot triple its own cost", () => {
+    expect(classifyWorkerFailure(new Error("something entirely new"))).toBe("permanent");
+    expect(classifyWorkerFailure(undefined)).toBe("permanent");
+  });
+});
+
+describe("provider spending capacity", () => {
+  // Observed live once steps began running in parallel: the provider reserves each request's
+  // maximum cost, so concurrent steps hold the balance and refuse a sibling that would fit.
+  const refusal = new Error("402 Insufficient funds for the maximum request cost (need 17.06 RWF, available 1.18 RWF, balance 12.15 RWF, held 10.97)");
+
+  it("waits for capacity a sibling step is holding rather than failing the run", () => {
+    expect(classifyWorkerFailure(refusal)).toBe("transient");
+  });
+
+  it("waits far longer for capacity than for a network blip, since an empty account will not recover in a second", () => {
+    expect(retryDelayForFailure(refusal, 1)).toBeGreaterThanOrEqual(30_000);
+    expect(retryDelayForFailure(new Error("socket hang up"), 1)).toBeLessThanOrEqual(1_000);
+  });
+
+  it("still bounds the wait so a stuck step cannot sit forever", () => {
+    expect(retryDelayForFailure(refusal, 8)).toBeLessThanOrEqual(120_000);
   });
 });

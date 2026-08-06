@@ -73,10 +73,42 @@ export const createQuotedTaskInternal = internalMutation({
   handler: async (ctx, args) => insertQuotedTask(ctx, args),
 });
 
+/**
+ * Recent tasks, each carrying the live execution state of its running step when it has one:
+ * which step is in flight, the real E2B sandbox the worker reported on its last heartbeat, and
+ * when that heartbeat was. Without this the task list can only repeat a stored status, which
+ * says "running" just as confidently for a healthy worker as for one whose lease is about to
+ * lapse.
+ *
+ * The per-task lookups are deliberately restricted to tasks whose status is actually "running"
+ * — normally none or one — so a list that is mostly history stays a single indexed read.
+ */
 export const listRecent = query({
   args: { organizationId: v.id("organizations") },
   handler: async (ctx, { organizationId }) => {
     await requireOrganizationPermission(ctx, organizationId, "task:read");
-    return ctx.db.query("tasks").withIndex("by_organization", (q) => q.eq("organizationId", organizationId)).order("desc").take(20);
+    const tasks = await ctx.db.query("tasks").withIndex("by_organization", (q) => q.eq("organizationId", organizationId)).order("desc").take(20);
+    return Promise.all(tasks.map(async (task) => {
+      if (task.status !== "running") return { ...task, execution: null };
+      const runs = await ctx.db.query("agentRuns").withIndex("by_task", (q) => q.eq("taskId", task._id)).collect();
+      const activeRun = runs.find((run) => run.status === "running" || run.status === "queued");
+      if (!activeRun) return { ...task, execution: null };
+      const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", activeRun._id)).take(64);
+      const runningStep = steps.find((step) => step.status === "running");
+      return {
+        ...task,
+        execution: {
+          runId: activeRun._id,
+          completedSteps: steps.filter((step) => step.status === "completed").length,
+          totalSteps: steps.length,
+          stepTitle: runningStep?.title ?? null,
+          // Recorded by the worker's own heartbeat, so it reflects a sandbox that answered
+          // recently rather than one Convex merely believes should exist.
+          sandboxId: runningStep?.sandboxId ?? null,
+          heartbeatAt: runningStep?.heartbeatAt ?? null,
+          leaseExpiresAt: runningStep?.leaseExpiresAt ?? null,
+        },
+      };
+    }));
   },
 });
