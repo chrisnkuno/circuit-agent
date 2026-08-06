@@ -33,6 +33,8 @@ export async function startCodingRun(
      * — a recurring schedule they created, a linked Telegram channel.
      */
     costApproval: "required" | "pre-authorized";
+    /** Which prebuilt workspace image this run should execute in (lib/sandbox-templates.ts). */
+    workspacePresetId?: string;
   },
 ): Promise<StartCodingRunResult> {
   if (process.env.ALLOW_TERMINAL_LIVE_EXECUTION !== "true") {
@@ -80,7 +82,7 @@ export async function startCodingRun(
       capabilityIds: step.capabilityIds,
     }));
   const runId: Id<"agentRuns"> = await ctx.runMutation(useInternal ? internal.agentRuns.createTaskRunInternal : api.agentRuns.createTaskRun, {
-    taskId, kind: "coding", maxParallelism: plan.maxParallelism, objective, steps,
+    taskId, kind: "coding", maxParallelism: plan.maxParallelism, objective, steps, workspacePresetId: args.workspacePresetId,
   });
 
   const runQuote: RunQuote = {

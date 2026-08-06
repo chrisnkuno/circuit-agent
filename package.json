@@ -11,7 +11,9 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:templates": "bun run scripts/build-templates.ts",
+    "verify:templates": "bun run scripts/verify-templates.ts"
   },
   "dependencies": {
     "@convex-dev/better-auth": "^0.12.5",

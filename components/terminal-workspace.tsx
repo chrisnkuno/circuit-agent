@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { TerminalConsole, type TerminalConsoleHandle } from "@/components/terminal-console";
 import { TaskHistory } from "@/components/task-history";
 import { SchedulePanel } from "@/components/schedule-panel";
+import { SandboxPanel } from "@/components/sandbox-panel";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -67,6 +68,7 @@ export function TerminalWorkspace() {
             </div>
           </div>
           <TaskHistory organizationId={organization._id} onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)} />
+          <SandboxPanel organizationId={organization._id} />
           <SchedulePanel />
         </aside>
       )}

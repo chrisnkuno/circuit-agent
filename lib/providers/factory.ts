@@ -29,9 +29,14 @@ export type ProviderEnvironment = {
   MODEL_OUTPUT_RWF_PER_MILLION?: string;
 };
 
-export function createE2BProvider(environment: ProviderEnvironment): E2BSandboxProvider | undefined {
+/**
+ * `codingTemplateOverride` is how a run's chosen workspace preset reaches the sandbox. The
+ * environment still supplies the deployment's default, so a run that expresses no preference keeps
+ * whatever the deployment is configured for.
+ */
+export function createE2BProvider(environment: ProviderEnvironment, codingTemplateOverride?: string): E2BSandboxProvider | undefined {
   const apiKey = environment.E2B_API_KEY?.trim();
-  const codingTemplate = environment.E2B_CODING_TEMPLATE?.trim();
+  const codingTemplate = codingTemplateOverride?.trim() || environment.E2B_CODING_TEMPLATE?.trim();
   if (!apiKey || !codingTemplate) return undefined;
   return new E2BSandboxProvider({
     apiKey,

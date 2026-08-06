@@ -9,6 +9,7 @@ import { useCurrentOrganization } from "@/components/auth-panel";
 import { hasPermission } from "@/lib/authz";
 import { formatRwf } from "@/lib/task-cost";
 import { presetContextKey } from "@/lib/dynamic-presets";
+import { DEFAULT_WORKSPACE_PRESET_ID, findWorkspacePreset, WORKSPACE_PRESETS } from "@/lib/sandbox-templates";
 import type { TaskKind } from "@/lib/task-cost";
 import {
   buildAboutLines,
@@ -181,6 +182,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
 
   const [decidingApprovalId, setDecidingApprovalId] = useState<Id<"approvals"> | null>(null);
   const [controllingBranchId, setControllingBranchId] = useState<string | null>(null);
+  const [workspacePresetId, setWorkspacePresetId] = useState<string>(DEFAULT_WORKSPACE_PRESET_ID);
 
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
@@ -473,13 +475,14 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
           // when it was typed — a live browser test caught this landing in the wrong branch.
           { id: entryId(), tone: "input", text: raw },
           { id: entryId(), tone: "system", text: `pricing a real coding run — objective: "${objective}"` },
+          { id: entryId(), tone: "muted", text: `workspace: ${findWorkspacePreset(workspacePresetId).label} — ${findWorkspacePreset(workspacePresetId).description}` },
           { id: entryId(), tone: "muted", text: "compiling the run graph and quoting it before anything is charged…" },
         ],
       },
     ]);
     setActiveBranchId(branchId);
     try {
-      const result = await startLiveRun({ organizationId: organization._id, objective, idempotencyKey: crypto.randomUUID() });
+      const result = await startLiveRun({ organizationId: organization._id, objective, idempotencyKey: crypto.randomUUID(), workspacePresetId });
       updateBranch(branchId, { runId: result.runId, busy: !result.awaitingCostApproval, track: result.awaitingCostApproval ? null : { stages: initialStages("coding") } });
       if (result.awaitingCostApproval) {
         appendLineTo(branchId, { tone: "system", text: `quote  ${formatRwf(result.quote.estimateLowRwf)} to ${formatRwf(result.quote.estimateHighRwf)}   ·   hard cap ${formatRwf(result.quote.maxRwf)}   ·   ${result.quote.confidence} confidence` });
@@ -644,6 +647,23 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
             ))}
           </div>
         )}
+        <div className="terminal-workspace-row">
+          <span className="terminal-workspace-label">Workspace</span>
+          {WORKSPACE_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              title={preset.description}
+              aria-pressed={workspacePresetId === preset.id}
+              className={`terminal-workspace-option${workspacePresetId === preset.id ? " terminal-workspace-option-active" : ""}`}
+              onClick={() => setWorkspacePresetId(preset.id)}
+            >
+              {preset.label}
+            </button>
+          ))}
+          {/* The tools each image ships, so the choice is legible before a run rather than after one fails. */}
+          <span className="terminal-workspace-tools">{findWorkspacePreset(workspacePresetId).programs.join(" · ")}</span>
+        </div>
         <div className="terminal-presets">
           <span className="terminal-presets-label" title={isGeneratedPresets ? "Suggested for your workspace by a real model call" : "Starter tasks for an empty workspace"}>
             {isGeneratedPresets ? "◆" : "◇"}

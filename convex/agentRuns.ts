@@ -21,12 +21,12 @@ const MAX_RUN_STEPS = 64;
 const MAX_RUN_ARTIFACTS = 200;
 
 const taskRunArgs = {
-  taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(),
+  taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(), workspacePresetId: v.optional(v.string()),
   steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template), capabilityIds: v.optional(v.array(v.string())) })),
 };
 
 type TaskRunArgs = {
-  taskId: Id<"tasks">; kind?: "coding" | "research" | "writing" | "operations"; maxParallelism: number; objective: string;
+  taskId: Id<"tasks">; kind?: "coding" | "research" | "writing" | "operations"; maxParallelism: number; objective: string; workspacePresetId?: string;
   steps: Array<{ stepKey: string; title: string; role: "planner" | "coding" | "reviewer" | "research" | "operator"; dependsOn: string[]; requiresApproval: boolean; sandboxTemplate?: "coding" | "browser" | "data"; capabilityIds?: string[] }>;
 };
 
@@ -60,7 +60,7 @@ export async function insertTaskRun(ctx: MutationCtx, task: Doc<"tasks">, args: 
     if (requiresCapabilityApproval && !step.requiresApproval) throw new Error(`Step ${step.stepKey} must require approval for its capabilities`);
   }
   const now = Date.now();
-  const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, createdAt: now });
+  const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, workspacePresetId: args.workspacePresetId, createdAt: now });
   for (const step of args.steps) {
     const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
     if (step.requiresApproval) {
@@ -352,6 +352,7 @@ export const claimStep = internalMutation({
         reservationRwf: Number(args.estimatedRwf),
         attempts: step.attempts + 1,
         reuseSandboxId: run.sandboxId,
+        workspacePresetId: run.workspacePresetId,
         taskId: task._id,
         taskTitle: task.title,
         runObjective: run.objective,

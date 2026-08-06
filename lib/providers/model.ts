@@ -22,6 +22,8 @@ export type CodingPlanRequest = {
   timeoutMs: number;
   reasoningEffort: ModelReasoningEffort;
   safetyIdentifier: string;
+  /** Programs the chosen workspace image ships, so the planner is offered only tools that exist. */
+  templatePrograms?: readonly string[];
   /**
    * What went wrong last time, when this request is a repair rather than a first attempt. The
    * planner cannot fix a mistake it is never shown, and a fresh plan for the same objective

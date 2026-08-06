@@ -67,6 +67,10 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_task", ["taskId"]),
   agentRuns: defineTable({
+    // The workspace preset this run was started with (lib/sandbox-templates.ts). Held on the run
+    // because every step of it must land in the same kind of workspace, and because the planner is
+    // told what that workspace contains.
+    workspacePresetId: v.optional(v.string()),
     // The sandbox this run is working in, carried across its steps. Recorded as soon as a worker
     // reports one so an abandoned sandbox is still known to the system that must destroy it.
     sandboxId: v.optional(v.string()),

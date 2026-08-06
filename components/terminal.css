@@ -671,6 +671,47 @@
 .terminal-approval-accept:disabled,
 .terminal-approval-reject:disabled { opacity: 0.45; cursor: default; }
 
+.terminal-workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 9px;
+}
+.terminal-workspace-label {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--nova-faint);
+  margin-right: 2px;
+}
+.terminal-workspace-option {
+  font: inherit;
+  font-size: 11.5px;
+  background: transparent;
+  border: 1px solid var(--nova-border);
+  color: var(--nova-muted);
+  border-radius: 999px;
+  padding: 3px 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.terminal-workspace-option:hover { color: var(--nova-accent); border-color: var(--nova-border-strong); }
+.terminal-workspace-option-active {
+  color: var(--nova-cyan);
+  border-color: var(--nova-border-strong);
+  background: rgba(111, 227, 255, 0.1);
+}
+.terminal-workspace-tools {
+  font-size: 10px;
+  color: var(--nova-faint);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .terminal-workspace-tools { display: none; }
+}
+
 .terminal-presets {
   display: flex;
   flex-wrap: wrap;
@@ -990,6 +1031,66 @@
   color: var(--nova-cyan);
   background: rgba(111, 227, 255, 0.1);
 }
+
+/* ----------------------------------------------------------- sandbox panel */
+
+.sandbox-panel { display: flex; flex-direction: column; gap: 8px; }
+.sandbox-panel-header { display: flex; align-items: center; gap: 8px; }
+.sandbox-panel-title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--nova-muted);
+}
+.sandbox-panel-count {
+  font-size: 10px;
+  color: var(--nova-faint);
+  border: 1px solid var(--nova-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.sandbox-panel-error { font-size: 11px; color: var(--nova-error); margin: 0; }
+
+.sandbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+
+.sandbox-card {
+  border: 1px solid var(--nova-border);
+  border-radius: var(--nova-radius-sm);
+  background: var(--nova-panel-raised);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sandbox-card-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.sandbox-card-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--nova-faint);
+}
+.sandbox-card-dot-live { background: var(--nova-mint); animation: task-live-pulse 1.8s ease-in-out infinite; }
+.sandbox-card-id { font-size: 11.5px; color: var(--nova-text); font-variant-numeric: tabular-nums; }
+.sandbox-card-preset {
+  font-size: 10px; color: var(--nova-accent);
+  border: 1px solid var(--nova-border); border-radius: 999px; padding: 1px 7px;
+  margin-left: auto; flex-shrink: 0;
+}
+.sandbox-card-task {
+  font-size: 11px; color: var(--nova-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sandbox-card-state { font-size: 10.5px; color: var(--nova-faint); }
+.sandbox-card-actions { display: flex; gap: 6px; }
+.sandbox-action {
+  font: inherit; font-size: 11px; flex: 1;
+  background: transparent; border: 1px solid var(--nova-border); color: var(--nova-muted);
+  border-radius: 7px; padding: 4px 8px; cursor: pointer; transition: all 0.15s ease;
+}
+.sandbox-action:hover:not(:disabled) { border-color: var(--nova-border-strong); color: var(--nova-accent); }
+.sandbox-action:disabled { opacity: 0.45; cursor: default; }
+.sandbox-action-resume { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.4); }
+.sandbox-action-stop:hover:not(:disabled) { border-color: var(--nova-error); color: var(--nova-error); }
 
 /* ---------------------------------------------------------- schedule panel */
 

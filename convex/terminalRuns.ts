@@ -11,7 +11,7 @@ import { startCodingRun, type StartCodingRunResult } from "./codingRunPlan";
  * own, it only picks which mutation variant startCodingRun uses.
  */
 export const startLiveCodingRun = action({
-  args: { organizationId: v.id("organizations"), objective: v.string(), idempotencyKey: v.string() },
+  args: { organizationId: v.id("organizations"), objective: v.string(), idempotencyKey: v.string(), workspacePresetId: v.optional(v.string()) },
   returns: v.object({
     taskId: v.id("tasks"),
     runId: v.id("agentRuns"),
@@ -29,7 +29,7 @@ export const startLiveCodingRun = action({
   handler: async (ctx, args): Promise<StartCodingRunResult> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Unauthenticated");
-    return startCodingRun(ctx, { organizationId: args.organizationId, objective: args.objective, idempotencyKey: args.idempotencyKey, authorization: "session", costApproval: "required" });
+    return startCodingRun(ctx, { organizationId: args.organizationId, objective: args.objective, idempotencyKey: args.idempotencyKey, authorization: "session", costApproval: "required", workspacePresetId: args.workspacePresetId });
   },
 });
 

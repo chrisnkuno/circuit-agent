@@ -16,6 +16,7 @@ import type { ModelPriceCatalog } from "../lib/model-cost";
 import { createConvexArtifactStore } from "./lib/artifactStore";
 import { createWorkerControl } from "./lib/workerControl";
 import { classifyWorkerFailure, retryDelayForFailure, summarizeWorkerError } from "../lib/worker-runtime";
+import { findWorkspacePreset, presetPrograms } from "../lib/sandbox-templates";
 
 const REPOSITORY_CONTEXT = "No repository is connected yet. There is no existing codebase to inspect; work only within the provided workspace using the allowed commands.";
 // The worker only heartbeats once before the model call and then again per sandbox command
@@ -28,8 +29,11 @@ const CLAIM_LEASE_MS = 180_000;
 const MAX_STEP_ATTEMPTS = 3;
 const SANDBOX_RUNTIME_SECONDS = 300;
 
-function buildStepRequest(taskTitle: string, runObjective: string, taskId: string, stepId: string): CodingPlanRequest {
+function buildStepRequest(taskTitle: string, runObjective: string, taskId: string, stepId: string, workspacePresetId?: string): CodingPlanRequest {
+  const preset = findWorkspacePreset(workspacePresetId);
   return {
+    // What this workspace actually ships, so the planner is never offered a tool the image lacks.
+    templatePrograms: presetPrograms(preset),
     taskId,
     stepId,
     objective: `${taskTitle}. ${runObjective}`.slice(0, 4_000),
@@ -157,6 +161,7 @@ export const executeClaimedStep = internalAction({
     reservationRwf: v.number(),
     attempts: v.number(),
     reuseSandboxId: v.optional(v.string()),
+    workspacePresetId: v.optional(v.string()),
     taskId: v.id("tasks"),
     taskTitle: v.string(),
     runObjective: v.string(),
@@ -166,7 +171,7 @@ export const executeClaimedStep = internalAction({
     const env = process.env as Record<string, string | undefined>;
     const prices = createModelPriceCatalog(env);
     const model = createCodingModelProvider(env);
-    const sandbox = createE2BProvider(env);
+    const sandbox = createE2BProvider(env, findWorkspacePreset(args.workspacePresetId).templateAlias);
     if (!prices || !model || !sandbox) {
       // Providers were readable when the step was claimed, so this only happens if configuration
       // changed underneath the claim. Hand the step back rather than burning its attempt budget.
@@ -184,7 +189,7 @@ export const executeClaimedStep = internalAction({
       stepId: args.stepId,
       workerId: args.workerId,
       reservationRwf: args.reservationRwf,
-      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId),
+      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId, args.workspacePresetId),
       reuseSandboxId: args.reuseSandboxId,
       attempts: args.attempts,
       model,
@@ -245,7 +250,7 @@ export const dispatchTick = internalAction({
       if (!prices) continue;
       for (const step of steps) {
         if (step.role !== "coding") continue;
-        const request = buildStepRequest(task.title, run.objective, task._id, step._id);
+        const request = buildStepRequest(task.title, run.objective, task._id, step._id, run.workspacePresetId);
         requestByStepId.set(qualifiedStepId(run._id, step.stepKey), request);
         // Reserve for one repair as well as the first attempt. Reserving only the first would
         // make the repair loop unaffordable by construction: it stops as soon as the remaining
