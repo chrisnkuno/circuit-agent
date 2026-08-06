@@ -8,7 +8,7 @@ import type { Id } from "./_generated/dataModel";
 import { planDispatch, qualifiedStepId, toDispatchPlan } from "../lib/dispatcher";
 import type { AgentRunPlan } from "../lib/agent-orchestration";
 import type { TaskBudget } from "../lib/agent-budget";
-import { CodingAgentWorker, estimateCodingPlanReservation } from "../lib/coding-worker";
+import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "../lib/coding-worker";
 import { createCodingModelProvider, createE2BProvider, createModelPriceCatalog } from "../lib/providers/factory";
 import type { CodingModelProvider, CodingPlanRequest } from "../lib/providers/model";
 import type { CodingSandboxProvider } from "../lib/providers/contracts";
@@ -247,7 +247,11 @@ export const dispatchTick = internalAction({
         if (step.role !== "coding") continue;
         const request = buildStepRequest(task.title, run.objective, task._id, step._id);
         requestByStepId.set(qualifiedStepId(run._id, step.stepKey), request);
-        estimatedRwfByStep[qualifiedStepId(run._id, step.stepKey)] = estimateCodingPlanReservation(request, prices).maximumRwf;
+        // Reserve for one repair as well as the first attempt. Reserving only the first would
+        // make the repair loop unaffordable by construction: it stops as soon as the remaining
+        // reservation cannot cover another call. A conservative *maximum* is reserved and only
+        // actual usage is ever settled, so this raises the hold, not the price of a run.
+        estimatedRwfByStep[qualifiedStepId(run._id, step.stepKey)] = estimateCodingPlanReservation(request, prices).maximumRwf * 2;
       }
     }
 

@@ -35,6 +35,7 @@ export type CodingPromptInput = {
   maxCommands: number;
   /** Programs present in the sandbox image, when it is not the default one. */
   templatePrograms?: readonly string[];
+  previousFailure?: { intent: string; command: string; exitCode: number; output: string };
 };
 
 export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructions: string; input: string } {
@@ -58,8 +59,18 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     `${INLINE_EVAL_PROGRAMS.join(", ")} must run a file. Never pass ${INLINE_EVAL_FLAGS.join(", ")}; write the code to a file and run that file instead.`,
     `npm and bun may only be invoked as ${SCRIPT_RUNNER_SUBCOMMANDS.map((subcommand) => `"${subcommand}"`).join(" or ")} — never install, add, or any other subcommand.`,
     "Every absolute path in a command argument must stay inside /workspace.",
+    "Evidence is captured for you: your plan and every command's output are recorded automatically, and a patch is taken by diffing the workspace when there is a repository. Never block a step over evidence — you are not required to produce a patch, a diff, or a git repository, and their absence is not a blocker.",
     "Do not merge, deploy, push, send messages, access secrets, install remote packages, or make external changes.",
     "If required context is absent or the work is unsafe, return blocked or needs_clarification with no file changes or commands.",
+    // A repair attempt continues in the same workspace, so the plan must account for what the
+    // failed attempt already left there rather than assuming an empty directory.
+    ...(input.previousFailure
+      ? [
+          "A previous attempt at this step failed. Its command, exit code, and output are in previousFailure. Diagnose that specific failure and fix it.",
+          "The workspace still contains whatever that attempt wrote. Read or overwrite those files as needed; do not assume you are starting from an empty directory.",
+          "Do not simply repeat the failed command unchanged, and do not abandon the objective — if the failure is genuinely unfixable within these constraints, return blocked with the reason.",
+        ]
+      : []),
   ].join("\n");
 
   const payload = {
@@ -73,7 +84,13 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
       scriptRunnerSubcommands: SCRIPT_RUNNER_SUBCOMMANDS,
       forbiddenInlineEvalFlags: INLINE_EVAL_FLAGS,
     },
-    requiredEvidence: ["model_plan", "command_log", "patch", "test_log"],
+    // What the worker collects on the planner's behalf, not a checklist for it to satisfy. The
+    // plan and the command log are always recorded; a patch is captured opportunistically by
+    // diffing the workspace, and simply skipped when there is no repository to diff. Presenting
+    // that list as "required" made a planner block an otherwise achievable step, reasoning that it
+    // owed a patch it could not produce without the `git init` it had just been forbidden.
+    evidenceCapturedForYou: ["model_plan", "command_log", "patch when a repository exists", "test_log"],
+    ...(input.previousFailure ? { previousFailure: input.previousFailure } : {}),
   };
   return { instructions, input: JSON.stringify(payload) };
 }

@@ -75,7 +75,10 @@ export default defineSchema({
     delegationDepth: v.optional(v.number()),
     kind: v.optional(v.union(v.literal("coding"), v.literal("research"), v.literal("writing"), v.literal("operations"))),
     role: v.union(v.literal("planner"), v.literal("coding"), v.literal("reviewer"), v.literal("research"), v.literal("operator")),
-    status: v.union(v.literal("queued"), v.literal("running"), v.literal("awaiting_approval"), v.literal("blocked"), v.literal("completed"), v.literal("failed"), v.literal("cancelled"), v.literal("needs_configuration")),
+    // "paused" is a deliberate hold, not a failure: the run keeps its place, its budget, and its
+    // suspended sandbox, and resumes into the same workspace. It exists because a suspended
+    // sandbox is free to keep, so stopping to look at something no longer has to mean giving up.
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("paused"), v.literal("awaiting_approval"), v.literal("blocked"), v.literal("completed"), v.literal("failed"), v.literal("cancelled"), v.literal("needs_configuration")),
     objective: v.string(),
     capabilityIds: v.optional(v.array(v.string())),
     maxParallelism: v.number(),

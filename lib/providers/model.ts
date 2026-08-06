@@ -22,6 +22,20 @@ export type CodingPlanRequest = {
   timeoutMs: number;
   reasoningEffort: ModelReasoningEffort;
   safetyIdentifier: string;
+  /**
+   * What went wrong last time, when this request is a repair rather than a first attempt. The
+   * planner cannot fix a mistake it is never shown, and a fresh plan for the same objective
+   * usually reproduces the same mistake.
+   */
+  previousFailure?: PreviousAttemptFailure;
+};
+
+export type PreviousAttemptFailure = {
+  /** The plan's own description of what it was trying to do. */
+  intent: string;
+  command: string;
+  exitCode: number;
+  output: string;
 };
 
 export type CodingPlanResult = {

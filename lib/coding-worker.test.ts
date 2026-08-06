@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { describeArtifact, type ArtifactStore, type ArtifactWrite } from "./artifacts";
-import { CodingAgentWorker, estimateCodingPlanReservation } from "./coding-worker";
+import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "./coding-worker";
 import type { CodingSandboxProvider, SandboxCommand } from "./providers/contracts";
-import type { CodingModelProvider, CodingPlanResult } from "./providers/model";
+import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult } from "./providers/model";
 
 const prices = { inputRwfPerMillionTokens: 2_000, outputRwfPerMillionTokens: 8_000 };
 const usage = { inputTokens: 1_000, outputTokens: 500, totalTokens: 1_500, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 100 };
@@ -22,7 +22,7 @@ const baseRequest = {
   modelReservationRwf: 100,
 };
 
-function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean } = {}) {
+function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean; succeedAfterRepairs?: number; repairStatus?: "blocked"; policyRefusal?: boolean } = {}) {
   const calls: string[] = [];
   const writes: ArtifactWrite[] = [];
   let cancellationChecks = 0;
@@ -43,7 +43,19 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
       blockers: [],
     },
   };
-  const model: CodingModelProvider = { generateCodingPlan: async () => { calls.push("model"); return result; } };
+  const modelRequests: CodingPlanRequest[] = [];
+  let modelCalls = 0;
+  const model: CodingModelProvider = {
+    generateCodingPlan: async (planRequest: CodingPlanRequest) => {
+      calls.push("model");
+      modelRequests.push(planRequest);
+      modelCalls += 1;
+      if (modelCalls > 1 && options.repairStatus === "blocked") {
+        return { ...result, plan: { ...result.plan!, status: "blocked" as const } };
+      }
+      return result;
+    },
+  };
   const sandbox: CodingSandboxProvider = {
     createSandbox: async () => { calls.push("create"); return { sandboxId: "sandbox_1", status: "created" }; },
     writeFile: async () => { calls.push("write"); },
@@ -51,6 +63,13 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
       calls.push(`run:${command.program}:${command.args[0] ?? ""}`);
       if (options.reuseUnreachable && sandboxId === "sandbox_gone") throw new Error("sandbox not found");
       if (command.program === "git") return { exitCode: 0, stdout: "diff --git a/src/value.ts b/src/value.ts", stderr: "" };
+      if (options.policyRefusal && command.program === "bun") throw new Error("Git command is not read-only");
+      if (options.succeedAfterRepairs !== undefined) {
+        // Fails until the planner has been shown the error the configured number of times.
+        const attempt = calls.filter((call) => call === "model").length - 1;
+        if (attempt >= options.succeedAfterRepairs) return { exitCode: 0, stdout: "ok", stderr: "" };
+        return { exitCode: 1, stdout: "", stderr: "SyntaxError: unterminated string literal" };
+      }
       return { exitCode: options.commandExitCode ?? 0, stdout: "ok", stderr: options.commandExitCode ? "failed" : "" };
     },
     stopSandbox: async () => { calls.push("stop"); },
@@ -66,7 +85,7 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
       return options.cancelledAfterChecks !== undefined && cancellationChecks >= options.cancelledAfterChecks;
     },
   };
-  return { worker: new CodingAgentWorker({ model, sandbox, artifacts, control, prices }), sandbox, artifacts, control, calls, writes };
+  return { worker: new CodingAgentWorker({ model, sandbox, artifacts, control, prices }), sandbox, artifacts, control, calls, writes, modelRequests };
 }
 
 describe("coding agent worker", () => {
@@ -86,8 +105,9 @@ describe("coding agent worker", () => {
   it("stops after a failed check and returns honest failure evidence", async () => {
     const test = setup({ commandExitCode: 1 });
     const result = await test.worker.execute(baseRequest);
-    expect(result).toMatchObject({ status: "failed", commandsExecuted: 1 });
-    expect(test.calls.filter((call) => call.startsWith("run:bun"))).toHaveLength(1);
+    // One first attempt plus MAX_REPAIR_ATTEMPTS repairs, each shown the previous error.
+    expect(result).toMatchObject({ status: "failed", repairs: MAX_REPAIR_ATTEMPTS });
+    expect(test.calls.filter((call) => call === "model")).toHaveLength(1 + MAX_REPAIR_ATTEMPTS);
     expect(test.calls.at(-1)).toBe("suspend");
   });
 
@@ -134,5 +154,58 @@ describe("coding agent worker", () => {
     const estimate = estimateCodingPlanReservation(baseRequest, prices);
     expect(estimate.maximumRwf).toBeGreaterThanOrEqual(estimate.expectedRwf);
     expect(estimate.maximumInputTokens).toBeGreaterThan(estimate.expectedInputTokens);
+  });
+});
+
+describe("repairing a failed step in place", () => {
+  it("shows the planner the command that failed and its output, not just that something failed", async () => {
+    const test = setup({ commandExitCode: 1 });
+    await test.worker.execute(baseRequest);
+    const repair = test.modelRequests[1];
+    expect(repair.previousFailure).toBeDefined();
+    expect(repair.previousFailure?.command).toContain("bun");
+    expect(repair.previousFailure?.exitCode).toBe(1);
+    expect(repair.previousFailure?.output).toContain("failed");
+    // The first attempt is not a repair and must not claim to be one.
+    expect(test.modelRequests[0].previousFailure).toBeUndefined();
+  });
+
+  it("completes the step when the repair works", async () => {
+    const test = setup({ succeedAfterRepairs: 1 });
+    const result = await test.worker.execute(baseRequest);
+    expect(result.status).toBe("completed");
+    expect(result.repairs).toBe(1);
+  });
+
+  it("repairs in the same sandbox, so the fix can build on what the failed attempt wrote", async () => {
+    const test = setup({ succeedAfterRepairs: 1 });
+    await test.worker.execute(baseRequest);
+    expect(test.calls.filter((call) => call === "create")).toHaveLength(1);
+  });
+
+  it("stops when the reservation cannot cover another attempt, rather than overspending", async () => {
+    // Enough for the first call, not for a second.
+    const test = setup({ commandExitCode: 1 });
+    const result = await test.worker.execute({ ...baseRequest, modelReservationRwf: 7 });
+    expect(result.repairs).toBe(0);
+    expect(test.calls.filter((call) => call === "model")).toHaveLength(1);
+  });
+
+  it("lets the planner fix a command the policy refused, instead of killing the run", async () => {
+    // Refusals are thrown before a shell ever sees the command, so they used to escape the repair
+    // loop and fail the run outright — the exact way a step died on "Git command is not read-only".
+    const test = setup({ policyRefusal: true });
+    const result = await test.worker.execute(baseRequest);
+    expect(test.calls.filter((call) => call === "model").length).toBeGreaterThan(1);
+    const repair = test.modelRequests[1];
+    expect(repair.previousFailure?.output).toContain("refused before it ran");
+    expect(result.status).toBe("failed");
+  });
+
+  it("keeps a blocked verdict from a repair instead of retrying it", async () => {
+    const test = setup({ commandExitCode: 1, repairStatus: "blocked" });
+    const result = await test.worker.execute(baseRequest);
+    expect(result.repairs).toBe(1);
+    expect(test.calls.filter((call) => call === "model")).toHaveLength(2);
   });
 });

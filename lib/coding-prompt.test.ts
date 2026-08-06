@@ -102,3 +102,24 @@ describe("the planner is only offered tools that exist", () => {
     expect(offered).not.toContain("definitely-not-permitted");
   });
 });
+
+describe("evidence is not a demand the planner must satisfy", () => {
+  const prompt = buildCodingPlannerPrompt({
+    objective: "create a script and run it",
+    repositoryContext: "No repository is connected yet.",
+    workspaceRoot: "/workspace/repo",
+    maxCommands: 6,
+  });
+
+  it("never asks for a patch, which needs a repository the workspace does not have", () => {
+    // Observed live: a planner blocked an achievable step because it believed it owed patch
+    // evidence, having just been told it may not create the repository a patch would need.
+    expect(JSON.parse(prompt.input).requiredEvidence).toBeUndefined();
+    expect(prompt.instructions).toContain("Never block a step over evidence");
+    expect(prompt.instructions).toContain("not required to produce a patch");
+  });
+
+  it("still tells the planner what is being recorded on its behalf", () => {
+    expect(JSON.parse(prompt.input).evidenceCapturedForYou).toContain("command_log");
+  });
+});

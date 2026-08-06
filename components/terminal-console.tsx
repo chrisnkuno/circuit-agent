@@ -55,6 +55,8 @@ type Branch = {
   label: string;
   isMain: boolean;
   runId: Id<"agentRuns"> | null;
+  /** Live status of this branch's run, so its controls reflect what is actually true right now. */
+  runStatus: Doc<"agentRuns">["status"] | null;
   track: TrackState | null;
   busy: boolean;
   log: LogEntry[];
@@ -160,7 +162,7 @@ export type TerminalConsoleHandle = { resumeTask: (taskId: Id<"tasks">) => void 
 
 export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(function TerminalConsole(_props, ref) {
   const [branches, setBranches] = useState<Branch[]>(() => [
-    { id: MAIN_BRANCH_ID, label: "main", isMain: true, runId: null, track: null, busy: false, log: [] },
+    { id: MAIN_BRANCH_ID, label: "main", isMain: true, runId: null, runStatus: null, track: null, busy: false, log: [] },
   ]);
   const [activeBranchId, setActiveBranchId] = useState(MAIN_BRANCH_ID);
   const [input, setInput] = useState("");
@@ -178,6 +180,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
   const lastPresetContextKeyRef = useRef<string | null>(null);
 
   const [decidingApprovalId, setDecidingApprovalId] = useState<Id<"approvals"> | null>(null);
+  const [controllingBranchId, setControllingBranchId] = useState<string | null>(null);
 
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
@@ -187,6 +190,9 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
   const canDecideApprovals = membership ? hasPermission(membership.membership.role, "approval:decide") : false;
   const pendingApprovals = useQuery(api.approvals.listPending, organization && canDecideApprovals ? { organizationId: organization._id } : "skip");
   const decideApproval = useMutation(api.approvals.decide);
+  const cancelRun = useMutation(api.agentRuns.requestCancellation);
+  const pauseRunMutation = useMutation(api.agentRuns.pauseRun);
+  const resumeRunMutation = useMutation(api.agentRuns.resumeRun);
   const startLiveRun = useAction(api.terminalRuns.startLiveCodingRun);
   const generateDynamicPresets = useAction(api.terminalPresetsActions.generate);
   const tasks = useQuery(api.tasks.listRecent, organization ? { organizationId: organization._id } : "skip");
@@ -272,6 +278,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
             label: branchLabel(latest.objective),
             isMain: false,
             runId: latest._id,
+            runStatus: latest.status,
             track: null,
             busy: true,
             log: [{ id: entryId(), tone: "system", text: `resuming "${latest.objective}" — loading live status…` }],
@@ -322,6 +329,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
       const step = stepByKey.get(key);
       return { key, label: key, status: step ? stageStatusFromStepStatus(step.status) : "pending" };
     });
+    updateBranch(branchId, { runStatus: detail.run.status });
     const runTerminal = ["completed", "failed", "cancelled"].includes(detail.run.status);
     updateBranch(branchId, { track: { stages, outcome: runTerminal ? (detail.run.status === "completed" ? "completed" : "failed") : undefined } });
 
@@ -374,6 +382,40 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
     }
   }
 
+  /**
+   * Run controls act on the branch being watched, which is the run the person is actually looking
+   * at. Each reports what happened in that branch's own log rather than a toast, so the record of
+   * who stopped a run sits in the same timeline as the work it stopped.
+   */
+  async function controlRun(branch: Branch, action: "pause" | "resume" | "stop") {
+    if (!branch.runId) return;
+    setControllingBranchId(branch.id);
+    try {
+      if (action === "stop") {
+        await cancelRun({ runId: branch.runId });
+        appendLineTo(branch.id, { tone: "warn", text: "stop requested — the worker stops at its next safe checkpoint and the sandbox is released" });
+        updateBranch(branch.id, { busy: false });
+      } else if (action === "pause") {
+        const result = await pauseRunMutation({ runId: branch.runId });
+        appendLineTo(branch.id, {
+          tone: "warn",
+          text: result.stepInFlight
+            ? "paused — the step already running will finish, then nothing further starts until you resume"
+            : "paused — nothing further starts until you resume. The workspace is kept exactly as it is",
+        });
+        updateBranch(branch.id, { busy: false });
+      } else {
+        await resumeRunMutation({ runId: branch.runId });
+        appendLineTo(branch.id, { tone: "success", text: "resumed — continuing in the same workspace" });
+        updateBranch(branch.id, { busy: true });
+      }
+    } catch (error) {
+      appendLineTo(branch.id, { tone: "error", text: errorMessage(error) });
+    } finally {
+      setControllingBranchId(null);
+    }
+  }
+
   async function playScript(lines: TerminalLine[], trackTaskKind?: TaskKind) {
     const branchId = activeBranchId;
     const myRunId = ++scriptRunIdRef.current;
@@ -422,6 +464,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
         label: branchLabel(objective),
         isMain: false,
         runId: null,
+        runStatus: null,
         track: null,
         // Not busy yet: this only prices the work. Nothing runs until the quote is accepted.
         busy: false,
@@ -534,6 +577,25 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
               </div>
             );
           })}
+        </div>
+      )}
+      {activeBranch.runId && activeBranch.runStatus && !["completed", "failed", "cancelled"].includes(activeBranch.runStatus) && (
+        <div className="terminal-run-controls">
+          <span className={`terminal-run-state terminal-run-state-${activeBranch.runStatus}`}>{activeBranch.runStatus.replaceAll("_", " ")}</span>
+          {activeBranch.runStatus === "paused" ? (
+            <button type="button" className="terminal-run-button terminal-run-resume" disabled={controllingBranchId === activeBranch.id} onClick={() => void controlRun(activeBranch, "resume")}>
+              Resume
+            </button>
+          ) : (
+            <button type="button" className="terminal-run-button" disabled={controllingBranchId === activeBranch.id || activeBranch.runStatus === "awaiting_approval"} onClick={() => void controlRun(activeBranch, "pause")}>
+              Pause
+            </button>
+          )}
+          <button type="button" className="terminal-run-button terminal-run-stop" disabled={controllingBranchId === activeBranch.id} onClick={() => void controlRun(activeBranch, "stop")}>
+            Stop
+          </button>
+          {/* Says what the buttons actually do: neither one can interrupt a command already running. */}
+          <span className="terminal-run-note">a step already running always finishes</span>
         </div>
       )}
       {activeBranch.track && (

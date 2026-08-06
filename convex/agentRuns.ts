@@ -190,6 +190,56 @@ async function releaseRunSandbox(ctx: MutationCtx, run: Doc<"agentRuns">): Promi
   await ctx.scheduler.runAfter(0, internal.sandboxCleanup.destroySandbox, { sandboxId: run.sandboxId, runId: run._id });
 }
 
+
+/**
+ * Holds a run without giving it up. The step in flight finishes — there is no safe way to stop a
+ * worker mid-command, and killing one would strand its sandbox and its reservation — but nothing
+ * further is claimed until the run is resumed. The sandbox stays suspended in the meantime, which
+ * costs nothing and keeps the workspace exactly as the paused step left it.
+ */
+export const pauseRun = mutation({
+  args: { runId: v.id("agentRuns") },
+  returns: v.object({ paused: v.boolean(), stepInFlight: v.boolean() }),
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) throw new Error("Agent run not found");
+    const task = await ctx.db.get(run.taskId);
+    if (!task) throw new Error("Task not found");
+    await requireOrganizationPermission(ctx, task.organizationId, "task:cancel");
+    if (!["queued", "running"].includes(run.status)) return { paused: false, stepInFlight: false };
+    const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
+    const stepInFlight = steps.some((step) => step.status === "running");
+    await ctx.db.patch(runId, { status: "paused" });
+    await ctx.db.insert("agentRunEvents", {
+      runId,
+      type: "run_paused",
+      message: stepInFlight
+        ? "Run paused. The step already running will finish, and nothing further will start until you resume."
+        : "Run paused. Nothing will start until you resume.",
+      createdAt: Date.now(),
+    });
+    return { paused: true, stepInFlight };
+  },
+});
+
+/** Returns a paused run to the queue and picks it up immediately rather than waiting for the cron. */
+export const resumeRun = mutation({
+  args: { runId: v.id("agentRuns") },
+  returns: v.object({ resumed: v.boolean() }),
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) throw new Error("Agent run not found");
+    const task = await ctx.db.get(run.taskId);
+    if (!task) throw new Error("Task not found");
+    await requireOrganizationPermission(ctx, task.organizationId, "agent:run");
+    if (run.status !== "paused") return { resumed: false };
+    await ctx.db.patch(runId, { status: "queued" });
+    await ctx.db.insert("agentRunEvents", { runId, type: "run_resumed", message: "Run resumed. Its workspace is exactly as the paused step left it.", createdAt: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.dispatcher.dispatchTick, {});
+    return { resumed: true };
+  },
+});
+
 export const requestCancellation = mutation({
   args: { runId: v.id("agentRuns") },
   handler: async (ctx, { runId }) => {
