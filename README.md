@@ -40,6 +40,9 @@ Users should know a task's expected RWF cost and maximum approved spend before a
 - Procedural-memory skills: evidence-gated distillation of a completed run into a versioned, slugged skill, relevance-and-budget recall, approval-gated Convex storage that can only ever add a new version, and advisory-only prompt composition the iterative worker already applies when skills are supplied.
 - A second, interchangeable sandbox backend (`DockerSandboxProvider`) behind the same `InteractiveCodingSandboxProvider` contract E2B implements, talking to the Docker CLI as argv-only subprocess calls under the identical command and file policy, selected by an explicit factory function that defaults to E2B.
 - A real, non-simulated agent terminal at `/terminal`: `run coding <objective>` creates an actual authenticated task and run in Convex, dispatches a real model and a real E2B sandbox, and streams the real `agentRunEvents` ledger live. See [Agent terminal activation](#agent-terminal-activation) below — it is off by default.
+- An animated ASCII stage-track in the terminal, driven by nothing but the real `agentSteps` documents — it never shows progress that didn't happen.
+- Multi-interface task supervision: a task launched from the web terminal, from Telegram, or on a recurring schedule all share one orchestration path (`convex/codingRunPlan.ts`), authorized either by a real session or an already-verified organization identity. Telegram pairing uses the same short-lived, hashed, single-use code pattern as the GitHub App and Google OAuth flows. Recurring "coding-task" schedules reuse the existing schedule infrastructure on an isolated claim path that can't regress the deployed calendar digest.
+- Deployed at [circuit-nova.vercel.app](https://circuit-nova.vercel.app), gated by a free whole-site password (Vercel's own Password Protection needs a paid add-on this team doesn't have — see `middleware.ts`).
 
 ## Activation status
 
