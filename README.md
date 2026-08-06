@@ -122,3 +122,12 @@ The multipurpose merge strategy and phased Hermes integration are documented in 
 The current system is assessed in [docs/assessment-technical.md](docs/assessment-technical.md). The philosophical direction and staged delivery plan are in [docs/assessment-roadmap.md](docs/assessment-roadmap.md).
 
 The actionable, evidence-based backlog is tracked in [docs/gap-register.md](docs/gap-register.md).
+
+## Todo
+
+Product backlog for the terminal task list and cross-component connectivity (not yet implemented):
+
+- [ ] **Stop on task list** — Wire a Stop control on `TaskHistory` active tasks to the existing `agentRuns.requestCancellation` soft-cancel path (workers stop at the next checkpoint). Recurring schedules already have Pause/Activate; no true in-flight run pause.
+- [ ] **Resend email notifications** — Send lifecycle mail via Resend when a task run starts and on terminal outcomes (completed / failed / cancelled), to the signed-in user's notification email.
+- [ ] **Live sandbox state** — Persist `sandboxId` on worker heartbeat; probe real E2B/Docker status (`Sandbox.getInfo` / `docker inspect`) rather than trusting Convex lease fields alone; surface status on the task list (and in notifications).
+- [ ] **Webhook-heavy connectivity** — Push-based fanout between system components (run lifecycle, sandbox probes, Telegram, Resend, optional outbound org webhooks) so components stay in sync without relying only on polling/crons; signed inbound system webhook for component status callbacks.
