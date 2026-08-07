@@ -1032,6 +1032,24 @@
   background: rgba(111, 227, 255, 0.1);
 }
 
+.panel-boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid rgba(255, 207, 107, 0.3);
+  background: rgba(255, 207, 107, 0.06);
+  border-radius: var(--nova-radius-sm);
+  padding: 10px;
+}
+.panel-boundary-title { font-size: 11px; color: var(--nova-warn); }
+.panel-boundary-reason { font-size: 10.5px; color: var(--nova-muted); line-height: 1.4; word-break: break-word; }
+.panel-boundary-retry {
+  font: inherit; font-size: 11px; align-self: flex-start;
+  background: transparent; border: 1px solid var(--nova-border); color: var(--nova-accent);
+  border-radius: 7px; padding: 3px 11px; cursor: pointer;
+}
+.panel-boundary-retry:hover { border-color: var(--nova-border-strong); color: var(--nova-cyan); }
+
 /* ----------------------------------------------------------- sandbox panel */
 
 .sandbox-panel { display: flex; flex-direction: column; gap: 8px; }

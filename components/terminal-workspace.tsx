@@ -5,6 +5,7 @@ import { TerminalConsole, type TerminalConsoleHandle } from "@/components/termin
 import { TaskHistory } from "@/components/task-history";
 import { SchedulePanel } from "@/components/schedule-panel";
 import { SandboxPanel } from "@/components/sandbox-panel";
+import { PanelBoundary } from "@/components/panel-boundary";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -67,9 +68,16 @@ export function TerminalWorkspace() {
               ))}
             </div>
           </div>
-          <TaskHistory organizationId={organization._id} onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)} />
-          <SandboxPanel organizationId={organization._id} />
-          <SchedulePanel />
+          {/* Wrapped individually so one panel's failure costs only that panel, not its neighbours. */}
+          <PanelBoundary label="Task history">
+            <TaskHistory organizationId={organization._id} onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)} />
+          </PanelBoundary>
+          <PanelBoundary label="Sandboxes">
+            <SandboxPanel organizationId={organization._id} />
+          </PanelBoundary>
+          <PanelBoundary label="Schedule">
+            <SchedulePanel />
+          </PanelBoundary>
         </aside>
       )}
     </main>
