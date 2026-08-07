@@ -51,7 +51,7 @@ function relativeTime(ms: number): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-export function TaskHistory({ organizationId, onResumeTask }: { organizationId: Id<"organizations"> | undefined; onResumeTask: (taskId: Id<"tasks">) => void }) {
+export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { organizationId: Id<"organizations"> | undefined; onResumeTask: (taskId: Id<"tasks">) => void; onOpenFiles: (taskId: Id<"tasks">) => void }) {
   const tasks = useQuery(api.tasks.listRecent, organizationId ? { organizationId } : "skip");
   const stopTask = useMutation(api.agentRuns.requestTaskCancellation);
   const [openFolder, setOpenFolder] = useState<string | null>("active");
@@ -127,6 +127,9 @@ export function TaskHistory({ organizationId, onResumeTask }: { organizationId: 
                       <div className="task-card-actions">
                         <button type="button" className="task-card-resume" onClick={() => onResumeTask(task._id)}>
                           View live status →
+                        </button>
+                        <button type="button" className="task-card-files" onClick={() => onOpenFiles(task._id)}>
+                          Files
                         </button>
                         {canStop && (
                           <button type="button" className="task-card-stop" disabled={stoppingTaskId === task._id} onClick={() => void stop(task._id)}>

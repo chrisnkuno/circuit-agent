@@ -11,7 +11,7 @@ import type { TaskBudget } from "../lib/agent-budget";
 import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "../lib/coding-worker";
 import { createCodingModelProvider, createE2BProvider, createModelPriceCatalog } from "../lib/providers/factory";
 import type { CodingModelProvider, CodingPlanRequest } from "../lib/providers/model";
-import type { CodingSandboxProvider } from "../lib/providers/contracts";
+import type { InteractiveCodingSandboxProvider } from "../lib/providers/contracts";
 import type { ModelPriceCatalog } from "../lib/model-cost";
 import { createConvexArtifactStore } from "./lib/artifactStore";
 import { createWorkerControl } from "./lib/workerControl";
@@ -64,7 +64,7 @@ type StepRunParams = {
   request: CodingPlanRequest;
   reuseSandboxId?: string;
   model: CodingModelProvider;
-  sandbox: CodingSandboxProvider;
+  sandbox: InteractiveCodingSandboxProvider;
   prices: ModelPriceCatalog;
   providerName: string;
   /** Attempts already consumed by this step, including the current one (set at claim time). */

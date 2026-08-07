@@ -56,6 +56,8 @@ type Branch = {
   label: string;
   isMain: boolean;
   runId: Id<"agentRuns"> | null;
+  /** The task this branch's run belongs to, so its produced files can be opened from here. */
+  taskId: Id<"tasks"> | null;
   /** Live status of this branch's run, so its controls reflect what is actually true right now. */
   runStatus: Doc<"agentRuns">["status"] | null;
   track: TrackState | null;
@@ -161,9 +163,9 @@ function BranchRunTracker({ runId, onSnapshot }: { runId: Id<"agentRuns">; onSna
 
 export type TerminalConsoleHandle = { resumeTask: (taskId: Id<"tasks">) => void };
 
-export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(function TerminalConsole(_props, ref) {
+export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: (taskId: Id<"tasks">) => void }>(function TerminalConsole({ onOpenFiles }, ref) {
   const [branches, setBranches] = useState<Branch[]>(() => [
-    { id: MAIN_BRANCH_ID, label: "main", isMain: true, runId: null, runStatus: null, track: null, busy: false, log: [] },
+    { id: MAIN_BRANCH_ID, label: "main", isMain: true, runId: null, taskId: null, runStatus: null, track: null, busy: false, log: [] },
   ]);
   const [activeBranchId, setActiveBranchId] = useState(MAIN_BRANCH_ID);
   const [input, setInput] = useState("");
@@ -280,6 +282,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
             label: branchLabel(latest.objective),
             isMain: false,
             runId: latest._id,
+            taskId: latest.taskId,
             runStatus: latest.status,
             track: null,
             busy: true,
@@ -331,7 +334,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
       const step = stepByKey.get(key);
       return { key, label: key, status: step ? stageStatusFromStepStatus(step.status) : "pending" };
     });
-    updateBranch(branchId, { runStatus: detail.run.status });
+    updateBranch(branchId, { runStatus: detail.run.status, taskId: detail.run.taskId });
     const runTerminal = ["completed", "failed", "cancelled"].includes(detail.run.status);
     updateBranch(branchId, { track: { stages, outcome: runTerminal ? (detail.run.status === "completed" ? "completed" : "failed") : undefined } });
 
@@ -466,6 +469,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
         label: branchLabel(objective),
         isMain: false,
         runId: null,
+        taskId: null,
         runStatus: null,
         track: null,
         // Not busy yet: this only prices the work. Nothing runs until the quote is accepted.
@@ -582,6 +586,15 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
           })}
         </div>
       )}
+      {activeBranch.runId && activeBranch.runStatus && ["completed", "failed", "cancelled"].includes(activeBranch.runStatus) && activeBranch.taskId && (
+        <div className="terminal-run-controls">
+          <span className={`terminal-run-state terminal-run-state-${activeBranch.runStatus}`}>{activeBranch.runStatus}</span>
+          {/* The work outlives the run: a finished run is exactly when someone wants its files. */}
+          <button type="button" className="terminal-run-button" onClick={() => onOpenFiles(activeBranch.taskId!)}>
+            View produced files
+          </button>
+        </div>
+      )}
       {activeBranch.runId && activeBranch.runStatus && !["completed", "failed", "cancelled"].includes(activeBranch.runStatus) && (
         <div className="terminal-run-controls">
           <span className={`terminal-run-state terminal-run-state-${activeBranch.runStatus}`}>{activeBranch.runStatus.replaceAll("_", " ")}</span>
@@ -598,6 +611,11 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, object>(functio
             Stop
           </button>
           {/* Says what the buttons actually do: neither one can interrupt a command already running. */}
+          {activeBranch.taskId && (
+            <button type="button" className="terminal-run-button" onClick={() => onOpenFiles(activeBranch.taskId!)}>
+              Files
+            </button>
+          )}
           <span className="terminal-run-note">a step already running always finishes</span>
         </div>
       )}

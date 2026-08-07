@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { describeArtifact, type ArtifactStore, type ArtifactWrite } from "./artifacts";
 import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "./coding-worker";
-import type { CodingSandboxProvider, SandboxCommand } from "./providers/contracts";
+import type { InteractiveCodingSandboxProvider, SandboxCommand } from "./providers/contracts";
 import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult } from "./providers/model";
 
 const prices = { inputRwfPerMillionTokens: 2_000, outputRwfPerMillionTokens: 8_000 };
@@ -22,7 +22,7 @@ const baseRequest = {
   modelReservationRwf: 100,
 };
 
-function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean; succeedAfterRepairs?: number; repairStatus?: "blocked"; policyRefusal?: boolean } = {}) {
+function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean; succeedAfterRepairs?: number; repairStatus?: "blocked"; policyRefusal?: boolean; captureUnavailable?: boolean } = {}) {
   const calls: string[] = [];
   const writes: ArtifactWrite[] = [];
   let cancellationChecks = 0;
@@ -56,13 +56,18 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
       return result;
     },
   };
-  const sandbox: CodingSandboxProvider = {
+  const sandbox: InteractiveCodingSandboxProvider = {
     createSandbox: async () => { calls.push("create"); return { sandboxId: "sandbox_1", status: "created" }; },
     writeFile: async () => { calls.push("write"); },
+    readFile: async (_sandboxId: string, path: string) => { calls.push("read"); return `contents of ${path}`; },
     runCommand: async (sandboxId: string, command: SandboxCommand) => {
       calls.push(`run:${command.program}:${command.args[0] ?? ""}`);
       if (options.reuseUnreachable && sandboxId === "sandbox_gone") throw new Error("sandbox not found");
       if (command.program === "git") return { exitCode: 0, stdout: "diff --git a/src/value.ts b/src/value.ts", stderr: "" };
+      if (command.program === "find") {
+        if (options.captureUnavailable) throw new Error("workspace listing unavailable");
+        return { exitCode: 0, stdout: "/workspace/repo/main.py\n/workspace/repo/test_main.py\n", stderr: "" };
+      }
       if (options.policyRefusal && command.program === "bun") throw new Error("Git command is not read-only");
       if (options.succeedAfterRepairs !== undefined) {
         // Fails until the planner has been shown the error the configured number of times.
@@ -93,7 +98,8 @@ describe("coding agent worker", () => {
     const test = setup();
     const result = await test.worker.execute(baseRequest);
     expect(result).toMatchObject({ status: "completed", actualModelRwf: 6, commandsExecuted: 2 });
-    expect(result.artifactReferences.map((artifact) => artifact.kind)).toEqual(["model_plan", "patch", "command_log"]);
+    // The files the step produced are captured alongside the record of what it did.
+    expect(result.artifactReferences.map((artifact) => artifact.kind)).toEqual(["model_plan", "patch", "command_log", "workspace_file", "workspace_file"]);
     expect(test.calls).toContain("write");
     // Suspended rather than destroyed, and the id handed back, so the next step of this run
     // continues in the same workspace instead of an empty one.
@@ -207,5 +213,32 @@ describe("repairing a failed step in place", () => {
     const result = await test.worker.execute(baseRequest);
     expect(result.repairs).toBe(1);
     expect(test.calls.filter((call) => call === "model")).toHaveLength(2);
+  });
+});
+
+describe("capturing what a step produced", () => {
+  it("stores each workspace file with its content and a workspace-relative path", async () => {
+    const test = setup();
+    await test.worker.execute(baseRequest);
+    const files = test.writes.filter((write) => write.kind === "workspace_file");
+    expect(files.map((file) => file.path)).toEqual(["main.py", "test_main.py"]);
+    // The content, not a hash of it — the whole point is that it can be read back later.
+    expect(files[0].content).toContain("contents of /workspace/repo/main.py");
+  });
+
+  it("enumerates the sandbox rather than trusting the plan's declared file changes", async () => {
+    // A plan that writes one script which generates three files would otherwise report one file.
+    const test = setup();
+    await test.worker.execute(baseRequest);
+    expect(test.calls).toContain("run:find:/workspace/repo");
+    const files = test.writes.filter((write) => write.kind === "workspace_file");
+    expect(files.length).toBeGreaterThan(0);
+  });
+
+  it("never lets a failed capture cost the step its result", async () => {
+    const test = setup({ captureUnavailable: true });
+    const result = await test.worker.execute(baseRequest);
+    expect(result.status).toBe("completed");
+    expect(test.writes.some((write) => write.kind === "workspace_file")).toBe(false);
   });
 });

@@ -118,11 +118,16 @@ export default defineSchema({
     taskId: v.id("tasks"),
     runId: v.id("agentRuns"),
     stepId: v.id("agentSteps"),
-    kind: v.union(v.literal("model_plan"), v.literal("command_log"), v.literal("patch"), v.literal("test_log"), v.literal("review_summary")),
+    kind: v.union(v.literal("model_plan"), v.literal("command_log"), v.literal("patch"), v.literal("test_log"), v.literal("review_summary"), v.literal("workspace_file")),
     mediaType: v.string(),
     reference: v.string(),
     sha256: v.string(),
     byteLength: v.number(),
+    // The content itself. Optional only because rows written before evidence was retrievable have
+    // none: until this existed, every artifact recorded a hash of work nobody could ever read back.
+    storageId: v.optional(v.id("_storage")),
+    /** Workspace-relative path, for artifacts that are a file the step produced. */
+    path: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_task", ["taskId"]).index("by_run", ["runId"]).index("by_step", ["stepId"]).index("by_reference", ["reference"]),
   agentRunEvents: defineTable({

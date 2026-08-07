@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-export type ArtifactKind = "model_plan" | "command_log" | "patch" | "test_log" | "review_summary";
+/**
+ * "workspace_file" is the code a step actually produced, captured from the sandbox before it is
+ * suspended. The other kinds describe what happened; this one is the work itself, and it is the
+ * only kind that would otherwise be lost the moment the sandbox goes away.
+ */
+export type ArtifactKind = "model_plan" | "command_log" | "patch" | "test_log" | "review_summary" | "workspace_file";
 
 export type ArtifactWrite = {
   taskId: string;
@@ -9,6 +14,8 @@ export type ArtifactWrite = {
   kind: ArtifactKind;
   mediaType: "application/json" | "text/plain" | "text/x-diff";
   content: string;
+  /** Workspace-relative path, when the artifact is a file the step produced. */
+  path?: string;
 };
 
 export type ArtifactReference = {

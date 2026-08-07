@@ -10,6 +10,7 @@
 
 import type * as agentRuns from "../agentRuns.js";
 import type * as approvals from "../approvals.js";
+import type * as artifacts from "../artifacts.js";
 import type * as auth from "../auth.js";
 import type * as channels from "../channels.js";
 import type * as codingRunPlan from "../codingRunPlan.js";
@@ -51,6 +52,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   agentRuns: typeof agentRuns;
   approvals: typeof approvals;
+  artifacts: typeof artifacts;
   auth: typeof auth;
   channels: typeof channels;
   codingRunPlan: typeof codingRunPlan;

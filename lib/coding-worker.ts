@@ -3,7 +3,7 @@ import { estimateModelCost, priceActualModelUsage, type ModelCostEstimate, type 
 import { buildCodingPlannerPrompt } from "./coding-prompt";
 import { truncateEvidence, type ArtifactReference, type ArtifactStore, type ArtifactWrite } from "./artifacts";
 import { summarizeCommandFailure } from "./worker-runtime";
-import type { CodingSandboxProvider, SandboxCommandResult, SandboxSession } from "./providers/contracts";
+import type { InteractiveCodingSandboxProvider, SandboxCommandResult, SandboxSession } from "./providers/contracts";
 import type { CodingModelProvider, CodingPlanRequest, ModelUsage } from "./providers/model";
 
 export type CodingWorkerControl = {
@@ -42,7 +42,8 @@ export type CodingWorkerResult = {
 
 export type CodingWorkerDependencies = {
   model: CodingModelProvider;
-  sandbox: CodingSandboxProvider;
+  /** Interactive because capturing what a step produced means reading the workspace back out. */
+  sandbox: InteractiveCodingSandboxProvider;
   artifacts: ArtifactStore;
   control: CodingWorkerControl;
   prices: ModelPriceCatalog;
@@ -108,9 +109,74 @@ export function estimateCodingPlanReservation(request: CodingPlanRequest, prices
  */
 export const MAX_REPAIR_ATTEMPTS = 2;
 
+/**
+ * Bounds on capturing the workspace. Generous for real work — a step writes a handful of files —
+ * and strict enough that a runaway script cannot turn one step into megabytes of stored evidence.
+ */
+const MAX_CAPTURED_FILES = 40;
+const MAX_CAPTURED_FILE_BYTES = 128_000;
+
+/**
+ * Directories that hold generated or vendored content rather than work. Capturing them buries the
+ * few files a person actually wants under caches — a single pytest run contributed four
+ * `.pytest_cache` entries to a two-file result before these were excluded.
+ */
+const UNCAPTURED_DIRECTORIES = [".git", "node_modules", ".pytest_cache", "__pycache__", ".venv", "venv", ".ruff_cache", ".mypy_cache", "dist", "build", ".next", "target"];
+
 /** Executes a bounded model plan and guarantees sandbox cleanup on every path. */
 export class CodingAgentWorker {
   constructor(private readonly dependencies: CodingWorkerDependencies) {}
+
+  /**
+   * Reads back the files a step produced. Enumerated from the sandbox rather than taken from the
+   * plan's `fileChanges`, because much of what a step creates is written by the commands it runs,
+   * not declared up front — a plan that writes one script which generates three files would
+   * otherwise report one file and lose the rest.
+   *
+   * Never fails a step: this is evidence collection after the work is already done, and losing a
+   * capture is much cheaper than losing the run that produced it.
+   */
+  private async captureWorkspace(request: CodingWorkerRequest, sandboxId: string): Promise<ArtifactWrite[]> {
+    const captured: ArtifactWrite[] = [];
+    try {
+      const listing = await this.dependencies.sandbox.runCommand(sandboxId, {
+        program: "find",
+        args: [
+          request.workspaceRoot,
+          "-type",
+          "f",
+          ...UNCAPTURED_DIRECTORIES.flatMap((directory) => ["-not", "-path", `*/${directory}/*`]),
+          "-size",
+          "-256k",
+        ],
+        cwd: request.workspaceRoot,
+        timeoutMs: 30_000,
+      });
+      if (listing.exitCode !== 0) return captured;
+      const paths = listing.stdout.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, MAX_CAPTURED_FILES);
+      for (const path of paths) {
+        try {
+          const content = await this.dependencies.sandbox.readFile(sandboxId, path);
+          // Binary content would be unreadable in a viewer and pointless as text evidence.
+          if (content.includes("\u0000")) continue;
+          captured.push({
+            taskId: request.taskId,
+            runId: request.runId,
+            stepId: request.stepId,
+            kind: "workspace_file",
+            mediaType: "text/plain",
+            content: truncateEvidence(content, MAX_CAPTURED_FILE_BYTES),
+            path: path.startsWith(request.workspaceRoot) ? path.slice(request.workspaceRoot.length).replace(/^\//, "") : path,
+          });
+        } catch {
+          // One unreadable file must not cost the capture of the others.
+        }
+      }
+    } catch {
+      // The workspace could not be listed; the step's other evidence still stands.
+    }
+    return captured;
+  }
 
   async execute(request: CodingWorkerRequest): Promise<CodingWorkerResult> {
     if (!request.runId.trim()) throw new Error("runId is required");
@@ -296,6 +362,13 @@ export class CodingAgentWorker {
         mediaType: "application/json",
         content: JSON.stringify(commandLog, null, 2),
       })));
+
+      // The work itself, captured before the sandbox is suspended. Everything else here describes
+      // what happened; this is what was actually produced, and it is the only evidence that would
+      // otherwise exist solely inside a workspace nobody can open.
+      for (const file of await this.captureWorkspace(request, session.sandboxId)) {
+        evidence.push(await this.dependencies.artifacts.put(artifact(request, file)));
+      }
     } finally {
       // Suspended, not destroyed: the next step of this run continues in this workspace. The run's
       // terminal transition is what destroys it (convex/agentRuns.ts), with a reaper behind that

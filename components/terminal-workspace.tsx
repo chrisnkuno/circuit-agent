@@ -6,6 +6,7 @@ import { TaskHistory } from "@/components/task-history";
 import { SchedulePanel } from "@/components/schedule-panel";
 import { SandboxPanel } from "@/components/sandbox-panel";
 import { PanelBoundary } from "@/components/panel-boundary";
+import { ArtifactDrawer } from "@/components/artifact-drawer";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -28,6 +29,7 @@ export function TerminalWorkspace() {
   const organization = useCurrentOrganization();
   const terminalRef = useRef<TerminalConsoleHandle>(null);
   const [layout, setLayout] = useState<LayoutMode>("split");
+  const [filesTaskId, setFilesTaskId] = useState<Id<"tasks"> | null>(null);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
@@ -46,7 +48,7 @@ export function TerminalWorkspace() {
   return (
     <main className={`nova-layout nova-layout-${showAside ? layout : "stacked"}`}>
       <div className="nova-slot nova-slot-console">
-        <TerminalConsole ref={terminalRef} />
+        <TerminalConsole ref={terminalRef} onOpenFiles={setFilesTaskId} />
       </div>
       {organization && (
         <aside className="nova-slot nova-slot-aside">
@@ -70,7 +72,11 @@ export function TerminalWorkspace() {
           </div>
           {/* Wrapped individually so one panel's failure costs only that panel, not its neighbours. */}
           <PanelBoundary label="Task history">
-            <TaskHistory organizationId={organization._id} onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)} />
+            <TaskHistory
+              organizationId={organization._id}
+              onResumeTask={(taskId: Id<"tasks">) => terminalRef.current?.resumeTask(taskId)}
+              onOpenFiles={setFilesTaskId}
+            />
           </PanelBoundary>
           <PanelBoundary label="Sandboxes">
             <SandboxPanel organizationId={organization._id} />
@@ -80,6 +86,7 @@ export function TerminalWorkspace() {
           </PanelBoundary>
         </aside>
       )}
+      <ArtifactDrawer taskId={filesTaskId} onClose={() => setFilesTaskId(null)} />
     </main>
   );
 }

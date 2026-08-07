@@ -429,11 +429,13 @@ export const recordArtifact = internalMutation({
     runId: v.id("agentRuns"),
     stepId: v.id("agentSteps"),
     workerId: v.string(),
-    kind: v.union(v.literal("model_plan"), v.literal("command_log"), v.literal("patch"), v.literal("test_log"), v.literal("review_summary")),
+    kind: v.union(v.literal("model_plan"), v.literal("command_log"), v.literal("patch"), v.literal("test_log"), v.literal("review_summary"), v.literal("workspace_file")),
     mediaType: v.string(),
     reference: v.string(),
     sha256: v.string(),
     byteLength: v.number(),
+    storageId: v.optional(v.id("_storage")),
+    path: v.optional(v.string()),
   },
   returns: v.id("agentArtifacts"),
   handler: async (ctx, args) => {
@@ -462,6 +464,8 @@ export const recordArtifact = internalMutation({
       reference: args.reference,
       sha256: args.sha256,
       byteLength: args.byteLength,
+      storageId: args.storageId,
+      path: args.path,
       createdAt: now,
     });
   },
