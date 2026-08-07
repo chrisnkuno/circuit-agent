@@ -118,6 +118,10 @@ http.route({
         eventType: event.type,
         sandboxId: event.sandboxId,
         terminated: isSandboxTerminated(event),
+        // The provider's timestamp, not our receive time: retries and queueing would otherwise
+        // stretch every measured interval by however long delivery happened to take.
+        occurredAt: Date.parse(event.timestamp) || Date.now(),
+        reportedExecutionMs: event.executionTimeMs,
       });
       return new Response(null, { status: 204 });
     } catch {

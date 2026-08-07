@@ -58,6 +58,9 @@ export default defineSchema({
     provider: v.literal("e2b"),
     deliveryId: v.string(),
     eventType: v.string(),
+    sandboxId: v.optional(v.string()),
+    /** The provider's own runtime figure for this event, kept for comparison with ours. */
+    reportedExecutionMs: v.optional(v.number()),
     receivedAt: v.number(),
   }).index("by_provider_delivery", ["provider", "deliveryId"]),
   taskEvents: defineTable({
@@ -74,6 +77,15 @@ export default defineSchema({
     // The sandbox this run is working in, carried across its steps. Recorded as soon as a worker
     // reports one so an abandoned sandbox is still known to the system that must destroy it.
     sandboxId: v.optional(v.string()),
+    // Billable sandbox runtime, accumulated from E2B's own lifecycle events: the sandbox is only
+    // running between a create/resume and the next pause/kill, and only that time is charged.
+    // Measured as wall clock between those events rather than taken from the provider's
+    // `execution_time`, whose documentation does not say whether it is per-segment or cumulative;
+    // the provider's figure is recorded separately so the two can be compared.
+    sandboxMs: v.optional(v.number()),
+    sandboxReportedMs: v.optional(v.number()),
+    /** Set while the sandbox is actually running, so a pause knows what interval to close. */
+    sandboxRunningSince: v.optional(v.number()),
     taskId: v.id("tasks"),
     parentRunId: v.optional(v.id("agentRuns")),
     delegationDepth: v.optional(v.number()),

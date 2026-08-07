@@ -8,6 +8,13 @@ import { findWorkspacePreset } from "@/lib/sandbox-templates";
 
 type Controls = "pause" | "resume" | "stop";
 
+/** Sandbox runtime reads in seconds and minutes: a run's sandbox is alive for seconds at a time. */
+function formatRuntime(ms: number): string {
+  if (ms < 1_000) return "0s";
+  const seconds = Math.round(ms / 1_000);
+  return seconds < 90 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 function heartbeatAge(heartbeatAt: number | null): string {
   if (heartbeatAt === null) return "";
   const seconds = Math.round((Date.now() - heartbeatAt) / 1000);
@@ -24,13 +31,18 @@ function heartbeatAge(heartbeatAt: number | null): string {
  */
 export function SandboxPanel({ organizationId }: { organizationId: Id<"organizations"> | undefined }) {
   const sandboxes = useQuery(api.sandboxes.listForOrganization, organizationId ? { organizationId } : "skip");
+  const usage = useQuery(api.sandboxes.usageForOrganization, organizationId ? { organizationId } : "skip");
   const pauseRun = useMutation(api.agentRuns.pauseRun);
   const resumeRun = useMutation(api.agentRuns.resumeRun);
   const cancelRun = useMutation(api.agentRuns.requestCancellation);
   const [busyRunId, setBusyRunId] = useState<Id<"agentRuns"> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  if (!sandboxes || sandboxes.length === 0) return null;
+  // Usage outlives the sandboxes it came from: runtime accrued by runs that have already finished
+  // is exactly what a person compares against the provider's dashboard, and hiding it whenever
+  // nothing is currently running would mean it is almost never visible.
+  const hasUsage = Boolean(usage && usage.sandboxMs > 0);
+  if ((!sandboxes || sandboxes.length === 0) && !hasUsage) return null;
 
   async function act(runId: Id<"agentRuns">, control: Controls) {
     setBusyRunId(runId);
@@ -50,11 +62,18 @@ export function SandboxPanel({ organizationId }: { organizationId: Id<"organizat
     <div className="sandbox-panel">
       <div className="sandbox-panel-header">
         <span className="sandbox-panel-title">Sandboxes</span>
-        <span className="sandbox-panel-count">{sandboxes.length}</span>
+        <span className="sandbox-panel-count">{sandboxes?.length ?? 0}</span>
       </div>
+      {usage && usage.sandboxMs > 0 && (
+        // Billed runtime, not elapsed time — the number to hold against the provider's dashboard.
+        <div className="sandbox-usage" title={`Measured from provider lifecycle events across ${usage.runs} run(s). Provider-reported total: ${formatRuntime(usage.reportedMs)}.`}>
+          <span>{formatRuntime(usage.sandboxMs)} of sandbox runtime</span>
+          <span className="sandbox-usage-cost">≈ ${usage.estimatedUsd < 0.01 ? usage.estimatedUsd.toFixed(4) : usage.estimatedUsd.toFixed(2)}</span>
+        </div>
+      )}
       {error && <p className="sandbox-panel-error">{error}</p>}
       <ul className="sandbox-list">
-        {sandboxes.map((sandbox) => {
+        {(sandboxes ?? []).map((sandbox) => {
           const preset = findWorkspacePreset(sandbox.workspacePresetId ?? undefined);
           const executing = Boolean(sandbox.activeStepTitle);
           return (
@@ -68,6 +87,7 @@ export function SandboxPanel({ organizationId }: { organizationId: Id<"organizat
               <div className="sandbox-card-state">
                 {/* Suspended between steps is the resting state, not a fault — say so plainly. */}
                 {executing ? `${sandbox.activeStepTitle} · ${heartbeatAge(sandbox.heartbeatAt)}` : `suspended · ${sandbox.runStatus.replaceAll("_", " ")}`}
+                {sandbox.sandboxMs > 0 && <span className="sandbox-card-runtime">{formatRuntime(sandbox.sandboxMs)} run</span>}
               </div>
               <div className="sandbox-card-actions">
                 {sandbox.runStatus === "paused" ? (

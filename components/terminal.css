@@ -1176,6 +1176,15 @@
 }
 .sandbox-panel-error { font-size: 11px; color: var(--nova-error); margin: 0; }
 
+.sandbox-usage {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11px; color: var(--nova-muted);
+  border: 1px solid var(--nova-border); border-radius: var(--nova-radius-sm);
+  padding: 7px 10px; background: var(--nova-panel-raised);
+}
+.sandbox-usage-cost { margin-left: auto; color: var(--nova-faint); font-variant-numeric: tabular-nums; }
+.sandbox-card-runtime { color: var(--nova-faint); margin-left: 6px; font-variant-numeric: tabular-nums; }
+
 .sandbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 
 .sandbox-card {
