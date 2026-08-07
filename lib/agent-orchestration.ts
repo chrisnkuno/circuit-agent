@@ -33,6 +33,7 @@ export type CodingTaskInput = {
   runId: string;
   title: string;
   requiresBrowserVerification: boolean;
+  hasExistingCodebase?: boolean;
 };
 
 export type TaskPlanInput = {
@@ -41,12 +42,51 @@ export type TaskPlanInput = {
   kind: TaskKind;
   requiresBrowserVerification?: boolean;
   requestedCapabilityIds?: string[];
+  /**
+   * Whether the workspace will contain a codebase to work against. It changes the shape of the
+   * graph, not merely its wording: inspection and reproduction are steps only when there is
+   * something to inspect and a prior behaviour to reproduce.
+   */
+  hasExistingCodebase?: boolean;
 };
 
 type StepDefinition = Omit<AgentStep, "id" | "status"> & { key: string };
 
 const taskWorkflows: Record<TaskKind, (input: TaskPlanInput) => StepDefinition[]> = {
+  /**
+   * Two shapes, chosen by whether a codebase exists to work against.
+   *
+   * Inspecting a repository and reproducing a baseline are real work when there is a repository and
+   * a prior behaviour. Against an empty workspace they are neither, and the evidence was
+   * unambiguous: across live runs, all four steps of a from-scratch task produced the same plan —
+   * "create hello.py and run it" — four times over. Each step is a full model call, so the graph
+   * was spending four calls and about ninety seconds to do one task's work, then reporting each
+   * redundant repetition as progress.
+   *
+   * From-scratch work is therefore one step that writes and verifies. That is not a loss of rigour:
+   * the step still runs its own verification commands, the worker repairs it in place when they
+   * fail (see MAX_REPAIR_ATTEMPTS), and the command log records exactly what was checked. The
+   * repository shape is left as it was, since there is no connected repository to validate a
+   * change to it against.
+   */
   coding: (input) => {
+    if (!input.hasExistingCodebase) {
+      const scratch: StepDefinition[] = [
+        {
+          key: "implement",
+          title: "Build and verify the requested work",
+          role: "coding",
+          dependsOn: [],
+          sandboxTemplate: "coding",
+          capabilityIds: ["reasoning.plan", "workspace.files", "workspace.terminal"],
+        },
+      ];
+      if (input.requiresBrowserVerification) {
+        scratch.push({ key: "browser", title: "Verify affected workflow in browser", role: "coding", dependsOn: ["implement"], sandboxTemplate: "browser", capabilityIds: ["web.research"] });
+      }
+      scratch.push({ key: "review", title: "Review evidence and prepare handoff", role: "reviewer", dependsOn: input.requiresBrowserVerification ? ["implement", "browser"] : ["implement"], requiresApproval: true, capabilityIds: ["reasoning.plan"] });
+      return scratch;
+    }
     const steps: StepDefinition[] = [
       { key: "inspect", title: "Inspect repository and constraints", role: "coding", dependsOn: [], sandboxTemplate: "coding", capabilityIds: ["reasoning.plan", "workspace.files", "workspace.terminal"] },
       { key: "reproduce", title: "Reproduce issue and establish baseline", role: "coding", dependsOn: ["inspect"], sandboxTemplate: "coding", capabilityIds: ["workspace.terminal"] },

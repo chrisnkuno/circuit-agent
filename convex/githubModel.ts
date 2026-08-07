@@ -11,6 +11,23 @@ export const listForOrganization = query({
   },
 });
 
+/**
+ * Whether this organization has a repository a run could actually work against. Internal because
+ * it shapes the run graph rather than answering a user's question, and it must be callable from
+ * the run-creation path where there is no session to authorize against.
+ */
+export const hasConnectedRepository = internalQuery({
+  args: { organizationId: v.id("organizations") },
+  returns: v.boolean(),
+  handler: async (ctx, { organizationId }) => {
+    const installations = await ctx.db
+      .query("githubInstallations")
+      .withIndex("by_organization", (q) => q.eq("organizationId", organizationId))
+      .take(20);
+    return installations.some((installation) => installation.status === "connected");
+  },
+});
+
 export const authorizeInstallStart = internalQuery({
   args: { organizationId: v.id("organizations"), identitySubject: v.string() },
   handler: async (ctx, args) => {

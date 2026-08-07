@@ -4,8 +4,8 @@ import { planDispatch, qualifiedStepId, toDispatchPlan } from "./dispatcher";
 
 describe("dispatcher planning", () => {
   it("dispatches fairly while stopping an exhausted run", () => {
-    const first = buildCodingTaskPlan({ runId: "first", title: "First", requiresBrowserVerification: false });
-    const second = buildCodingTaskPlan({ runId: "second", title: "Second", requiresBrowserVerification: false });
+    const first = buildCodingTaskPlan({ runId: "first", title: "First", requiresBrowserVerification: false, hasExistingCodebase: true });
+    const second = buildCodingTaskPlan({ runId: "second", title: "Second", requiresBrowserVerification: false, hasExistingCodebase: true });
     const decisions = planDispatch({
       plans: [first, second], globalParallelism: 2, codingExecutionReady: true,
       budgetsByRun: { first: { maxRwf: 1000, spentRwf: 0, reservedRwf: 0 }, second: { maxRwf: 1000, spentRwf: 1000, reservedRwf: 0 } },
@@ -33,8 +33,8 @@ describe("dispatcher planning", () => {
   });
 
   it("rejects ambiguous step ownership across active runs", () => {
-    const first = buildCodingTaskPlan({ runId: "first", title: "First", requiresBrowserVerification: false });
-    const second = buildCodingTaskPlan({ runId: "second", title: "Second", requiresBrowserVerification: false });
+    const first = buildCodingTaskPlan({ runId: "first", title: "First", requiresBrowserVerification: false, hasExistingCodebase: true });
+    const second = buildCodingTaskPlan({ runId: "second", title: "Second", requiresBrowserVerification: false, hasExistingCodebase: true });
     second.steps[0].id = first.steps[0].id;
     const decisions = planDispatch({
       plans: [first, second],
@@ -71,7 +71,7 @@ describe("dispatcher planning", () => {
   });
 
   it("allows work near the cap while preserving a warning reason", () => {
-    const plan = buildCodingTaskPlan({ runId: "warning", title: "Warning", requiresBrowserVerification: false });
+    const plan = buildCodingTaskPlan({ runId: "warning", title: "Warning", requiresBrowserVerification: false, hasExistingCodebase: true });
     const decision = planDispatch({
       plans: [plan], globalParallelism: 1, codingExecutionReady: true,
       budgetsByRun: { warning: { maxRwf: 1000, spentRwf: 800, reservedRwf: 0 } },

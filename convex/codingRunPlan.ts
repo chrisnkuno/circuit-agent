@@ -64,12 +64,16 @@ export async function startCodingRun(
     await ctx.runMutation(useInternal ? internal.devPayment.authorizeDevelopmentPaymentInternal : api.devPayment.authorizeDevelopmentPayment, { taskId });
   }
 
-  const plan = buildTaskPlan({ runId: "run", title: `Coding: ${objective}`, kind: "coding", requiresBrowserVerification: false });
+  // The graph's shape follows the workspace: with no repository connected there is nothing to
+  // inspect and no prior behaviour to reproduce, so those steps would each spend a full model call
+  // redoing the objective from scratch. Resolved here rather than taken on trust from the caller.
+  const hasExistingCodebase: boolean = await ctx.runQuery(internal.githubModel.hasConnectedRepository, { organizationId: args.organizationId });
+  const plan = buildTaskPlan({ runId: "run", title: `Coding: ${objective}`, kind: "coding", requiresBrowserVerification: false, hasExistingCodebase });
   // The dispatcher only has a live worker for the "coding" role today (see docs/gap-register.md
-  // — reviewer/research/operator workers are not built yet). The standard plan's trailing
-  // approval-gated review step would sit forever with no executor once approved, so every real
-  // entry point runs only the steps that can actually complete: inspect, reproduce, implement,
-  // checks. Nothing downstream depended on the review step, so this stays a valid graph.
+  // — reviewer/research/operator workers are not built yet). The plan's trailing approval-gated
+  // review step would sit forever with no executor once approved, so every real entry point runs
+  // only the coding steps, which is the whole graph minus that review. Nothing downstream depended
+  // on it, so this stays a valid graph in either shape.
   const steps = plan.steps
     .filter((step) => step.role === "coding")
     .map((step) => ({

@@ -44,7 +44,7 @@ See [hermes-hybrid-architecture.md](hermes-hybrid-architecture.md) for the full 
 
 ## Coding-agent execution
 
-`lib/agent-orchestration.ts` creates an immutable, dependency-aware coding plan: inspect, reproduce, implement, verify, optional browser verification, and review handoff. The scheduler releases only dependency-free steps and obeys an explicit per-run parallelism cap.
+`lib/agent-orchestration.ts` compiles a coding objective into a dependency-aware plan whose shape follows the work that exists. Against a connected repository it is the full sequence — inspect, reproduce, implement, verify — because there is something to inspect and a prior behaviour to reproduce. Against an empty workspace those steps are neither, and the evidence was unambiguous: across live runs every step of a from-scratch task produced the same plan, so the graph spent four model calls and about ninety seconds doing one task's work while reporting each repetition as progress. From-scratch work is therefore a single step that writes and verifies, which measured 103s to 22s on the same objective at a third of the cost. Rigour is preserved elsewhere rather than dropped: the step runs its own verification commands, the worker repairs it in place when they fail, and the command log records exactly what was checked. The scheduler releases only dependency-free steps and obeys an explicit per-run parallelism cap.
 
 Convex persists this plan across `agentRuns`, `agentSteps`, and `agentRunEvents`. A provider worker must change step state and save evidence; it cannot merge, deploy, send, or exceed the spending cap.
 
