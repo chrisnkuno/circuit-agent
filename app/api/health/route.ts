@@ -20,6 +20,7 @@ export function GET() {
     githubAppSlug: process.env.GITHUB_APP_SLUG,
     githubAppPrivateKey: process.env.GITHUB_APP_PRIVATE_KEY,
     githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
+    exaApiKey: process.env.EXA_API_KEY,
   });
   return NextResponse.json({ ok: true, application: "up", readiness });
 }

@@ -125,4 +125,55 @@ describe("reaping ownership", () => {
     expect(owned.map((item) => item.sandboxId)).toEqual(["ours"]);
     expect(owned[0].startedAtMs).toBe(Date.parse("2026-08-06T20:00:00Z"));
   });
+
+  it("reuses one connection across operations instead of reconnecting per call", async () => {
+    // Measured at ~380ms per connect against a live sandbox, paid on every read, write and command:
+    // a thirteen-tool step spent about five seconds doing nothing but reconnecting.
+    const fake = fakeClient();
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+
+    await provider.runCommand("sandbox_1", { program: "ls", args: [], cwd: "/workspace", timeoutMs: 5_000 });
+    await provider.readFile("sandbox_1", "/workspace/a.txt");
+    await provider.writeFile("sandbox_1", "/workspace/b.txt", "hi");
+
+    expect(fake.calls.filter((call) => call.method === "connect")).toHaveLength(1);
+  });
+
+  it("reconnects once when the cached connection has died", async () => {
+    let connects = 0;
+    let failNext = true;
+    const handle = {
+      sandboxId: "sandbox_1",
+      commands: { run: async () => ({ exitCode: 0, stdout: "ok", stderr: "" }) },
+      files: {
+        write: async () => {},
+        read: async () => {
+          if (failNext) { failNext = false; throw new Error("connection terminated"); }
+          return "recovered";
+        },
+      },
+    };
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, {
+      create: async () => handle,
+      connect: async () => { connects += 1; return handle; },
+      kill: async () => true,
+      pause: async () => true,
+      list: async () => listResult,
+    } as never);
+
+    // Reuse must never turn a transient disconnect into a failed step.
+    await expect(provider.readFile("sandbox_1", "/workspace/a.txt")).resolves.toBe("recovered");
+    expect(connects).toBe(2);
+  });
+
+  it("drops the connection when the sandbox is paused, so no stale handle is reused", async () => {
+    const fake = fakeClient();
+    const provider = new E2BSandboxProvider({ apiKey: "e2b_test" }, fake.client);
+
+    await provider.readFile("sandbox_1", "/workspace/a.txt");
+    await provider.suspendSandbox("sandbox_1");
+    await provider.readFile("sandbox_1", "/workspace/a.txt");
+
+    expect(fake.calls.filter((call) => call.method === "connect")).toHaveLength(2);
+  });
 });

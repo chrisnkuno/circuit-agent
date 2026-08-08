@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildCircuitNotionHeaders, CircuitNotionCodingModelProvider } from "./circuitnotion";
+import { buildCircuitNotionHeaders, CircuitNotionCodingModelProvider, type ChatCompletionChunk } from "../../packages/agent-core/src/providers/circuitnotion";
+import { maxAttemptsForFailure } from "../worker-runtime";
+
+/** A complete response delivered the way the wire delivers it: content split across chunks. */
+async function* streamOf(options: { content?: string | null; refusal?: string; finish?: string; usage?: unknown; id?: string }) {
+  yield { id: options.id ?? "chatcmpl_1", model: "circuit-3", choices: [{ delta: {} }] } as ChatCompletionChunk;
+  for (const piece of (options.content ?? "").match(/[\s\S]{1,8}/g) ?? []) {
+    yield { choices: [{ delta: { content: piece } }] } as ChatCompletionChunk;
+  }
+  if (options.refusal) yield { choices: [{ delta: { refusal: options.refusal } }] } as ChatCompletionChunk;
+  yield { choices: [{ delta: {}, finish_reason: options.finish ?? "stop" }] } as ChatCompletionChunk;
+  yield { choices: [], usage: options.usage } as ChatCompletionChunk;
+}
 
 const request = {
   taskId: "task_1",
@@ -10,6 +22,7 @@ const request = {
   maxCommands: 4,
   maxOutputTokens: 2_000,
   timeoutMs: 30_000,
+  idleTimeoutMs: 5_000,
   reasoningEffort: "medium" as const,
   safetyIdentifier: "user_hash_1",
 };
@@ -29,15 +42,10 @@ describe("CircuitNotion coding model provider", () => {
     let body: unknown;
     const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async (value) => {
       body = value;
-      return {
-        id: "chatcmpl_1",
-        model: "circuit-3",
-        choices: [{ finish_reason: "stop", message: { content: JSON.stringify(plan) } }],
-        usage,
-      };
+      return streamOf({ content: JSON.stringify(plan), usage });
     });
     const result = await provider.generateCodingPlan(request);
-    expect(body).toMatchObject({ model: "circuit-3", response_format: { type: "json_object" } });
+    expect(body).toMatchObject({ model: "circuit-3", response_format: { type: "json_object" }, stream: true, stream_options: { include_usage: true } });
     expect(JSON.stringify(body)).toContain("fileChanges");
     expect(JSON.stringify(body)).toContain("expectedArtifacts");
     expect(result).toMatchObject({ status: "planned", plan, usage: { totalTokens: 600, cachedInputTokens: 100, reasoningTokens: 50 } });
@@ -48,10 +56,8 @@ describe("CircuitNotion coding model provider", () => {
     let calls = 0;
     const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => {
       calls += 1;
-      if (calls === 1) {
-        return { id: "chatcmpl_bad", model: "circuit-3", choices: [{ finish_reason: "stop", message: { content: "not json" } }], usage };
-      }
-      return { id: "chatcmpl_good", model: "circuit-3", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(plan) } }], usage };
+      if (calls === 1) return streamOf({ id: "chatcmpl_bad", content: "not json", usage });
+      return streamOf({ id: "chatcmpl_good", content: JSON.stringify(plan), usage });
     });
     const result = await provider.generateCodingPlan(request);
     expect(calls).toBe(2);
@@ -59,32 +65,57 @@ describe("CircuitNotion coding model provider", () => {
   });
 
   it("fails closed after a second invalid response", async () => {
-    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => ({
-      id: "chatcmpl_bad", model: "circuit-3", choices: [{ finish_reason: "stop", message: { content: "still not json" } }], usage,
-    }));
+    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: "still not json", usage }));
     await expect(provider.generateCodingPlan(request)).rejects.toThrow("after one retry");
   });
 
   it("returns explicit refusals without fabricating a plan", async () => {
-    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => ({
-      id: "chatcmpl_refused", model: "circuit-3", choices: [{ finish_reason: "stop", message: { content: null, refusal: "Cannot assist." } }], usage,
-    }));
+    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: null, refusal: "Cannot assist.", usage }));
     await expect(provider.generateCodingPlan(request)).resolves.toMatchObject({ status: "refused", refusal: "Cannot assist." });
   });
 
   it("fails closed on truncated responses or missing accounting", async () => {
-    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => ({
-      id: "chatcmpl_len", model: "circuit-3", choices: [{ finish_reason: "length", message: { content: JSON.stringify(plan) } }], usage,
-    }));
+    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: JSON.stringify(plan), finish: "length", usage }));
     await expect(provider.generateCodingPlan(request)).rejects.toThrow("length");
 
-    const missingUsage = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => ({
-      id: "chatcmpl_no_usage", model: "circuit-3", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(plan) } }], usage: null,
-    }));
+    const missingUsage = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: JSON.stringify(plan), usage: null }));
     await expect(missingUsage.generateCodingPlan(request)).rejects.toThrow("usage accounting");
 
     expect(() => new CircuitNotionCodingModelProvider({ apiKey: "", model: "circuit-3" })).toThrow("CIRCUITNOTION_API_KEY");
     expect(() => new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "" })).toThrow("CIRCUITNOTION_MODEL");
+  });
+});
+
+describe("streaming deadlines", () => {
+  it("accepts a plan that takes far longer than the old buffered ceiling, as long as tokens keep arriving", async () => {
+    const json = JSON.stringify(plan);
+    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async function* () {
+      for (const character of json) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        yield { id: "chatcmpl_slow", model: "circuit-3", choices: [{ delta: { content: character } }] } as ChatCompletionChunk;
+      }
+      yield { choices: [{ delta: {}, finish_reason: "stop" }], usage } as ChatCompletionChunk;
+    } as never);
+    // No single gap approaches the idle budget, so the total elapsed time is irrelevant.
+    await expect(provider.generateCodingPlan({ ...request, idleTimeoutMs: 1_000 })).resolves.toMatchObject({ status: "planned", plan });
+  });
+
+  it("abandons a stream that goes quiet, and says so instead of reporting a bare abort", async () => {
+    // Mirrors the SDK: the iterator ends by rejecting once the request signal aborts.
+    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async (_body, signal) => (async function* () {
+      yield { id: "chatcmpl_stall", model: "circuit-3", choices: [{ delta: { content: "{" } }] } as ChatCompletionChunk;
+      await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Request was aborted."))));
+    })());
+    await expect(provider.generateCodingPlan({ ...request, idleTimeoutMs: 1_000 })).rejects.toThrow("produced no output for 1s");
+  });
+
+  it("reports a stall distinctly enough that it does not buy three full retries", () => {
+    expect(maxAttemptsForFailure(new Error("Model stream produced no output for 45s and was abandoned"), 3)).toBe(2);
+  });
+
+  it("rejects an idle budget larger than the call's own ceiling", async () => {
+    const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: JSON.stringify(plan), usage }));
+    await expect(provider.generateCodingPlan({ ...request, idleTimeoutMs: 60_000 })).rejects.toThrow("idleTimeoutMs");
   });
 });
 

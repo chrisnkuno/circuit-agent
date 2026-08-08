@@ -1,10 +1,12 @@
-import { CodingPlanSchema } from "./coding-prompt";
-import { estimateModelCost, priceActualModelUsage, type ModelCostEstimate, type ModelPriceCatalog } from "./model-cost";
-import { buildCodingPlannerPrompt } from "./coding-prompt";
+import { CodingPlanSchema } from "../packages/agent-core/src/coding-prompt";
+import { estimateModelCost, priceActualModelUsage, type ModelCostEstimate, type ModelPriceCatalog } from "../packages/agent-core/src/model-cost";
+import { buildCodingPlannerPrompt } from "../packages/agent-core/src/coding-prompt";
 import { truncateEvidence, type ArtifactReference, type ArtifactStore, type ArtifactWrite } from "./artifacts";
 import { summarizeCommandFailure } from "./worker-runtime";
-import type { InteractiveCodingSandboxProvider, SandboxCommandResult, SandboxSession } from "./providers/contracts";
-import type { CodingModelProvider, CodingPlanRequest, ModelUsage } from "./providers/model";
+import type { InteractiveCodingSandboxProvider, SandboxCommandResult, SandboxSession } from "../packages/agent-core/src/providers/contracts";
+import type { CodingModelProvider, CodingPlanRequest, ModelUsage } from "../packages/agent-core/src/providers/model";
+import { isWanderObjective } from "../packages/agent-core/src/wander";
+import { assembleWanderReport } from "./wander-report";
 
 export type CodingWorkerControl = {
   /**
@@ -19,6 +21,11 @@ export type CodingWorkerRequest = CodingPlanRequest & {
   runId: string;
   sandboxRuntimeSeconds: number;
   modelReservationRwf: number;
+  /**
+   * Wall-clock the whole step may spend, model call included. Optional so callers that do not
+   * run inside a bounded host keep the previous unbounded behaviour.
+   */
+  stepDeadlineMs?: number;
   /**
    * The sandbox this run's previous step left behind, if any. Reusing it is what lets a step build
    * on the workspace an earlier step created; without it every step starts from an empty directory
@@ -36,6 +43,8 @@ export type CodingWorkerResult = {
   commandsExecuted: number;
   /** How many times the planner was shown a failure and asked to fix it within this step. */
   repairs?: number;
+  /** True when the step stopped early to stay inside `stepDeadlineMs`, rather than finishing. */
+  stoppedForTime?: boolean;
   /** The sandbox left suspended for the next step, so the caller can hand it back or destroy it. */
   sandboxId?: string;
 };
@@ -108,6 +117,18 @@ export function estimateCodingPlanReservation(request: CodingPlanRequest, prices
  * call. The budget check below stops earlier than this whenever the step's reservation runs out.
  */
 export const MAX_REPAIR_ATTEMPTS = 2;
+
+/**
+ * Held back from the step's deadline so the work can always be captured.
+ *
+ * Evidence is written after the commands finish, so a step that spends its last second running a
+ * command has produced files nobody can read — which is indistinguishable, from the outside, from
+ * a step that produced nothing at all.
+ */
+const CAPTURE_RESERVE_MS = 45_000;
+
+/** Below this there is no point starting another command; it would only be killed mid-run. */
+const MINIMUM_COMMAND_MS = 5_000;
 
 /**
  * Bounds on capturing the workspace. Generous for real work — a step writes a handful of files —
@@ -189,6 +210,14 @@ export class CodingAgentWorker {
       return { status: "cancelled", summary: "Run was cancelled before model execution.", artifactReferences: [], modelUsage: emptyUsage, actualModelRwf: 0, commandsExecuted: 0 };
     }
 
+    // Measured from the moment the step starts working, so the model call spends the same budget
+    // the commands do — it is the part most likely to run long.
+    const startedAt = Date.now();
+    const remainingMs = () => (request.stepDeadlineMs ?? Number.POSITIVE_INFINITY) - (Date.now() - startedAt);
+    /** Time left for actual work, once the reserve that guarantees a capture is set aside. */
+    const workingMs = () => remainingMs() - CAPTURE_RESERVE_MS;
+    let stoppedForTime = false;
+
     let usage = { ...emptyUsage };
     const spend = (next: ModelUsage) => {
       usage = {
@@ -269,6 +298,12 @@ export class CodingAgentWorker {
     let repairs = 0;
 
     try {
+      // Control-plane briefings (e.g. Wander Exa literature) land before the planner's writes so
+      // scientists can treat them as notebook files without re-fetching from the sandbox.
+      for (const seed of request.workspaceSeedFiles ?? []) {
+        const path = seed.path.startsWith("/") ? seed.path : `${request.workspaceRoot}/${seed.path}`;
+        await this.dependencies.sandbox.writeFile(session.sandboxId, path, seed.content);
+      }
       // Attempt, then repair. A failed command is shown back to the planner, which produces a new
       // plan in the same workspace — the files the failed attempt wrote are still there, which is
       // what makes a fix possible rather than a fresh guess at the same objective.
@@ -283,6 +318,12 @@ export class CodingAgentWorker {
             cancelled = true;
             break;
           }
+          // Stop of our own accord while there is still time to save the work. The alternative is
+          // the host killing the step mid-command, which loses every file it had already written.
+          if (workingMs() < MINIMUM_COMMAND_MS) {
+            stoppedForTime = true;
+            break;
+          }
           await this.dependencies.control.heartbeat(request.stepId, session.sandboxId);
           // A command the policy refuses is a mistake the planner can fix, not an infrastructure
           // failure. Refusals are thrown rather than returned, so without this they escape the
@@ -294,7 +335,9 @@ export class CodingAgentWorker {
               program: command.program,
               args: command.args,
               cwd: command.cwd ?? undefined,
-              timeoutMs: command.timeoutMs,
+              // A plan may ask for up to fifteen minutes per command, which alone outlives the
+              // step. Clamping keeps a single long command from consuming the whole budget.
+              timeoutMs: Math.max(MINIMUM_COMMAND_MS, Math.min(command.timeoutMs, workingMs())),
             });
           } catch (error) {
             if (!isPolicyRefusal(error)) throw error;
@@ -313,6 +356,13 @@ export class CodingAgentWorker {
         }
 
         if (!failed || cancelled || repairs >= MAX_REPAIR_ATTEMPTS) break;
+
+        // A repair is a fresh model call plus another pass of commands. Starting one that cannot
+        // finish spends real money to produce a plan the step will never get to run.
+        if (workingMs() < request.timeoutMs + MINIMUM_COMMAND_MS) {
+          stoppedForTime = true;
+          break;
+        }
 
         // Only re-plan while the step's own reservation still covers another call. Spending past
         // it would break the guarantee that a step never exceeds what was reserved for it.
@@ -366,8 +416,30 @@ export class CodingAgentWorker {
       // The work itself, captured before the sandbox is suspended. Everything else here describes
       // what happened; this is what was actually produced, and it is the only evidence that would
       // otherwise exist solely inside a workspace nobody can open.
-      for (const file of await this.captureWorkspace(request, session.sandboxId)) {
+      const captured = await this.captureWorkspace(request, session.sandboxId);
+      for (const file of captured) {
         evidence.push(await this.dependencies.artifacts.put(artifact(request, file)));
+      }
+
+      // Wander harvest: assemble a print-ready HTML report from the lab notebook once the step
+      // succeeds. Built on the control plane (not by the model) so the deliverable is reliable.
+      if (!cancelled && !failed && isWanderObjective(request.objective)) {
+        const evidenceFallback = request.workspaceSeedFiles?.find((seed) => seed.path.endsWith("EVIDENCE.md"))?.content;
+        const report = assembleWanderReport({ objective: request.objective, files: captured, evidenceFallback });
+        if (report) {
+          const reportPath = `${request.workspaceRoot}/${report.path}`;
+          try {
+            await this.dependencies.sandbox.writeFile(session.sandboxId, reportPath, report.html);
+          } catch {
+            // Capture still succeeds even if writing back into a suspending sandbox fails.
+          }
+          evidence.push(await this.dependencies.artifacts.put(artifact(request, {
+            kind: "workspace_file",
+            mediaType: "text/html",
+            path: report.path,
+            content: report.html,
+          })));
+        }
       }
     } finally {
       // Suspended, not destroyed: the next step of this run continues in this workspace. The run's
@@ -378,8 +450,11 @@ export class CodingAgentWorker {
 
     return {
       status: cancelled ? "cancelled" : failed ? "failed" : "completed",
+      stoppedForTime,
       summary: cancelled
         ? "Run cancelled at a safe checkpoint."
+        : stoppedForTime && !failed
+          ? `Stopped at the step's ${Math.round((request.stepDeadlineMs ?? 0) / 60_000)}-minute time budget with ${commandsExecuted} command(s) run; everything produced up to that point was captured.`
         : failure
           ? summarizeCommandFailure({ ...failure.command, purpose: failure.purpose, exitCode: failure.exitCode, stdout: failure.stdout, stderr: failure.stderr })
           : failed

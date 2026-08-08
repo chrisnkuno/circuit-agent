@@ -1,9 +1,9 @@
-import type { AgentRuntimeControl, AgentRuntimeEvent, AgentRuntimeRequest, AgentRuntimeResult, AgentTool, AgentToolCall, AgentTurnProvider } from "./agent-runtime";
-import { BoundedAgentRuntime } from "./agent-runtime";
+import type { AgentRuntimeControl, AgentRuntimeEvent, AgentRuntimeRequest, AgentRuntimeResult, AgentTool, AgentToolCall, AgentTurnProvider } from "../packages/agent-core/src/agent-runtime";
+import { BoundedAgentRuntime } from "../packages/agent-core/src/agent-runtime";
 import { createE2BCodingTools, initializeE2BCodingWorkspace } from "./e2b-coding-tools";
 import type { ArtifactReference, ArtifactStore, ArtifactWrite } from "./artifacts";
-import type { ModelPriceCatalog } from "./model-cost";
-import type { InteractiveCodingSandboxProvider } from "./providers/contracts";
+import type { ModelPriceCatalog } from "../packages/agent-core/src/model-cost";
+import type { InteractiveCodingSandboxProvider } from "../packages/agent-core/src/providers/contracts";
 import { composeSystemPromptWithSkills, type Skill } from "./skills";
 
 export type IterativeCodingWorkerRequest = AgentRuntimeRequest & { sandboxRuntimeSeconds: number; skills?: Skill[] };

@@ -44,10 +44,48 @@ export type E2BSandboxProviderOptions = {
   allowInternetAccess?: boolean;
 };
 
+/** Connection errors are worth one silent retry; anything else is the caller's to handle. */
+function looksDisconnected(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /not found|terminated|disconnect|ECONNRESET|socket hang up|closed|unavailable|timeout/i.test(message);
+}
+
 /** Concrete E2B adapter with secure access, bounded lifetime, and argv-only commands. */
 export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
+  /**
+   * One live connection per sandbox, reused across operations.
+   *
+   * Every read, write and command used to open its own connection, measured at ~380ms each against
+   * a live sandbox. A thirteen-tool step therefore spent about five seconds doing nothing but
+   * reconnecting, and the no-ripgrep search fallback — which reads files one at a time — paid it
+   * per file. The handle is dropped and rebuilt on any error that looks like a dead connection, so
+   * reuse never turns a transient disconnect into a failed step.
+   */
+  private readonly handles = new Map<string, Promise<SandboxHandle>>();
+
   constructor(private readonly options: E2BSandboxProviderOptions, private readonly client: E2BClient = defaultClient) {
     if (!options.apiKey.trim()) throw new Error("E2B_API_KEY is required");
+  }
+
+  private handle(sandboxId: string, timeoutMs: number): Promise<SandboxHandle> {
+    const existing = this.handles.get(sandboxId);
+    if (existing) return existing;
+    const created = this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs });
+    this.handles.set(sandboxId, created);
+    // A failed connect must not be cached, or the sandbox is permanently unusable.
+    created.catch(() => this.handles.delete(sandboxId));
+    return created;
+  }
+
+  /** Runs an operation on the shared handle, reconnecting once if the connection has gone. */
+  private async withHandle<T>(sandboxId: string, timeoutMs: number, operation: (sandbox: SandboxHandle) => Promise<T>): Promise<T> {
+    try {
+      return await operation(await this.handle(sandboxId, timeoutMs));
+    } catch (error) {
+      if (error instanceof CommandExitError || !looksDisconnected(error)) throw error;
+      this.handles.delete(sandboxId);
+      return operation(await this.handle(sandboxId, timeoutMs));
+    }
   }
 
   async createSandbox(request: SandboxRequest): Promise<SandboxSession> {
@@ -67,10 +105,10 @@ export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
 
   async runCommand(sandboxId: string, command: SandboxCommand): Promise<SandboxCommandResult> {
     validateSandboxCommand(command);
-    const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: command.timeoutMs + 5_000 });
     const serialized = [command.program, ...command.args.map(quoteArgument)].join(" ");
     try {
-      return await sandbox.commands.run(serialized, { cwd: command.cwd, timeoutMs: command.timeoutMs });
+      return await this.withHandle(sandboxId, command.timeoutMs + 5_000, (sandbox) =>
+        sandbox.commands.run(serialized, { cwd: command.cwd, timeoutMs: command.timeoutMs }));
     } catch (error) {
       // The provider contract represents ordinary process failures as results so
       // the worker can record them as evidence and make its own lifecycle decision.
@@ -83,14 +121,12 @@ export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
 
   async writeFile(sandboxId: string, path: string, content: string): Promise<void> {
     validateWorkspaceFile(path, content);
-    const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: 30_000 });
-    await sandbox.files.write(path, content);
+    await this.withHandle(sandboxId, 30_000, (sandbox) => sandbox.files.write(path, content));
   }
 
   async readFile(sandboxId: string, path: string): Promise<string> {
     validateWorkspaceFile(path, "");
-    const sandbox = await this.client.connect(sandboxId, { apiKey: this.options.apiKey, timeoutMs: 30_000 });
-    return sandbox.files.read(path);
+    return this.withHandle(sandboxId, 30_000, (sandbox) => sandbox.files.read(path));
   }
 
   /**
@@ -99,6 +135,8 @@ export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
    * four seconds per gigabyte, to restore a process tree the next step never inherits anyway.
    */
   async suspendSandbox(sandboxId: string): Promise<void> {
+    // The handle cannot survive the pause, and a stale one would be handed to the next step.
+    this.handles.delete(sandboxId);
     await this.client.pause(sandboxId, { apiKey: this.options.apiKey, keepMemory: false });
   }
 
@@ -118,6 +156,7 @@ export class E2BSandboxProvider implements InteractiveCodingSandboxProvider {
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
+    this.handles.delete(sandboxId);
     await this.client.kill(sandboxId, { apiKey: this.options.apiKey });
   }
 }

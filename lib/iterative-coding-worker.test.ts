@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { describeArtifact, type ArtifactWrite } from "./artifacts";
 import { IterativeCodingAgentWorker } from "./iterative-coding-worker";
-import type { InteractiveCodingSandboxProvider } from "./providers/contracts";
+import type { InteractiveCodingSandboxProvider } from "../packages/agent-core/src/providers/contracts";
 
 const usage = { inputTokens: 10, outputTokens: 5, totalTokens: 15, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 

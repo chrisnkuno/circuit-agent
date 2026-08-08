@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL, type ChatCompletionCall } from "./circuitnotion";
+import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL, type ChatCompletionUnaryCall } from "./circuitnotion";
 import { buildDynamicPresetsPrompt, DynamicPresetsSchema, type PresetContext, type PresetSuggestion } from "../dynamic-presets";
 
 export type CircuitNotionPresetsOptions = {
@@ -40,9 +40,9 @@ function tryParsePresets(content: string | null | undefined): PresetSuggestion[]
  * billed coding plan, so it deliberately doesn't touch ModelUsage/RWF accounting at all.
  */
 export class CircuitNotionPresetsProvider {
-  private readonly call: ChatCompletionCall;
+  private readonly call: ChatCompletionUnaryCall;
 
-  constructor(private readonly options: CircuitNotionPresetsOptions, call?: ChatCompletionCall) {
+  constructor(private readonly options: CircuitNotionPresetsOptions, call?: ChatCompletionUnaryCall) {
     if (!options.apiKey.trim()) throw new Error("CIRCUITNOTION_API_KEY is required");
     if (!options.model.trim()) throw new Error("CIRCUITNOTION_PRESETS_MODEL is required");
     if (call) {
@@ -53,7 +53,7 @@ export class CircuitNotionPresetsProvider {
         baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL,
         defaultHeaders: buildCircuitNotionHeaders(options.relaySecret),
       });
-      this.call = async (body, signal) => (await client.chat.completions.create(body, { signal })) as unknown as Awaited<ReturnType<ChatCompletionCall>>;
+      this.call = async (body, signal) => (await client.chat.completions.create(body, { signal })) as unknown as Awaited<ReturnType<ChatCompletionUnaryCall>>;
     }
   }
 

@@ -12,12 +12,15 @@ export type TerminalLine = {
   spinner?: boolean;
 };
 
+export type WanderCadenceCommand = "once" | "daily" | "weekly";
+
 export type ParsedCommand =
   | { kind: "help" }
   | { kind: "about" }
   | { kind: "status" }
   | { kind: "clear" }
   | { kind: "run"; taskKind: TaskKind; objective: string }
+  | { kind: "wander"; cadence: WanderCadenceCommand; topic: string | null }
   | { kind: "empty" }
   | { kind: "unknown"; raw: string };
 
@@ -72,6 +75,14 @@ export function parseCommand(input: string): ParsedCommand {
   if (command === "about") return { kind: "about" };
   if (command === "status") return { kind: "status" };
   if (command === "clear") return { kind: "clear" };
+  if (command === "wander") {
+    const maybeCadence = rest[0]?.toLowerCase();
+    const cadence: WanderCadenceCommand =
+      maybeCadence === "daily" || maybeCadence === "weekly" || maybeCadence === "once" ? maybeCadence : "once";
+    const topicWords = maybeCadence === "daily" || maybeCadence === "weekly" || maybeCadence === "once" ? rest.slice(1) : rest;
+    const topic = topicWords.join(" ").trim() || null;
+    return { kind: "wander", cadence, topic };
+  }
   if (command === "run") {
     const maybeKind = rest[0]?.toLowerCase();
     const alias = maybeKind ? TASK_KIND_ALIASES[maybeKind] : undefined;
@@ -98,6 +109,7 @@ export function buildHelpLines(): TerminalLine[] {
   return [
     { tone: "system", text: "Available commands:", delayMs: 0 },
     { tone: "muted", text: '  run coding <objective>          REAL agent run — real model, real E2B sandbox, real RWF cost', delayMs: 40 },
+    { tone: "muted", text: "  wander [once|daily|weekly] [topic]   REAL — Exa briefing + contested research notebook in sandbox", delayMs: 40 },
     { tone: "muted", text: "  run research|writing|operations <objective>   simulated preview — no live worker exists for these yet", delayMs: 40 },
     { tone: "muted", text: "  status                                                  show capability + provider readiness", delayMs: 40 },
     { tone: "muted", text: "  about                                                    what this terminal is (and isn't)", delayMs: 40 },
@@ -110,6 +122,7 @@ export function buildAboutLines(): TerminalLine[] {
   return [
     { tone: "system", text: '"run coding <objective>" is real: it creates an actual task and run in Convex, dispatches a real model, executes in a real E2B sandbox, and spends real (small) RWF against your workspace cap.', delayMs: 0 },
     { tone: "muted", text: "It only runs the steps that have a live worker today (inspect, reproduce, implement, checks) — the approval-gated review step is intentionally left out because no reviewer worker exists yet.", delayMs: 60 },
+    { tone: "muted", text: '"wander" is also real: Exa scouts literature once on the control plane, then the coding sandbox writes a contested notebook (hypotheses, methods critique, rival view, graded consensus). The sandbox itself has no network.', delayMs: 60 },
     { tone: "muted", text: "Every other task kind (research, writing, operations) still plays back a scripted, clearly-labeled simulation, because those workers are not built.", delayMs: 60 },
   ];
 }

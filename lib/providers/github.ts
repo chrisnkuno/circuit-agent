@@ -1,5 +1,5 @@
 import { createHmac, createSign, timingSafeEqual } from "node:crypto";
-import type { RepositoryProvider, RepositoryTarget, ResolvedRepositoryRef, PatchBranchRequest, PullRequestRequest, PullRequestReceipt } from "./contracts";
+import type { RepositoryProvider, RepositoryTarget, ResolvedRepositoryRef, PatchBranchRequest, PullRequestRequest, PullRequestReceipt } from "../../packages/agent-core/src/providers/contracts";
 
 const GITHUB_API = "https://api.github.com";
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;

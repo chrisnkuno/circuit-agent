@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createE2BCodingTools, initializeE2BCodingWorkspace } from "./e2b-coding-tools";
-import type { InteractiveCodingSandboxProvider, SandboxCommand } from "./providers/contracts";
+import type { InteractiveCodingSandboxProvider, SandboxCommand } from "../packages/agent-core/src/providers/contracts";
 
 function fakeSandbox() {
   const commands: SandboxCommand[] = [];
@@ -45,6 +45,38 @@ describe("E2B coding tools", () => {
     const fake = fakeSandbox();
     const search = createE2BCodingTools({ sandbox: fake.sandbox, sandboxId: "sandbox-1", workspaceRoot: "/workspace/repo" }).find((tool) => tool.name === "search_files")!;
     await search.execute({ query: "hello; rm", path: "src" }, { taskId: "t", runId: "r", stepId: "s" });
-    expect(fake.commands[0]).toMatchObject({ program: "rg", args: ["--line-number", "--fixed-strings", "hello; rm", "/workspace/repo/src"] });
+    // Fixed-string matters: the query is data, and `hello; rm` must never become a pattern.
+    expect(fake.commands[0].program).toBe("rg");
+    expect(fake.commands[0].args).toContain("--fixed-strings");
+    expect(fake.commands[0].args.slice(-2)).toEqual(["hello; rm", "/workspace/repo/src"]);
+  });
+
+  it("still searches when the sandbox image has no ripgrep", async () => {
+    // E2B's stock `base` image ships no rg — verified against a live sandbox — and `grep` is not
+    // allowlisted, so this tool returned an error on every run using the default template.
+    const commands: SandboxCommand[] = [];
+    const files: Record<string, string> = {
+      "/workspace/repo/src/a.ts": "const value = 1;\nconst other = 2;\n",
+      "/workspace/repo/src/b.ts": "export { value };\n",
+    };
+    const sandbox: InteractiveCodingSandboxProvider = {
+      async createSandbox() { return { sandboxId: "sandbox-1", status: "created" }; },
+      async stopSandbox() {}, async suspendSandbox() {},
+      async readFile(_id, path) { return files[path] ?? ""; },
+      async writeFile() {},
+      async runCommand(_id, command) {
+        commands.push(command);
+        if (command.program === "rg") return { exitCode: 127, stdout: "", stderr: "rg: not found" };
+        if (command.program === "find") return { exitCode: 0, stdout: Object.keys(files).join("\n"), stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const search = createE2BCodingTools({ sandbox, sandboxId: "sandbox-1", workspaceRoot: "/workspace/repo" }).find((tool) => tool.name === "search_files")!;
+
+    const result = await search.execute({ query: "value" }, { taskId: "t", runId: "r", stepId: "s" });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain("src/a.ts:1: const value = 1;");
+    expect(result.content).toContain("src/b.ts:1: export { value };");
+    expect(commands.some((command) => command.program === "find")).toBe(true);
   });
 });

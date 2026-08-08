@@ -67,7 +67,9 @@ export function formatRwf(value: number) {
   return new Intl.NumberFormat("en-RW", {
     style: "currency",
     currency: "RWF",
-    currencyDisplay: "narrowSymbol",
+    // "narrowSymbol"/"symbol" render as "RF" for this currency in Node/browser ICU data;
+    // "code" is the only currencyDisplay value that reliably prints "RWF".
+    currencyDisplay: "code",
     maximumFractionDigits: 0,
   }).format(value);
 }

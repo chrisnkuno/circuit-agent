@@ -16,6 +16,8 @@ export type ProviderConfiguration = {
   githubAppSlug?: string;
   githubAppPrivateKey?: string;
   githubWebhookSecret?: string;
+  /** Optional — Wander literature scout. Absence does not block coding execution. */
+  exaApiKey?: string;
 };
 
 export type ReadinessReport = {
@@ -23,6 +25,8 @@ export type ReadinessReport = {
   codingExecution: boolean;
   payments: boolean;
   repositoryProvisioning: boolean;
+  /** Live literature briefing for Wander labs; optional and never required for coding. */
+  wanderDiscovery: boolean;
   missing: string[];
 };
 
@@ -68,6 +72,8 @@ export function assessProviderReadiness(config: ProviderConfiguration): Readines
       && has("MODEL_OUTPUT_RWF_PER_MILLION"),
     payments: has("CONVEX_DEPLOYMENT") && has("NEXT_PUBLIC_CONVEX_URL") && has("CIRCUIT_PAY_API_KEY") && has("CIRCUIT_PAY_WEBHOOK_SECRET"),
     repositoryProvisioning: has("CONVEX_DEPLOYMENT") && has("NEXT_PUBLIC_CONVEX_URL") && has("GITHUB_APP_ID") && has("GITHUB_APP_SLUG") && has("GITHUB_APP_PRIVATE_KEY") && has("GITHUB_WEBHOOK_SECRET"),
+    // Optional capability: listed in missing only when someone expects Wander discovery, never gates coding.
+    wanderDiscovery: Boolean(config.exaApiKey?.trim()),
     missing,
   };
 }

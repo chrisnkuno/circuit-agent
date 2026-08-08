@@ -3,6 +3,7 @@
 import { api, internal } from "./_generated/api";
 import { buildTaskPlan } from "../lib/agent-orchestration";
 import { estimateTaskCost } from "../lib/task-cost";
+import { isWanderObjective } from "../packages/agent-core/src/wander";
 import type { Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 
@@ -100,17 +101,29 @@ export async function startCodingRun(
   if (args.costApproval === "required") {
     // The durable record of "this costs X — may I?". Until it is decided, the run sits queued
     // behind an unauthorized payment hold and no worker, model, or sandbox is ever touched.
+    // Wander Exa prefetch waits for approval so a declined quote never spends a search.
     await ctx.runMutation(internal.approvals.requestTaskStartApproval, { taskId, runId, requestedRwf: BigInt(quote.maxRwf) });
     return { taskId, runId, quote: runQuote, awaitingCostApproval: true };
   }
 
-  // The run is already durably queued, and the cron ticks every minute. A nudge that fails is
-  // therefore a latency problem, never a correctness one — letting it reject here would report
-  // a run that genuinely exists and will still execute as a failed start.
-  try {
-    await ctx.runAction(internal.dispatcher.dispatchTick, {});
-  } catch {
-    // Intentionally swallowed: the cron picks the run up on its next tick.
+  // Prefetch Wander evidence before the first coding step so the planner sees the dossier on
+  // attempt one. Awaited (not merely scheduled) so dispatch reserves against the real prompt size.
+  // Idempotent and topic-cached — repeated calls do not spend another Exa search.
+  if (isWanderObjective(objective)) {
+    try {
+      await ctx.runAction(internal.wanderEvidenceActions.prefetchForRun, { runId });
+    } catch {
+      // Prefetch also schedules a dispatch nudge; the ensure path in executeClaimedStep is backup.
+    }
+  } else {
+    // The run is already durably queued, and the cron ticks every minute. A nudge that fails is
+    // therefore a latency problem, never a correctness one — letting it reject here would report
+    // a run that genuinely exists and will still execute as a failed start.
+    try {
+      await ctx.runAction(internal.dispatcher.dispatchTick, {});
+    } catch {
+      // Intentionally swallowed: the cron picks the run up on its next tick.
+    }
   }
   return { taskId, runId, quote: runQuote, awaitingCostApproval: false };
 }

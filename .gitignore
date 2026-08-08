@@ -13,3 +13,9 @@ playwright-report/
 test-results/
 .vercel
 .env*
+
+# Nova CLI local state (sessions, checkpoint index)
+.nova/
+
+# Scratch output from local agent runs
+tmp/

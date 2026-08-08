@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { startCodingRun } from "./codingRunPlan";
+import { expandWanderObjective } from "../packages/agent-core/src/wander";
 
 /** Ticked by cron: claims every due "coding-task" schedule and starts one real run per occurrence. */
 export const runDueCodingSchedules = internalAction({
@@ -16,8 +17,11 @@ export const runDueCodingSchedules = internalAction({
     let failed = 0;
     for (const claim of claims) {
       try {
-        const result = await startCodingRun(ctx, { organizationId: claim.organizationId, objective: claim.objective, idempotencyKey: `${claim.runId}`, authorization: "trusted-organization", costApproval: "pre-authorized" });
-        await ctx.runMutation(internal.scheduledRunsModel.completeCodingScheduleRun, { runId: claim.runId, workerId, status: "completed", summary: `Started task ${result.taskId} for "${claim.objective}".` });
+        // Wander daily/weekly schedules store a random-topic marker; expand it per occurrence so
+        // each tick discovers something new instead of repeating one frozen objective forever.
+        const objective = expandWanderObjective(claim.objective, `${claim.runId}`);
+        const result = await startCodingRun(ctx, { organizationId: claim.organizationId, objective, idempotencyKey: `${claim.runId}`, authorization: "trusted-organization", costApproval: "pre-authorized" });
+        await ctx.runMutation(internal.scheduledRunsModel.completeCodingScheduleRun, { runId: claim.runId, workerId, status: "completed", summary: `Started task ${result.taskId} for "${objective}".` });
         completed += 1;
       } catch (error) {
         await ctx.runMutation(internal.scheduledRunsModel.completeCodingScheduleRun, { runId: claim.runId, workerId, status: "failed", summary: error instanceof Error ? error.message.slice(0, 500) : "Scheduled coding run failed to start" });

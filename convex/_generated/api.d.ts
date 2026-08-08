@@ -42,6 +42,8 @@ import type * as telegramActions from "../telegramActions.js";
 import type * as terminalPresets from "../terminalPresets.js";
 import type * as terminalPresetsActions from "../terminalPresetsActions.js";
 import type * as terminalRuns from "../terminalRuns.js";
+import type * as wanderEvidence from "../wanderEvidence.js";
+import type * as wanderEvidenceActions from "../wanderEvidenceActions.js";
 
 import type {
   ApiFromModules,
@@ -84,6 +86,8 @@ declare const fullApi: ApiFromModules<{
   terminalPresets: typeof terminalPresets;
   terminalPresetsActions: typeof terminalPresetsActions;
   terminalRuns: typeof terminalRuns;
+  wanderEvidence: typeof wanderEvidence;
+  wanderEvidenceActions: typeof wanderEvidenceActions;
 }>;
 
 /**

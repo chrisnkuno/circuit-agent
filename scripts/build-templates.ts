@@ -6,7 +6,7 @@
  * deploy would rebuild the world every time the app ships.
  */
 import { Template, waitForTimeout } from "e2b";
-import { WORKSPACE_PRESETS } from "../lib/sandbox-templates";
+import { WORKSPACE_PRESETS } from "../packages/agent-core/src/sandbox-templates";
 
 const apiKey = process.env.E2B_API_KEY;
 if (!apiKey) throw new Error("E2B_API_KEY is required to build templates");

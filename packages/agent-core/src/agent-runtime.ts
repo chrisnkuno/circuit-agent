@@ -23,6 +23,15 @@ export type AgentModelRequest = {
   tools: AgentToolDefinition[];
   maxOutputTokens: number;
   safetyIdentifier: string;
+  /**
+   * Called with each piece of assistant text as it is generated.
+   *
+   * Optional on purpose: a provider that cannot stream simply never calls it, and the finished
+   * turn it returns is identical either way. That keeps streaming a rendering concern rather than
+   * a second code path through the agent loop — the runtime's accounting, tool handling and stop
+   * conditions all read the completed turn exactly as before.
+   */
+  onTextDelta?: (text: string) => void;
 };
 
 export interface AgentTurnProvider {
@@ -56,6 +65,7 @@ export type AgentTool = AgentToolDefinition & {
 };
 
 export type AgentRuntimeEvent =
+  | { type: "assistant_delta"; iteration: number; text: string }
   | { type: "model_turn"; iteration: number; responseId: string; model: string; toolCallCount: number }
   | { type: "tool_result"; toolCallId: string; toolName: string; isError: boolean; effect: ToolEffect; content: string }
   | { type: "runtime_stop"; status: AgentRuntimeResult["status"]; summary: string };
@@ -169,7 +179,15 @@ export class BoundedAgentRuntime {
       await this.dependencies.control.heartbeat();
       if (await this.dependencies.control.isCancellationRequested()) return stop("cancelled", "Run cancelled at a safe checkpoint.", iteration - 1);
 
-      const turn = await this.dependencies.model.complete({ messages: [...messages], tools: definitions, maxOutputTokens: request.maxOutputTokens, safetyIdentifier: request.safetyIdentifier });
+      const turn = await this.dependencies.model.complete({
+        messages: [...messages],
+        tools: definitions,
+        maxOutputTokens: request.maxOutputTokens,
+        safetyIdentifier: request.safetyIdentifier,
+        // Deltas are fire-and-forget: a slow consumer must never stall generation, and a lost
+        // delta costs nothing because the completed turn is still the source of truth.
+        onTextDelta: (text) => void this.dependencies.control.persistEvent({ type: "assistant_delta", iteration, text }),
+      });
       usage = addUsage(usage, turn.usage);
       actualModelRwf = priceActualModelUsage(usage.inputTokens, usage.outputTokens, this.dependencies.prices);
       if (actualModelRwf > request.modelReservationRwf) throw new Error("Actual model usage exceeds the reserved model budget");
@@ -180,7 +198,10 @@ export class BoundedAgentRuntime {
         const summary = turn.content.trim() || "Model completed without a summary.";
         messages.push({ role: "assistant", content: summary });
         return workspaceNeedsVerification
-          ? stop("needs_verification", "Workspace changes were made without passing verification evidence.", iteration)
+          // The gate must lead — this is not a success, and a reader skimming the ledger has to see
+          // that first. But replacing the summary outright threw away the only account of what the
+          // run actually did, which is the thing a person needs in order to decide what to do next.
+          ? stop("needs_verification", `Workspace changes were made without passing verification evidence. The agent reported: ${summary}`, iteration)
           : stop("completed", summary, iteration);
       }
       if (turn.finishReason !== "tool_calls" || turn.toolCalls.length === 0) return stop("failed", "Model returned an invalid tool-call turn.", iteration);

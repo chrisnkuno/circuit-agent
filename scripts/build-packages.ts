@@ -1,0 +1,83 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Builds both packages into something npm can actually install.
+ *
+ * The core ships as mirrored ES modules plus declarations rather than one bundle, so a consumer can
+ * import a single adapter without pulling the whole runtime. That shape has one sharp edge: Node's
+ * ESM loader requires file extensions, and TypeScript emits the extensionless specifiers it was
+ * given. The emitted files are rewritten below rather than the sources, because adding `.js` to
+ * every import in a TypeScript codebase makes the source worse to read in exchange for nothing.
+ *
+ * The CLI ships as a single bundle with its dependencies inlined — an installed binary should not
+ * be able to break because a transitive dependency resolved differently on someone else's machine.
+ */
+
+// Resolved from this file rather than the working directory: npm runs lifecycle scripts with the
+// package as cwd, so anything relative breaks the moment `prepublishOnly` invokes it.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const CORE = path.join(ROOT, "packages/agent-core");
+const CLI = path.join(ROOT, "packages/nova-cli");
+const TSC = path.join(ROOT, "node_modules/.bin/tsc");
+
+declare const Bun: {
+  build(options: Record<string, unknown>): Promise<{ success: boolean; logs: unknown[] }>;
+  spawn(command: string[], options: Record<string, unknown>): { exited: Promise<number> };
+};
+
+async function run(command: string[], cwd = ROOT): Promise<void> {
+  const proc = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
+  const code = await proc.exited;
+  if (code !== 0) throw new Error(`${command.join(" ")} exited ${code}`);
+}
+
+/** Walks a built tree and gives every relative import the extension Node insists on. */
+async function addExtensions(directory: string): Promise<number> {
+  let fixed = 0;
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      fixed += await addExtensions(full);
+      continue;
+    }
+    if (!entry.name.endsWith(".js") && !entry.name.endsWith(".d.ts")) continue;
+    const source = await fs.readFile(full, "utf8");
+    const updated = source.replace(
+      /(from\s+|import\(\s*)(["'])(\.[^"']*?)\2/g,
+      (match, prefix: string, quote: string, spec: string) => {
+        if (/\.(js|json|css)$/.test(spec)) return match;
+        fixed += 1;
+        return `${prefix}${quote}${spec}.js${quote}`;
+      },
+    );
+    if (updated !== source) await fs.writeFile(full, updated, "utf8");
+  }
+  return fixed;
+}
+
+await fs.rm(path.join(CORE, "dist"), { recursive: true, force: true });
+await fs.rm(path.join(CLI, "dist"), { recursive: true, force: true });
+
+// 1. Core: JavaScript and declarations, mirroring the source layout.
+await run([TSC, "-p", "tsconfig.build.json"], CORE);
+const rewritten = await addExtensions(path.join(CORE, "dist"));
+console.log(`agent-core: emitted modules and types, rewrote ${rewritten} import specifiers`);
+
+// 2. CLI: one self-contained executable.
+const built = await Bun.build({
+  entrypoints: [path.join(CLI, "src", "nova.ts")],
+  target: "node",
+  outdir: path.join(CLI, "dist"),
+  naming: "nova.js",
+});
+if (!built.success) {
+  for (const log of built.logs) console.error(log);
+  process.exit(1);
+}
+const output = path.join(CLI, "dist", "nova.js");
+const bundle = await fs.readFile(output, "utf8");
+await fs.writeFile(output, `#!/usr/bin/env node\n${bundle.replace(/^(#![^\n]*\n|\/\/ @bun\n)+/, "")}`, "utf8");
+await fs.chmod(output, 0o755);
+console.log(`nova-cli: built ${output} (${((await fs.stat(output)).size / 1_000_000).toFixed(2)} MB)`);

@@ -47,6 +47,14 @@ describe("parseCommand", () => {
   it("falls back to unknown for anything else", () => {
     expect(parseCommand("sudo rm -rf /")).toEqual({ kind: "unknown", raw: "sudo rm -rf /" });
   });
+
+  it("parses wander cadence and optional topic", () => {
+    expect(parseCommand("wander")).toEqual({ kind: "wander", cadence: "once", topic: null });
+    expect(parseCommand("wander once")).toEqual({ kind: "wander", cadence: "once", topic: null });
+    expect(parseCommand("wander daily")).toEqual({ kind: "wander", cadence: "daily", topic: null });
+    expect(parseCommand("wander weekly coral bleaching")).toEqual({ kind: "wander", cadence: "weekly", topic: "coral bleaching" });
+    expect(parseCommand("wander sleep and memory")).toEqual({ kind: "wander", cadence: "once", topic: "sleep and memory" });
+  });
 });
 
 describe("buildBanner", () => {

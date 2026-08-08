@@ -1,0 +1,58 @@
+{
+  "name": "circuit-nova-core",
+  "version": "0.1.0",
+  "description": "Provider-neutral coding-agent core: a bounded tool-use runtime, local and sandboxed workspace backends, model adapters for Anthropic/OpenAI-compatible providers, and multi-currency cost accounting.",
+  "keywords": [
+    "agent",
+    "coding-agent",
+    "llm",
+    "tool-use",
+    "anthropic",
+    "openai",
+    "sandbox"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "openai": "^6.49.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.30.0",
+    "e2b": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "e2b": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run ../../scripts/build-packages.ts",
+    "prepublishOnly": "bun run ../../scripts/build-packages.ts"
+  }
+}

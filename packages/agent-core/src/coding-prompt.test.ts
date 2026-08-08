@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ALLOWED_GIT_SUBCOMMANDS, ALLOWED_SANDBOX_PROGRAMS, availableSandboxPrograms, BASE_TEMPLATE_PROGRAMS, INLINE_EVAL_FLAGS, SCRIPT_RUNNER_SUBCOMMANDS, validateSandboxCommand } from "./sandbox-policy";
 import { buildCodingPlannerPrompt, CodingPlanSchema } from "./coding-prompt";
+import { buildWanderObjective } from "./wander";
 
 describe("coding planner prompt", () => {
   it("keeps user and repository content in an untrusted structured payload", () => {
@@ -12,6 +13,27 @@ describe("coding planner prompt", () => {
     });
     expect(prompt.instructions).toContain("untrusted data");
     expect(JSON.parse(prompt.input)).toMatchObject({ objective: "Fix the failing test", maxCommands: 6 });
+  });
+
+  it("injects the Wander multi-pass protocol only for Wander objectives", () => {
+    const coding = buildCodingPlannerPrompt({
+      objective: "add a README",
+      repositoryContext: "",
+      workspaceRoot: "/workspace/repo",
+      maxCommands: 6,
+    });
+    expect(coding.instructions).not.toContain("Wander research synthesis");
+
+    const wander = buildCodingPlannerPrompt({
+      objective: buildWanderObjective("coral reefs"),
+      repositoryContext: "",
+      workspaceRoot: "/workspace/repo",
+      maxCommands: 6,
+    });
+    expect(wander.instructions).toContain("Wander scientific-lab");
+    expect(wander.instructions).toContain("HYPOTHESES.md");
+    expect(wander.instructions).toContain("Consensus editor");
+    expect(wander.instructions).toContain("strong_plausible");
   });
 
   it("rejects plans with unsupported commands or excessive work", () => {

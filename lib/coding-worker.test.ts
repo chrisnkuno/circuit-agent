@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { describeArtifact, type ArtifactStore, type ArtifactWrite } from "./artifacts";
 import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "./coding-worker";
-import type { InteractiveCodingSandboxProvider, SandboxCommand } from "./providers/contracts";
-import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult } from "./providers/model";
+import type { InteractiveCodingSandboxProvider, SandboxCommand } from "../packages/agent-core/src/providers/contracts";
+import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult } from "../packages/agent-core/src/providers/model";
+import { buildWanderObjective } from "../packages/agent-core/src/wander";
+import { WANDER_REPORT_PATH } from "./wander-report";
 
 const prices = { inputRwfPerMillionTokens: 2_000, outputRwfPerMillionTokens: 8_000 };
 const usage = { inputTokens: 1_000, outputTokens: 500, totalTokens: 1_500, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 100 };
@@ -22,7 +24,7 @@ const baseRequest = {
   modelReservationRwf: 100,
 };
 
-function setup(options: { commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean; succeedAfterRepairs?: number; repairStatus?: "blocked"; policyRefusal?: boolean; captureUnavailable?: boolean } = {}) {
+function setup(options: { slowCommandMs?: number; recordTimeouts?: number[]; commandExitCode?: number; cancelledAfterChecks?: number; usageOverride?: typeof usage; reuseUnreachable?: boolean; succeedAfterRepairs?: number; repairStatus?: "blocked"; policyRefusal?: boolean; captureUnavailable?: boolean; wanderLab?: boolean } = {}) {
   const calls: string[] = [];
   const writes: ArtifactWrite[] = [];
   let cancellationChecks = 0;
@@ -59,13 +61,36 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
   const sandbox: InteractiveCodingSandboxProvider = {
     createSandbox: async () => { calls.push("create"); return { sandboxId: "sandbox_1", status: "created" }; },
     writeFile: async () => { calls.push("write"); },
-    readFile: async (_sandboxId: string, path: string) => { calls.push("read"); return `contents of ${path}`; },
+    readFile: async (_sandboxId: string, path: string) => {
+      calls.push("read");
+      if (options.wanderLab && path.includes("CONSENSUS.md")) return "# Role: Consensus Editor\n\nverified strong_plausible speculative\n";
+      if (options.wanderLab && path.includes("EVIDENCE.md")) return "# Literature briefing\n\nhttps://example.com/a\n";
+      if (options.wanderLab && path.includes("HYPOTHESES.md")) return "# Role: Principal investigator\n\nHypothesis\n";
+      if (options.wanderLab && path.includes("REVIEW_METHODS.md")) return "# Role: Methodologist\n\nCritique\n";
+      if (options.wanderLab && path.includes("REVIEW_RIVAL.md")) return "# Role: Rival theorist\n\nAlt\n";
+      return `contents of ${path}`;
+    },
     runCommand: async (sandboxId: string, command: SandboxCommand) => {
       calls.push(`run:${command.program}:${command.args[0] ?? ""}`);
+      if (options.recordTimeouts && command.program === "bun") options.recordTimeouts.push(command.timeoutMs);
+      if (options.slowCommandMs && command.program === "bun") await new Promise((resolve) => setTimeout(resolve, options.slowCommandMs));
       if (options.reuseUnreachable && sandboxId === "sandbox_gone") throw new Error("sandbox not found");
       if (command.program === "git") return { exitCode: 0, stdout: "diff --git a/src/value.ts b/src/value.ts", stderr: "" };
       if (command.program === "find") {
         if (options.captureUnavailable) throw new Error("workspace listing unavailable");
+        if (options.wanderLab) {
+          return {
+            exitCode: 0,
+            stdout: [
+              "/workspace/repo/wander/EVIDENCE.md",
+              "/workspace/repo/wander/HYPOTHESES.md",
+              "/workspace/repo/wander/REVIEW_METHODS.md",
+              "/workspace/repo/wander/REVIEW_RIVAL.md",
+              "/workspace/repo/wander/CONSENSUS.md",
+            ].join("\n") + "\n",
+            stderr: "",
+          };
+        }
         return { exitCode: 0, stdout: "/workspace/repo/main.py\n/workspace/repo/test_main.py\n", stderr: "" };
       }
       if (options.policyRefusal && command.program === "bun") throw new Error("Git command is not read-only");
@@ -94,6 +119,22 @@ function setup(options: { commandExitCode?: number; cancelledAfterChecks?: numbe
 }
 
 describe("coding agent worker", () => {
+  it("harvests a print-ready Wander REPORT.html after a successful lab step", async () => {
+    const test = setup({ wanderLab: true });
+    const objective = buildWanderObjective("sleep and memory");
+    const result = await test.worker.execute({
+      ...baseRequest,
+      objective,
+      maxCommands: 8,
+      workspaceSeedFiles: [{ path: "wander/EVIDENCE.md", content: "# Literature briefing\n" }],
+    });
+    expect(result.status).toBe("completed");
+    const report = test.writes.find((write) => write.path === WANDER_REPORT_PATH);
+    expect(report?.mediaType).toBe("text/html");
+    expect(report?.content).toContain("Wander lab report");
+    expect(report?.content).toContain("Consensus");
+  });
+
   it("writes model changes, runs bounded checks, captures evidence, and always releases the sandbox", async () => {
     const test = setup();
     const result = await test.worker.execute(baseRequest);
@@ -233,6 +274,36 @@ describe("capturing what a step produced", () => {
     expect(test.calls).toContain("run:find:/workspace/repo");
     const files = test.writes.filter((write) => write.kind === "workspace_file");
     expect(files.length).toBeGreaterThan(0);
+  });
+
+  it("stops inside its time budget and still captures the work already produced", async () => {
+    const { worker, writes, calls } = setup({ slowCommandMs: 1_000 });
+    // Room for one command past the capture reserve; the second would start with too little left.
+    const result = await worker.execute({ ...baseRequest, stepDeadlineMs: 45_000 + 5_500 });
+
+    expect(result.stoppedForTime).toBe(true);
+    expect(result.status).toBe("completed");
+    expect(result.commandsExecuted).toBe(1);
+    expect(result.summary).toContain("time budget");
+    // The point of stopping early: evidence still exists.
+    expect(writes.some((write) => write.kind === "workspace_file")).toBe(true);
+    expect(calls).toContain("suspend");
+  });
+
+  it("clamps a command that asks for longer than the step has left", async () => {
+    const seen: number[] = [];
+    const { worker } = setup({ recordTimeouts: seen });
+    await worker.execute({ ...baseRequest, stepDeadlineMs: 60_000 });
+    // Plan asks for 60s per command; only ~15s of working time exists after the capture reserve.
+    expect(seen[0]).toBeLessThan(60_000);
+    expect(seen[0]).toBeGreaterThan(0);
+  });
+
+  it("runs unbounded when no deadline is given, so existing callers are unaffected", async () => {
+    const { worker } = setup({});
+    const result = await worker.execute(baseRequest);
+    expect(result.stoppedForTime).toBe(false);
+    expect(result.commandsExecuted).toBe(2);
   });
 
   it("never lets a failed capture cost the step its result", async () => {

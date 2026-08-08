@@ -12,7 +12,7 @@ export type ArtifactWrite = {
   runId: string;
   stepId: string;
   kind: ArtifactKind;
-  mediaType: "application/json" | "text/plain" | "text/x-diff";
+  mediaType: "application/json" | "text/plain" | "text/x-diff" | "text/html";
   content: string;
   /** Workspace-relative path, when the artifact is a file the step produced. */
   path?: string;

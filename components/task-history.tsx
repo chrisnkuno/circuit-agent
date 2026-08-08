@@ -2,9 +2,12 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { ChevronRight, FolderOpen, History, Square } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { formatRwf } from "@/lib/task-cost";
+import { SidePanel } from "@/components/side-panel";
+import { DownloadWorkButton } from "@/components/download-work-button";
 
 type TaskDoc = Doc<"tasks">;
 type TaskStatus = TaskDoc["status"];
@@ -74,14 +77,21 @@ export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { org
     }
   }
 
-  if (!tasks || tasks.length === 0) return null;
+  if (!organizationId) return null;
+
+  if (!tasks || tasks.length === 0) {
+    return (
+      <SidePanel
+        title="Task history"
+        icon={History}
+        count={0}
+        empty={<p className="side-panel-empty">Runs you start in the console show up here with live status and spend.</p>}
+      />
+    );
+  }
 
   return (
-    <div className="task-history">
-      <div className="task-history-header">
-        <span className="task-history-title">Task history</span>
-        <span className="task-history-count">{tasks.length}</span>
-      </div>
+    <SidePanel title="Task history" icon={History} count={tasks.length}>
       {stopError && <p className="task-history-error">{stopError}</p>}
       {FOLDERS.map((folder) => {
         const items = tasks.filter((task) => folder.match(task.status));
@@ -90,7 +100,7 @@ export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { org
         return (
           <div className="task-folder" key={folder.key}>
             <button type="button" className="task-folder-toggle" onClick={() => setOpenFolder(isOpen ? null : folder.key)} aria-expanded={isOpen}>
-              <span className={`task-folder-glyph${isOpen ? " task-folder-glyph-open" : ""}`}>▸</span>
+              <ChevronRight size={13} strokeWidth={2} className={`task-folder-glyph${isOpen ? " task-folder-glyph-open" : ""}`} aria-hidden="true" />
               <span className="task-folder-label">{folder.label}</span>
               <span className="task-folder-count">{items.length}</span>
             </button>
@@ -126,14 +136,18 @@ export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { org
                       </div>
                       <div className="task-card-actions">
                         <button type="button" className="task-card-resume" onClick={() => onResumeTask(task._id)}>
-                          View live status →
+                          View live
+                          <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
                         </button>
-                        <button type="button" className="task-card-files" onClick={() => onOpenFiles(task._id)}>
+                        <button type="button" className="task-card-files" onClick={() => onOpenFiles(task._id)} title="View produced files">
+                          <FolderOpen size={13} strokeWidth={1.75} aria-hidden="true" />
                           Files
                         </button>
+                        <DownloadWorkButton taskId={task._id} className="task-card-files task-card-zip" label="Zip" />
                         {canStop && (
-                          <button type="button" className="task-card-stop" disabled={stoppingTaskId === task._id} onClick={() => void stop(task._id)}>
-                            {stoppingTaskId === task._id ? "Stopping…" : "Stop"}
+                          <button type="button" className="task-card-stop" disabled={stoppingTaskId === task._id} onClick={() => void stop(task._id)} title="Stop this task">
+                            <Square size={11} strokeWidth={2.25} aria-hidden="true" />
+                            {stoppingTaskId === task._id ? "…" : "Stop"}
                           </button>
                         )}
                       </div>
@@ -145,6 +159,6 @@ export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { org
           </div>
         );
       })}
-    </div>
+    </SidePanel>
   );
 }

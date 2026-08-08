@@ -9,52 +9,20 @@ import { planDispatch, qualifiedStepId, toDispatchPlan } from "../lib/dispatcher
 import type { AgentRunPlan } from "../lib/agent-orchestration";
 import type { TaskBudget } from "../lib/agent-budget";
 import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "../lib/coding-worker";
-import { createCodingModelProvider, createE2BProvider, createModelPriceCatalog } from "../lib/providers/factory";
-import type { CodingModelProvider, CodingPlanRequest } from "../lib/providers/model";
-import type { InteractiveCodingSandboxProvider } from "../lib/providers/contracts";
-import type { ModelPriceCatalog } from "../lib/model-cost";
+import { createCodingModelProvider, createE2BProvider, createModelPriceCatalog } from "../packages/agent-core/src/providers/factory";
+import type { CodingModelProvider, CodingPlanRequest } from "../packages/agent-core/src/providers/model";
+import type { InteractiveCodingSandboxProvider } from "../packages/agent-core/src/providers/contracts";
+import type { ModelPriceCatalog } from "../packages/agent-core/src/model-cost";
 import { createConvexArtifactStore } from "./lib/artifactStore";
 import { createWorkerControl } from "./lib/workerControl";
-import { classifyWorkerFailure, retryDelayForFailure, summarizeWorkerError } from "../lib/worker-runtime";
-import { findWorkspacePreset, presetPrograms } from "../lib/sandbox-templates";
+import { classifyWorkerFailure, maxAttemptsForFailure, retryDelayForFailure, summarizeWorkerError } from "../lib/worker-runtime";
+import { findWorkspacePreset } from "../packages/agent-core/src/sandbox-templates";
+import { isWanderObjective, resolveExecutionSession } from "../packages/agent-core/src/wander";
+import { buildStepRequest } from "../lib/coding-step-request";
 
-const REPOSITORY_CONTEXT = "No repository is connected yet. There is no existing codebase to inspect; work only within the provided workspace using the allowed commands.";
-// The worker only heartbeats once before the model call and then again per sandbox command
-// (see lib/coding-worker.ts) — nothing renews the lease while the model call itself is in
-// flight. The lease must comfortably outlast the model timeout below plus sandbox setup and
-// verification time, or a slow-but-legitimate model response can race its own lease expiry.
-const CLAIM_LEASE_MS = 180_000;
 // Shared with lease recovery (crons.ts) so a step gets one attempt budget in total, whether an
 // attempt died loudly with a transient error or silently by letting its lease lapse.
 const MAX_STEP_ATTEMPTS = 3;
-const SANDBOX_RUNTIME_SECONDS = 300;
-
-function buildStepRequest(taskTitle: string, runObjective: string, taskId: string, stepId: string, workspacePresetId?: string): CodingPlanRequest {
-  const preset = findWorkspacePreset(workspacePresetId);
-  return {
-    // What this workspace actually ships, so the planner is never offered a tool the image lacks.
-    templatePrograms: presetPrograms(preset),
-    taskId,
-    stepId,
-    objective: `${taskTitle}. ${runObjective}`.slice(0, 4_000),
-    repositoryContext: REPOSITORY_CONTEXT,
-    workspaceRoot: "/workspace/repo",
-    maxCommands: 6,
-    // A reasoning model spends output tokens on reasoning before it emits a single character of
-    // the plan JSON, and the provider fails the step closed on a truncated plan rather than
-    // execute half of one. 4,000 was not enough headroom: a live "reproduce" step died on
-    // "finish reason length". The extra ceiling only costs what is actually generated, and the
-    // per-step reservation it implies still sits far inside a standard task cap.
-    maxOutputTokens: 8_000,
-    // A reasoning-capable model's response time varies a lot with how much it "thinks" —
-    // one observed live call used 1024 reasoning tokens and still finished in ~14s, but the
-    // same depth under worse conditions (provider load, a harder objective) can comfortably
-    // exceed 60s. 60s produced a real "Request was aborted" failure in production.
-    timeoutMs: 90_000,
-    reasoningEffort: "low",
-    safetyIdentifier: `org_${taskId}`.slice(0, 64),
-  };
-}
 
 type StepRunParams = {
   runId: Id<"agentRuns">;
@@ -69,6 +37,10 @@ type StepRunParams = {
   providerName: string;
   /** Attempts already consumed by this step, including the current one (set at claim time). */
   attempts: number;
+  claimLeaseMs: number;
+  sandboxRuntimeSeconds: number;
+  /** Wall-clock ceiling the worker keeps itself inside, below Convex's 10-minute action limit. */
+  stepDeadlineMs: number;
 };
 
 async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<void> {
@@ -76,7 +48,7 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
     model: params.model,
     sandbox: params.sandbox,
     artifacts: createConvexArtifactStore(ctx, params.workerId),
-    control: createWorkerControl(ctx, { runId: params.runId, workerId: params.workerId, leaseMs: CLAIM_LEASE_MS }),
+    control: createWorkerControl(ctx, { runId: params.runId, workerId: params.workerId, leaseMs: params.claimLeaseMs }),
     prices: params.prices,
   });
 
@@ -86,7 +58,8 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
       ...params.request,
       reuseSandboxId: params.reuseSandboxId,
       runId: params.runId,
-      sandboxRuntimeSeconds: SANDBOX_RUNTIME_SECONDS,
+      sandboxRuntimeSeconds: params.sandboxRuntimeSeconds,
+      stepDeadlineMs: params.stepDeadlineMs,
       modelReservationRwf: params.reservationRwf,
     });
   } catch (error) {
@@ -94,7 +67,7 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
     // work itself. If it looks transient, hand the step back for another attempt instead of
     // failing the run over a provider hiccup. (A worker that *does* reach a verdict returns
     // status "failed" below; that is a real answer about the work and is never retried.)
-    if (classifyWorkerFailure(error) === "transient" && params.attempts < MAX_STEP_ATTEMPTS) {
+    if (classifyWorkerFailure(error) === "transient" && params.attempts < maxAttemptsForFailure(error, MAX_STEP_ATTEMPTS)) {
       const released = await ctx.runMutation(internal.agentRuns.releaseStepForRetry, {
         runId: params.runId,
         stepId: params.stepId,
@@ -165,6 +138,7 @@ export const executeClaimedStep = internalAction({
     taskId: v.id("tasks"),
     taskTitle: v.string(),
     runObjective: v.string(),
+    researchBrief: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args): Promise<null> => {
@@ -184,18 +158,31 @@ export const executeClaimedStep = internalAction({
       });
       return null;
     }
+    // Backup ensure: if prefetch raced the claim, finish the literature briefing once here.
+    let researchBrief = args.researchBrief ?? null;
+    if (isWanderObjective(args.runObjective) && !researchBrief?.trim()) {
+      try {
+        researchBrief = await ctx.runAction(internal.wanderEvidenceActions.prefetchForRun, { runId: args.runId });
+      } catch {
+        researchBrief = null;
+      }
+    }
+    const session = resolveExecutionSession(args.runObjective);
     await runCodingStep(ctx, {
       runId: args.runId,
       stepId: args.stepId,
       workerId: args.workerId,
       reservationRwf: args.reservationRwf,
-      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId, args.workspacePresetId),
+      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId, args.workspacePresetId, researchBrief),
       reuseSandboxId: args.reuseSandboxId,
       attempts: args.attempts,
       model,
       sandbox,
       prices,
       providerName: env.CODING_MODEL_PROVIDER ?? "unknown",
+      claimLeaseMs: session.claimLeaseMs,
+      sandboxRuntimeSeconds: session.sandboxRuntimeSeconds,
+      stepDeadlineMs: session.stepDeadlineMs,
     });
     return null;
   },
@@ -248,9 +235,11 @@ export const dispatchTick = internalAction({
       if (!task) continue;
       budgetsByRun[run._id] = { maxRwf: Number(task.maxRwf), spentRwf: Number(task.spentRwf), reservedRwf: Number(task.reservedRwf) };
       if (!prices) continue;
+      // Hold Wander dispatch until the literature scout finishes so prompt reservation matches the dossier.
+      if (isWanderObjective(run.objective) && !run.researchBrief?.trim()) continue;
       for (const step of steps) {
         if (step.role !== "coding") continue;
-        const request = buildStepRequest(task.title, run.objective, task._id, step._id, run.workspacePresetId);
+        const request = buildStepRequest(task.title, run.objective, task._id, step._id, run.workspacePresetId, run.researchBrief);
         requestByStepId.set(qualifiedStepId(run._id, step.stepKey), request);
         // Reserve for one repair as well as the first attempt. Reserving only the first would
         // make the repair loop unaffordable by construction: it stops as soon as the remaining
@@ -263,18 +252,20 @@ export const dispatchTick = internalAction({
     const decisions = planDispatch({ plans, globalParallelism: 4, codingExecutionReady, budgetsByRun, estimatedRwfByStep });
     const stepById = new Map(snapshot.flatMap(({ run, steps }) => steps.map((step) => [qualifiedStepId(run._id, step.stepKey), step] as const)));
 
+    const objectiveByRunId = new Map(snapshot.map(({ run }) => [run._id as string, run.objective] as const));
     let dispatched = 0;
     for (const decision of decisions) {
       if (decision.action !== "dispatch" || !decision.step) continue;
       const stepDoc = stepById.get(decision.step.id);
       if (!stepDoc) continue;
       const workerId = `dispatcher_${crypto.randomUUID()}`;
+      const objective = objectiveByRunId.get(decision.runId) ?? "";
       const claim = await ctx.runMutation(internal.agentRuns.claimStep, {
         runId: decision.runId as Id<"agentRuns">,
         stepId: stepDoc._id,
         workerId,
         estimatedRwf: BigInt(decision.reservationRwf),
-        leaseMs: CLAIM_LEASE_MS,
+        leaseMs: resolveExecutionSession(objective).claimLeaseMs,
       });
       // A successful claim already scheduled its own execution inside the same transaction,
       // so there is nothing to await here — the tick moves straight on to the next decision.

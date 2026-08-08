@@ -6,7 +6,7 @@ import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import { CircuitNotionPresetsProvider } from "./circuitnotion-presets";
 import type { CodingModelProvider } from "./model";
 import type { InteractiveCodingSandboxProvider } from "./contracts";
-import type { ModelPriceCatalog } from "../model-cost";
+import { modelPricesFromEnvironment, type ModelPriceCatalog } from "../model-cost";
 
 export type ProviderEnvironment = {
   E2B_API_KEY?: string;
@@ -26,6 +26,8 @@ export type ProviderEnvironment = {
   CIRCUITNOTION_PRESETS_MODEL?: string;
   CODING_MODEL_PROVIDER?: string;
   MODEL_INPUT_RWF_PER_MILLION?: string;
+  /** Optional: the provider's discounted rate for cache-served input tokens. */
+  MODEL_CACHED_INPUT_RWF_PER_MILLION?: string;
   MODEL_OUTPUT_RWF_PER_MILLION?: string;
 };
 
@@ -123,8 +125,6 @@ export function createCodingModelProvider(environment: ProviderEnvironment): Cod
 }
 
 export function createModelPriceCatalog(environment: ProviderEnvironment): ModelPriceCatalog | undefined {
-  const inputRwfPerMillionTokens = parsePositiveInteger(environment.MODEL_INPUT_RWF_PER_MILLION, "MODEL_INPUT_RWF_PER_MILLION");
-  const outputRwfPerMillionTokens = parsePositiveInteger(environment.MODEL_OUTPUT_RWF_PER_MILLION, "MODEL_OUTPUT_RWF_PER_MILLION");
-  if (inputRwfPerMillionTokens === undefined || outputRwfPerMillionTokens === undefined) return undefined;
-  return { inputRwfPerMillionTokens, outputRwfPerMillionTokens };
+  return modelPricesFromEnvironment(environment);
 }
+

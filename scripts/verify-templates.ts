@@ -6,8 +6,8 @@
  * image reintroduces exactly the failure presets exist to remove — a planner reaching for a tool
  * that is not there — so this asks each built sandbox directly rather than trusting the list.
  */
-import { E2BSandboxProvider } from "../lib/providers/e2b";
-import { presetPrograms, WORKSPACE_PRESETS } from "../lib/sandbox-templates";
+import { E2BSandboxProvider } from "../packages/agent-core/src/providers/e2b";
+import { presetPrograms, WORKSPACE_PRESETS } from "../packages/agent-core/src/sandbox-templates";
 
 const apiKey = process.env.E2B_API_KEY;
 if (!apiKey) throw new Error("E2B_API_KEY is required to verify templates");

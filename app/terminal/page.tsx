@@ -1,9 +1,22 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "../../components/terminal.css";
 import { Starfield } from "@/components/starfield";
 import { AuthPanel } from "@/components/auth-panel";
 import { TerminalWorkspace } from "@/components/terminal-workspace";
+
+const novaSans = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-nova-sans",
+  display: "swap",
+});
+
+const novaMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-nova-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Circuit-Nova — Agent Terminal",
@@ -12,7 +25,7 @@ export const metadata: Metadata = {
 
 export default function TerminalPage() {
   return (
-    <div className="terminal-page">
+    <div className={`terminal-page ${novaSans.variable} ${novaMono.variable}`}>
       <Starfield />
       <div className="nova-shell">
         <header className="nova-topbar">

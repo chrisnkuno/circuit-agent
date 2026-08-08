@@ -2,8 +2,16 @@
 
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { CalendarClock, Compass, Link2, Link2Off, MessagesSquare } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { useCurrentOrganization } from "@/components/auth-panel";
+import { SidePanel } from "@/components/side-panel";
+import {
+  buildWanderScheduleObjective,
+  isWanderObjective,
+  WANDER_CADENCE_CRON,
+  type WanderCadence,
+} from "../packages/agent-core/src/wander";
 
 const INTERVAL_PRESETS = [
   { label: "Every hour", cron: "0 * * * *" },
@@ -29,9 +37,11 @@ export function SchedulePanel() {
   const [objective, setObjective] = useState("");
   const [cron, setCron] = useState(INTERVAL_PRESETS[2].cron);
   const [notice, setNotice] = useState<string | null>(null);
+  const [wanderBusy, setWanderBusy] = useState<Exclude<WanderCadence, "once"> | null>(null);
 
   const linkedTelegram = links?.find((link) => link.channel === "telegram" && link.status === "linked");
-  const codingSchedules = (schedules ?? []).filter((schedule) => schedule.workflowTemplate === "coding-task");
+  const codingSchedules = (schedules ?? []).filter((schedule) => schedule.workflowTemplate === "coding-task" && !isWanderObjective(schedule.objective ?? ""));
+  const wanderSchedules = (schedules ?? []).filter((schedule) => schedule.workflowTemplate === "coding-task" && isWanderObjective(schedule.objective ?? ""));
 
   async function handleLinkTelegram() {
     if (!organization) return;
@@ -66,18 +76,45 @@ export function SchedulePanel() {
     }
   }
 
+  async function enableWander(cadence: Exclude<WanderCadence, "once">) {
+    if (!organization) return;
+    setWanderBusy(cadence);
+    setNotice(null);
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const scheduleId = await createSchedule({
+        organizationId: organization._id,
+        title: `Wander ${cadence}`,
+        workflowTemplate: "coding-task",
+        cronExpression: WANDER_CADENCE_CRON[cadence],
+        timezone,
+        connectorIds: [],
+        objective: buildWanderScheduleObjective(cadence),
+      });
+      await setScheduleStatus({ scheduleId, status: "active" });
+      setNotice(`Wander ${cadence} is on — each tick picks a topic, pulls a thrifty Exa briefing, and writes the contested notebook in a real sandbox.`);
+    } catch (error) {
+      setNotice(errorMessage(error));
+    } finally {
+      setWanderBusy(null);
+    }
+  }
+
   if (!organization) return null;
 
   return (
     <div className="schedule-panel">
-      <div className="schedule-section">
-        <div className="schedule-section-head">
-          <h3>Channels</h3>
-          {linkedTelegram && <span className="schedule-linked">Telegram linked</span>}
-        </div>
+      <SidePanel
+        title="Channels"
+        icon={MessagesSquare}
+        actions={linkedTelegram ? <span className="schedule-linked">Linked</span> : undefined}
+      >
         {linkedTelegram ? (
           <div className="schedule-row">
-            <button className="outline" onClick={() => revokeLink({ linkId: linkedTelegram._id })}>Unlink Telegram</button>
+            <button className="outline" onClick={() => revokeLink({ linkId: linkedTelegram._id })}>
+              <Link2Off size={13} strokeWidth={1.75} aria-hidden="true" />
+              Unlink Telegram
+            </button>
           </div>
         ) : linkCode ? (
           <div className="schedule-row schedule-code-row">
@@ -85,15 +122,44 @@ export function SchedulePanel() {
             <span className="schedule-hint">→ send to the bot, expires in 15m</span>
           </div>
         ) : (
-          <button className="outline" onClick={handleLinkTelegram}>Link Telegram</button>
+          <button className="outline" onClick={handleLinkTelegram}>
+            <Link2 size={13} strokeWidth={1.75} aria-hidden="true" />
+            Link Telegram
+          </button>
         )}
-      </div>
+      </SidePanel>
 
-      <div className="schedule-section">
-        <div className="schedule-section-head">
-          <h3>Recurring</h3>
-          {codingSchedules.length > 0 && <span className="schedule-count">{codingSchedules.length}</span>}
+      <SidePanel title="Wander" icon={Compass} count={wanderSchedules.length || undefined}>
+        <p className="schedule-hint">
+          Each run opens a short research notebook in a live sandbox — Exa finds the sources once, then the lab argues through hypotheses, methods critique, a rival view, and a graded consensus.
+        </p>
+        <div className="wander-cadence-row">
+          <button type="button" className="outline" disabled={wanderBusy !== null} onClick={() => void enableWander("daily")}>
+            {wanderBusy === "daily" ? "Scheduling…" : "Wander daily"}
+          </button>
+          <button type="button" className="outline" disabled={wanderBusy !== null} onClick={() => void enableWander("weekly")}>
+            {wanderBusy === "weekly" ? "Scheduling…" : "Wander weekly"}
+          </button>
         </div>
+        {wanderSchedules.length > 0 && (
+          <ul className="schedule-list">
+            {wanderSchedules.map((schedule) => (
+              <li key={schedule._id}>
+                <span className="schedule-objective" title={schedule.objective ?? schedule.title}>{schedule.title}</span>
+                <b className={`schedule-status schedule-status-${schedule.status}`}>{schedule.status}</b>
+                <button
+                  className="outline"
+                  onClick={() => setScheduleStatus({ scheduleId: schedule._id, status: schedule.status === "active" ? "paused" : "active" })}
+                >
+                  {schedule.status === "active" ? "Pause" : "Activate"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SidePanel>
+
+      <SidePanel title="Recurring" icon={CalendarClock} count={codingSchedules.length || undefined}>
         <form className="schedule-form" onSubmit={handleCreateSchedule}>
           <input placeholder="Objective, e.g. run the lint check" value={objective} onChange={(event) => setObjective(event.target.value)} />
           <select value={cron} onChange={(event) => setCron(event.target.value)} aria-label="Schedule interval">
@@ -117,7 +183,7 @@ export function SchedulePanel() {
             ))}
           </ul>
         )}
-      </div>
+      </SidePanel>
 
       {notice && <p className="schedule-notice">{notice}</p>}
     </div>

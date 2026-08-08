@@ -2,15 +2,36 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
+import {
+  AlertTriangle,
+  Box,
+  Compass,
+  CornerDownLeft,
+  FolderOpen,
+  Pause,
+  Play,
+  Sparkles,
+  Square,
+  Wheat,
+  X,
+} from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
+import { DownloadWorkButton } from "@/components/download-work-button";
 import { hasPermission } from "@/lib/authz";
 import { formatRwf } from "@/lib/task-cost";
-import { presetContextKey } from "@/lib/dynamic-presets";
-import { DEFAULT_WORKSPACE_PRESET_ID, findWorkspacePreset, WORKSPACE_PRESETS } from "@/lib/sandbox-templates";
+import { presetContextKey } from "../packages/agent-core/src/dynamic-presets";
+import { DEFAULT_WORKSPACE_PRESET_ID, findWorkspacePreset, WORKSPACE_PRESETS } from "../packages/agent-core/src/sandbox-templates";
 import type { TaskKind } from "@/lib/task-cost";
+import {
+  buildWanderObjective,
+  buildWanderScheduleObjective,
+  isWanderObjective,
+  pickWanderTopic,
+  type WanderCadence,
+} from "../packages/agent-core/src/wander";
 import {
   buildAboutLines,
   buildBanner,
@@ -199,12 +220,15 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
   const resumeRunMutation = useMutation(api.agentRuns.resumeRun);
   const startLiveRun = useAction(api.terminalRuns.startLiveCodingRun);
   const generateDynamicPresets = useAction(api.terminalPresetsActions.generate);
+  const createSchedule = useMutation(api.connectors.createSchedule);
+  const setScheduleStatus = useMutation(api.connectors.setScheduleStatus);
   const tasks = useQuery(api.tasks.listRecent, organization ? { organizationId: organization._id } : "skip");
   const githubInstallations = useQuery(api.githubModel.listForOrganization, organization ? { organizationId: organization._id } : "skip");
   const cachedDynamicPresets = useQuery(api.terminalPresets.getCached, organization ? { organizationId: organization._id } : "skip");
   const hasConnectedRepository = (githubInstallations ?? []).some((installation) => installation.status === "connected");
   const resumeRuns = useQuery(api.agentRuns.listForTask, resumeTaskId ? { taskId: resumeTaskId } : "skip");
   const [generatedPresets, setGeneratedPresets] = useState<{ label: string; objective: string }[] | null>(null);
+  const [wanderBusy, setWanderBusy] = useState(false);
   const staticPresets = hasConnectedRepository ? PRESETS_WITH_REPOSITORY : PRESETS_NO_REPOSITORY;
   const presets = generatedPresets ?? cachedDynamicPresets?.presets ?? staticPresets;
 
@@ -229,6 +253,11 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
   const runningCount = branches.filter((branch) => branch.busy).length;
   const anyBusy = scriptBusy || runningCount > 0;
   const isGeneratedPresets = presets !== staticPresets;
+  const wanderHarvest = useQuery(
+    api.artifacts.getWanderHarvest,
+    activeBranch.runId && activeBranch.runStatus === "completed" ? { runId: activeBranch.runId } : "skip",
+  );
+  const [harvestBusy, setHarvestBusy] = useState(false);
 
   useEffect(() => {
     appendLineTo(MAIN_BRANCH_ID, { tone: "banner", text: buildBanner() });
@@ -316,6 +345,30 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     setActiveBranchId((current) => (current === branchId ? MAIN_BRANCH_ID : current));
   }
 
+  /** Download the print-ready Wander report — only after the lab has finished and harvested. */
+  async function harvestWanderReport() {
+    if (!wanderHarvest?.available || !wanderHarvest.url || !wanderHarvest.filename) return;
+    setHarvestBusy(true);
+    try {
+      const response = await fetch(wanderHarvest.url);
+      if (!response.ok) throw new Error(`Could not fetch report (${response.status})`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = wanderHarvest.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      appendLine({ tone: "success", text: `harvested ${wanderHarvest.filename} — open it and Print → Save as PDF for a portable briefing` });
+    } catch (error) {
+      appendLine({ tone: "error", text: error instanceof Error ? error.message : "Harvest failed" });
+    } finally {
+      setHarvestBusy(false);
+    }
+  }
+
   /** Folds one live run snapshot into its branch — the same truthful mapping the terminal always used, now addressed by branch instead of a single global run. */
   function handleRunSnapshot(branchId: string, detail: RunDetail) {
     let seen = renderedEventIdsRef.current.get(branchId);
@@ -342,6 +395,9 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     if (runTerminal) {
       const task = tasks?.find((item) => item._id === detail.run.taskId);
       if (task) appendLineTo(branchId, { tone: detail.run.status === "completed" ? "success" : "error", text: `run ${detail.run.status} — spent ${formatRwf(Number(task.spentRwf))} of ${formatRwf(Number(task.maxRwf))} cap` });
+      if (detail.run.status === "completed" && isWanderObjective(detail.run.objective)) {
+        appendLineTo(branchId, { tone: "muted", text: "Wander lab finished — Harvest report appears above once the briefing is ready (Print → Save as PDF)." });
+      }
       updateBranch(branchId, { busy: false });
     } else if (detail.run.status === "awaiting_approval") {
       // A run still sitting behind its own cost gate already printed its quote and the reason
@@ -450,6 +506,59 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     }
   }
 
+  /**
+   * Wander reuses the live coding sandbox path as a multi-scientist lab. Daily/weekly modes
+   * create a real coding-task schedule whose topic is resolved per occurrence (see scheduledRuns).
+   */
+  async function runWander(cadence: WanderCadence, topic: string | null, raw: string) {
+    if (!session.data) {
+      appendLine({ tone: "input", text: raw });
+      appendLine({ tone: "error", text: "sign in first (panel above) — Wander needs an authenticated workspace." });
+      return;
+    }
+    if (!organization) {
+      appendLine({ tone: "input", text: raw });
+      appendLine({ tone: "warn", text: "your workspace is still being set up — try again in a moment." });
+      return;
+    }
+
+    if (cadence === "once") {
+      const resolvedTopic = topic?.trim() || pickWanderTopic(crypto.randomUUID());
+      void runLiveCoding(buildWanderObjective(resolvedTopic), raw);
+      return;
+    }
+
+    setWanderBusy(true);
+    appendLine({ tone: "input", text: raw });
+    try {
+      const objective = topic?.trim()
+        ? buildWanderObjective(topic.trim())
+        : buildWanderScheduleObjective(cadence);
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const scheduleId = await createSchedule({
+        organizationId: organization._id,
+        title: topic?.trim() ? `Wander ${cadence}: ${topic.trim().slice(0, 40)}` : `Wander ${cadence}`,
+        workflowTemplate: "coding-task",
+        cronExpression: cadence === "daily" ? "0 9 * * *" : "0 9 * * 1",
+        timezone,
+        connectorIds: [],
+        objective,
+      });
+      await setScheduleStatus({ scheduleId, status: "active" });
+      appendLine({
+        tone: "success",
+        text: topic?.trim()
+          ? `Wander ${cadence} scheduled for "${topic.trim()}" — same real dispatcher as other recurring runs`
+          : `Wander ${cadence} scheduled — each occurrence picks a fresh discovery topic`,
+      });
+      appendLine({ tone: "muted", text: "Pause or inspect it in the Wander panel on the right." });
+    } catch (error) {
+      appendLine({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setWanderBusy(false);
+    }
+  }
+
   async function runLiveCoding(objective: string, raw: string) {
     if (!session.data) {
       appendLine({ tone: "input", text: raw });
@@ -478,8 +587,13 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           // The command echo lives in the branch it creates, not the branch that was active
           // when it was typed — a live browser test caught this landing in the wrong branch.
           { id: entryId(), tone: "input", text: raw },
-          { id: entryId(), tone: "system", text: `pricing a real coding run — objective: "${objective}"` },
+          { id: entryId(), tone: "system", text: isWanderObjective(objective)
+            ? `pricing a Wander lab run — objective: "${objective}"`
+            : `pricing a real coding run — objective: "${objective}"` },
           { id: entryId(), tone: "muted", text: `workspace: ${findWorkspacePreset(workspacePresetId).label} — ${findWorkspacePreset(workspacePresetId).description}` },
+          ...(isWanderObjective(objective)
+            ? [{ id: entryId(), tone: "muted" as const, text: "Wander: one Exa briefing, then contested notebook (hypotheses → methods critique → rival view → graded consensus). Sandbox stays offline." }]
+            : []),
           { id: entryId(), tone: "muted", text: "compiling the run graph and quoting it before anything is charged…" },
         ],
       },
@@ -508,6 +622,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     // A real coding run opens its own branch, so its command echo belongs there, not in
     // whichever branch happened to be active when it was typed — runLiveCoding handles it.
     if (parsed.kind === "run" && parsed.taskKind === "coding") { void runLiveCoding(parsed.objective, raw); return; }
+    if (parsed.kind === "wander") { void runWander(parsed.cadence, parsed.topic, raw); return; }
 
     appendLine({ tone: "input", text: raw });
     if (parsed.kind === "clear") { updateBranch(activeBranchId, { log: [] }); return; }
@@ -515,7 +630,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     if (parsed.kind === "about") { void playScript(buildAboutLines()); return; }
     if (parsed.kind === "status") { void playScript(buildStatusLines()); return; }
     if (parsed.kind === "unknown") { void playScript(buildUnknownCommandLines(parsed.raw)); return; }
-    appendLine({ tone: "warn", text: `only "run coding <objective>" is wired to a real agent right now — previewing ${parsed.taskKind} as a simulation instead.` });
+    appendLine({ tone: "warn", text: `only "run coding <objective>" and "wander" are wired to a real agent right now — previewing ${parsed.taskKind} as a simulation instead.` });
     void playScript(buildRunSessionLines(parsed.taskKind, parsed.objective), parsed.taskKind);
   }
 
@@ -567,18 +682,24 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
         </span>
       </div>
       {branches.length > 1 && (
-        <div className="terminal-branches">
+        <div className="terminal-branches" role="tablist" aria-label="Run branches">
           {branches.map((branch) => {
             const status = branch.busy ? "running" : branch.track?.outcome === "completed" ? "completed" : branch.track?.outcome === "failed" ? "failed" : "idle";
             return (
-              <div key={branch.id} className={`terminal-branch-tab${branch.id === activeBranchId ? " terminal-branch-tab-active" : ""}`}>
-                <button type="button" className="terminal-branch-select" onClick={() => setActiveBranchId(branch.id)}>
+              <div key={branch.id} className={`terminal-branch-tab${branch.id === activeBranchId ? " terminal-branch-tab-active" : ""}`} role="presentation">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={branch.id === activeBranchId}
+                  className="terminal-branch-select"
+                  onClick={() => setActiveBranchId(branch.id)}
+                >
                   <span className={`terminal-branch-dot terminal-branch-dot-${status}`} />
                   {branch.label}
                 </button>
                 {!branch.isMain && !branch.busy && (
                   <button type="button" className="terminal-branch-close" aria-label={`Close ${branch.label}`} onClick={() => closeBranch(branch.id)}>
-                    ×
+                    <X size={12} strokeWidth={2} />
                   </button>
                 )}
               </div>
@@ -591,8 +712,23 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           <span className={`terminal-run-state terminal-run-state-${activeBranch.runStatus}`}>{activeBranch.runStatus}</span>
           {/* The work outlives the run: a finished run is exactly when someone wants its files. */}
           <button type="button" className="terminal-run-button" onClick={() => onOpenFiles(activeBranch.taskId!)}>
+            <FolderOpen size={13} strokeWidth={1.75} aria-hidden="true" />
             View produced files
           </button>
+          {/* The console already narrates everything else that happens; the archive says so too. */}
+          <DownloadWorkButton taskId={activeBranch.taskId} className="terminal-run-button" onNotice={appendLine} />
+          {wanderHarvest?.available && (
+            <button
+              type="button"
+              className="terminal-run-button terminal-run-harvest"
+              disabled={harvestBusy}
+              title={wanderHarvest.topic ? `Download the Wander report for “${wanderHarvest.topic}”` : "Download the Wander lab report"}
+              onClick={() => void harvestWanderReport()}
+            >
+              <Wheat size={13} strokeWidth={1.75} aria-hidden="true" />
+              {harvestBusy ? "Harvesting…" : "Harvest report"}
+            </button>
+          )}
         </div>
       )}
       {activeBranch.runId && activeBranch.runStatus && !["completed", "failed", "cancelled"].includes(activeBranch.runStatus) && (
@@ -600,19 +736,23 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           <span className={`terminal-run-state terminal-run-state-${activeBranch.runStatus}`}>{activeBranch.runStatus.replaceAll("_", " ")}</span>
           {activeBranch.runStatus === "paused" ? (
             <button type="button" className="terminal-run-button terminal-run-resume" disabled={controllingBranchId === activeBranch.id} onClick={() => void controlRun(activeBranch, "resume")}>
+              <Play size={12} strokeWidth={2} aria-hidden="true" />
               Resume
             </button>
           ) : (
             <button type="button" className="terminal-run-button" disabled={controllingBranchId === activeBranch.id || activeBranch.runStatus === "awaiting_approval"} onClick={() => void controlRun(activeBranch, "pause")}>
+              <Pause size={12} strokeWidth={2} aria-hidden="true" />
               Pause
             </button>
           )}
           <button type="button" className="terminal-run-button terminal-run-stop" disabled={controllingBranchId === activeBranch.id} onClick={() => void controlRun(activeBranch, "stop")}>
+            <Square size={11} strokeWidth={2.25} aria-hidden="true" />
             Stop
           </button>
           {/* Says what the buttons actually do: neither one can interrupt a command already running. */}
           {activeBranch.taskId && (
             <button type="button" className="terminal-run-button" onClick={() => onOpenFiles(activeBranch.taskId!)}>
+              <FolderOpen size={13} strokeWidth={1.75} aria-hidden="true" />
               Files
             </button>
           )}
@@ -651,7 +791,9 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           <div className="terminal-approvals" role="region" aria-label="Pending approvals">
             {openApprovals.map((approval) => (
               <div className="terminal-approval" key={approval._id}>
-                <span className="terminal-approval-mark" aria-hidden="true">⚠</span>
+                <span className="terminal-approval-mark" aria-hidden="true">
+                  <AlertTriangle size={14} strokeWidth={2} />
+                </span>
                 <span className="terminal-approval-text" title={approvalSummary(approval)}>
                   Approve to {approvalSummary(approval)}
                 </span>
@@ -666,7 +808,10 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           </div>
         )}
         <div className="terminal-workspace-row">
-          <span className="terminal-workspace-label">Workspace</span>
+          <span className="terminal-workspace-label">
+            <Box size={12} strokeWidth={1.75} aria-hidden="true" />
+            Workspace
+          </span>
           {WORKSPACE_PRESETS.map((preset) => (
             <button
               key={preset.id}
@@ -683,9 +828,22 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           <span className="terminal-workspace-tools">{findWorkspacePreset(workspacePresetId).programs.join(" · ")}</span>
         </div>
         <div className="terminal-presets">
-          <span className="terminal-presets-label" title={isGeneratedPresets ? "Suggested for your workspace by a real model call" : "Starter tasks for an empty workspace"}>
-            {isGeneratedPresets ? "◆" : "◇"}
+          <span
+            className="terminal-presets-label"
+            title={isGeneratedPresets ? "Suggested for your workspace by a real model call" : "Starter tasks for an empty workspace"}
+          >
+            <Sparkles size={13} strokeWidth={1.75} aria-hidden="true" />
           </span>
+          <button
+            type="button"
+            className="terminal-wander-button"
+            disabled={scriptBusy || wanderBusy}
+            title="Start Wander on a random topic — Exa briefing plus contested research notebook (billed like coding)"
+            onClick={() => submit("wander once")}
+          >
+            <Compass size={14} strokeWidth={1.75} aria-hidden="true" />
+            Wander
+          </button>
           {presets.map((preset) => (
             <button key={preset.label} type="button" className="terminal-preset-button" disabled={scriptBusy} title={preset.objective} onClick={() => submit(`run coding ${preset.objective}`)}>
               {preset.label}
@@ -707,7 +865,9 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
             placeholder={scriptBusy ? "preview playing — you can still start a real run" : 'run coding <objective>   ·   help'}
             aria-label="Terminal command input"
           />
-          <button type="submit" className="terminal-send" disabled={!input.trim()} aria-label="Run command">↵</button>
+          <button type="submit" className="terminal-send" disabled={!input.trim()} aria-label="Run command">
+            <CornerDownLeft size={14} strokeWidth={2} />
+          </button>
         </form>
       </div>
     </div>

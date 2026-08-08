@@ -3,8 +3,8 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { internal, api } from "./_generated/api";
-import { presetContextKey } from "../lib/dynamic-presets";
-import { createDynamicPresetsProvider } from "../lib/providers/factory";
+import { presetContextKey } from "../packages/agent-core/src/dynamic-presets";
+import { createDynamicPresetsProvider } from "../packages/agent-core/src/providers/factory";
 
 const presetValidator = v.object({ label: v.string(), objective: v.string() });
 

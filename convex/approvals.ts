@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireOrganizationPermission } from "./lib/authz";
 import { formatRwf } from "../lib/task-cost";
+import { isWanderObjective } from "../packages/agent-core/src/wander";
 import { internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -193,7 +194,18 @@ export const decide = mutation({
       // A queued run otherwise waits for the next cron tick; an approval is a person waiting
       // in front of the terminal, so pick the work up immediately instead.
       await ctx.db.insert("agentRunEvents", { runId: approval.runId, type: "approval_granted", message: `${approval.kind.replaceAll("_", " ")} approved. The run returns to the dispatch queue.`, createdAt: now });
-      await ctx.scheduler.runAfter(0, internal.dispatcher.dispatchTick, {});
+      // Quote acceptance is the first moment a terminal Wander run may spend Exa. Prefetch
+      // chains its own dispatch nudge so we do not race an empty literature brief.
+      if (approval.kind === "task_start") {
+        const run = await ctx.db.get(approval.runId);
+        if (run && isWanderObjective(run.objective)) {
+          await ctx.scheduler.runAfter(0, internal.wanderEvidenceActions.prefetchForRun, { runId: approval.runId });
+        } else {
+          await ctx.scheduler.runAfter(0, internal.dispatcher.dispatchTick, {});
+        }
+      } else {
+        await ctx.scheduler.runAfter(0, internal.dispatcher.dispatchTick, {});
+      }
     }
   },
 });

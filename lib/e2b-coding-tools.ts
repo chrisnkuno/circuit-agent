@@ -1,6 +1,7 @@
-import type { AgentTool } from "./agent-runtime";
-import type { InteractiveCodingSandboxProvider, SandboxCommand } from "./providers/contracts";
-import { ALLOWED_SANDBOX_PROGRAMS } from "./sandbox-policy";
+import type { AgentTool } from "../packages/agent-core/src/agent-runtime";
+import type { InteractiveCodingSandboxProvider, SandboxCommand } from "../packages/agent-core/src/providers/contracts";
+import { ALLOWED_SANDBOX_PROGRAMS } from "../packages/agent-core/src/sandbox-policy";
+import { searchSandboxText } from "../packages/agent-core/src/sandbox-search";
 
 function workspacePath(root: string, value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("path must be a non-empty string");
@@ -69,14 +70,17 @@ export function createE2BCodingTools(options: {
     },
     {
       name: "search_files",
-      description: "Search workspace text using a fixed-string ripgrep query.",
+      description: "Search workspace file contents for a fixed string.",
       inputSchema: { type: "object", properties: { query: { type: "string" }, path: { type: "string" } }, required: ["query"], additionalProperties: false },
       capabilityId: "workspace.files", effect: "none", requiresApproval: false, parallelSafe: true,
       async execute(args) {
         const query = requiredString(args.query, "query");
         const path = workspacePath(workspaceRoot, args.path ?? ".");
-        const result = await sandbox.runCommand(sandboxId, { program: "rg", args: ["--line-number", "--fixed-strings", query, path], cwd: workspaceRoot, timeoutMs: 30_000 });
-        return { content: result.stdout || result.stderr || "No matches.", isError: result.exitCode > 1 };
+        // Was a bare `rg` call, which exits 127 on E2B's stock image — search reported an error, or
+        // worse an empty "No matches.", on every run using the default template. The shared helper
+        // falls back to reading files when ripgrep is absent.
+        const matches = await searchSandboxText({ sandbox, sandboxId, root: path, query });
+        return { content: matches.length > 0 ? matches.map((match) => `${match.path}:${match.line}: ${match.text}`).join("\n") : "No matches." };
       },
     },
     {

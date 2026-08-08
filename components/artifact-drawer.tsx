@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { buildArtifactArchive, saveArchive } from "@/lib/artifact-archive";
 
 type ArtifactRow = {
   id: string;
@@ -25,6 +26,11 @@ const KIND_LABEL: Record<string, string> = {
   review_summary: "Review",
 };
 
+function labelForArtifact(artifact: ArtifactRow): string {
+  if (artifact.path === "wander/REPORT.html") return "Harvest";
+  return KIND_LABEL[artifact.kind] ?? artifact.kind;
+}
+
 function formatBytes(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 }
@@ -43,6 +49,12 @@ export function ArtifactDrawer({ taskId, onClose }: { taskId: Id<"tasks"> | null
   const [content, setContent] = useState<{ id: string; text: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [archiveState, setArchiveState] = useState<{ status: "idle" | "building"; done: number; total: number; error: string | null }>({
+    status: "idle",
+    done: 0,
+    total: 0,
+    error: null,
+  });
 
   // Files first: they are the work. Everything else explains how the work happened.
   const ordered = [...(artifacts ?? [])].sort((left, right) => {
@@ -91,6 +103,24 @@ export function ArtifactDrawer({ taskId, onClose }: { taskId: Id<"tasks"> | null
     setTimeout(() => setCopied(false), 1500);
   }
 
+  /**
+   * Everything at once, as the folder the run worked in.
+   *
+   * Downloading a lab notebook one file at a time is nine clicks for something that is only
+   * meaningful whole — the hypotheses, both reviews and the consensus are one document.
+   */
+  async function downloadAll() {
+    const downloadable = ordered.filter((artifact) => artifact.url);
+    if (downloadable.length === 0) return;
+    setArchiveState({ status: "building", done: 0, total: downloadable.length, error: null });
+    try {
+      saveArchive(await buildArtifactArchive(ordered, { onProgress: (done, total) => setArchiveState({ status: "building", done, total, error: null }) }));
+      setArchiveState({ status: "idle", done: 0, total: 0, error: null });
+    } catch (error) {
+      setArchiveState({ status: "idle", done: 0, total: 0, error: error instanceof Error ? error.message : "Could not build the archive" });
+    }
+  }
+
   return (
     <>
       <div className="artifact-scrim" onClick={onClose} aria-hidden="true" />
@@ -98,9 +128,21 @@ export function ArtifactDrawer({ taskId, onClose }: { taskId: Id<"tasks"> | null
         <header className="artifact-drawer-head">
           <span className="artifact-drawer-title">Produced work</span>
           <span className="artifact-drawer-count">{ordered.length}</span>
+          {ordered.some((artifact) => artifact.url) && (
+            <button
+              type="button"
+              className="artifact-drawer-zip"
+              onClick={() => void downloadAll()}
+              disabled={archiveState.status === "building"}
+              title="Download every file this task produced as one .zip"
+            >
+              {archiveState.status === "building" ? `Zipping ${archiveState.done}/${archiveState.total}` : "Download all"}
+            </button>
+          )}
           <button type="button" className="artifact-drawer-close" onClick={onClose} aria-label="Close">×</button>
         </header>
 
+        {archiveState.error && <p className="artifact-drawer-empty">{archiveState.error}</p>}
         {artifacts === undefined && <p className="artifact-drawer-empty">Loading…</p>}
         {artifacts?.length === 0 && (
           <p className="artifact-drawer-empty">
@@ -117,7 +159,7 @@ export function ArtifactDrawer({ taskId, onClose }: { taskId: Id<"tasks"> | null
                   className={`artifact-item${selected?.id === artifact.id ? " artifact-item-active" : ""}`}
                   onClick={() => setSelectedId(artifact.id)}
                 >
-                  <span className="artifact-item-kind">{KIND_LABEL[artifact.kind] ?? artifact.kind}</span>
+                  <span className="artifact-item-kind">{labelForArtifact(artifact)}</span>
                   <span className="artifact-item-name">{artifact.path ?? artifact.stepTitle ?? artifact.kind}</span>
                   <span className="artifact-item-size">{formatBytes(artifact.byteLength)}</span>
                 </button>

@@ -285,8 +285,9 @@ export const claimStep = internalMutation({
   args: { runId: v.id("agentRuns"), stepId: v.id("agentSteps"), workerId: v.string(), estimatedRwf: v.int64(), leaseMs: v.number() },
   handler: async (ctx, args) => {
     if (args.estimatedRwf <= 0n) throw new Error("estimatedRwf must be a positive integer RWF amount");
-    if (!Number.isInteger(args.leaseMs) || args.leaseMs < 5_000 || args.leaseMs > 5 * 60_000) {
-      throw new Error("leaseMs must be an integer between 5 seconds and 5 minutes");
+    // Upper bound is 10 minutes so Wander labs (~8 min lease) fit; everyday coding still uses 3 min.
+    if (!Number.isInteger(args.leaseMs) || args.leaseMs < 5_000 || args.leaseMs > 10 * 60_000) {
+      throw new Error("leaseMs must be an integer between 5 seconds and 10 minutes");
     }
     const run = await ctx.db.get(args.runId);
     const step = await ctx.db.get(args.stepId);
@@ -356,6 +357,7 @@ export const claimStep = internalMutation({
         taskId: task._id,
         taskTitle: task.title,
         runObjective: run.objective,
+        researchBrief: run.researchBrief,
       });
     }
     return { status: "claimed" as const };
@@ -405,8 +407,8 @@ export const heartbeatStep = internalMutation({
   args: { runId: v.id("agentRuns"), stepId: v.id("agentSteps"), workerId: v.string(), sandboxId: v.optional(v.string()), leaseMs: v.number() },
   returns: v.object({ continueExecution: v.boolean(), leaseExpiresAt: v.number() }),
   handler: async (ctx, args) => {
-    if (!Number.isInteger(args.leaseMs) || args.leaseMs < 5_000 || args.leaseMs > 5 * 60_000) {
-      throw new Error("leaseMs must be an integer between 5 seconds and 5 minutes");
+    if (!Number.isInteger(args.leaseMs) || args.leaseMs < 5_000 || args.leaseMs > 10 * 60_000) {
+      throw new Error("leaseMs must be an integer between 5 seconds and 10 minutes");
     }
     const [run, step] = await Promise.all([ctx.db.get(args.runId), ctx.db.get(args.stepId)]);
     if (!run || !step || step.runId !== run._id || step.status !== "running" || step.claimedBy !== args.workerId) {

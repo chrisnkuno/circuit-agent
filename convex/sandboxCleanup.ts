@@ -3,7 +3,7 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { createE2BProvider } from "../lib/providers/factory";
+import { createE2BProvider } from "../packages/agent-core/src/providers/factory";
 
 /**
  * Destroys one sandbox. Scheduled by whichever transition ended the run that owned it.

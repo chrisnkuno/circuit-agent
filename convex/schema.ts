@@ -96,6 +96,11 @@ export default defineSchema({
     // sandbox is free to keep, so stopping to look at something no longer has to mean giving up.
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("paused"), v.literal("awaiting_approval"), v.literal("blocked"), v.literal("completed"), v.literal("failed"), v.literal("cancelled"), v.literal("needs_configuration")),
     objective: v.string(),
+    /**
+     * Prefetched Wander evidence dossier (Exa highlights). Fetched once per run on the
+     * control plane — never from a model tool loop — and injected into the planner context.
+     */
+    researchBrief: v.optional(v.string()),
     capabilityIds: v.optional(v.array(v.string())),
     maxParallelism: v.number(),
     createdAt: v.number(),
@@ -103,6 +108,19 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
     cancelRequestedAt: v.optional(v.number()),
   }).index("by_task", ["taskId"]).index("by_status", ["status"]).index("by_sandbox", ["sandboxId"]),
+  /**
+   * Topic-keyed Exa dossier cache so a repeated Wander topic (e.g. a fixed weekly schedule)
+   * does not pay for a fresh search within the TTL.
+   */
+  wanderEvidenceCache: defineTable({
+    topicHash: v.string(),
+    topic: v.string(),
+    query: v.string(),
+    briefMarkdown: v.string(),
+    sourceCount: v.number(),
+    exaRequestId: v.optional(v.string()),
+    fetchedAt: v.number(),
+  }).index("by_topic_hash", ["topicHash"]),
   agentSteps: defineTable({
     runId: v.id("agentRuns"),
     stepKey: v.string(),

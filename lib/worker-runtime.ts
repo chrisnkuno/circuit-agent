@@ -23,7 +23,18 @@ export type LeaseRecoveryDecision = {
 export function summarizeWorkerError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Worker execution failed";
   const looksLikeHtml = /<!DOCTYPE html|<html[\s>]/i.test(message);
-  return truncateEvidence(looksLikeHtml ? "Provider returned an HTML error page instead of a JSON response (likely a gateway or bot-protection block)." : message, 500);
+  if (looksLikeHtml) {
+    return truncateEvidence("Provider returned an HTML error page instead of a JSON response (likely a gateway or bot-protection block).", 500);
+  }
+  // Convex reaches CircuitNotion through a Cloudflare Worker relay; upstream fetches there are
+  // commonly cut around 90s, which surfaces as a generic AbortError from the OpenAI client.
+  if (/\bRequest was aborted\b/i.test(message) || /\bThe operation was aborted\b/i.test(message)) {
+    return truncateEvidence(
+      "Request was aborted — usually the CircuitNotion Cloudflare relay dropping a long model call (~90s). Wander prompts are sized to finish under that ceiling; a retry often succeeds.",
+      500,
+    );
+  }
+  return truncateEvidence(message, 500);
 }
 
 /**
@@ -76,6 +87,22 @@ export function classifyWorkerFailure(error: unknown): "transient" | "permanent"
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (CAPACITY_FAILURE_PATTERNS.some((pattern) => pattern.test(message))) return "transient";
   return TRANSIENT_FAILURE_PATTERNS.some((pattern) => pattern.test(message)) ? "transient" : "permanent";
+}
+
+/**
+ * Timeout-shaped failures whose cause is usually the work itself being too big for the window,
+ * not a hiccup. They are still worth one more attempt — a genuinely slow provider moment does
+ * happen — but not three: each retry pays for a full model call to rediscover the same wall.
+ */
+const SELF_TIMEOUT_PATTERNS = [/\baborted\b/i, /\btimed?\s?out\b/i, /\btimeout\b/i, /produced no output for/i];
+
+const SELF_TIMEOUT_MAX_ATTEMPTS = 2;
+
+/** Attempt budget for this failure, never above the caller's own ceiling. */
+export function maxAttemptsForFailure(error: unknown, maxAttempts: number): number {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (CAPACITY_FAILURE_PATTERNS.some((pattern) => pattern.test(message))) return maxAttempts;
+  return SELF_TIMEOUT_PATTERNS.some((pattern) => pattern.test(message)) ? Math.min(SELF_TIMEOUT_MAX_ATTEMPTS, maxAttempts) : maxAttempts;
 }
 
 /** How long to wait before re-attempting a failure, given what kind of failure it was. */

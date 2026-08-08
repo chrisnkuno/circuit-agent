@@ -1,0 +1,30 @@
+{
+  "name": "circuit-nova",
+  "version": "0.1.0",
+  "description": "Nova \u2014 a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with per-call approval, git checkpoints, and real cost accounting.",
+  "keywords": [
+    "cli",
+    "coding-agent",
+    "ai",
+    "terminal",
+    "agent",
+    "anthropic",
+    "openai"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "nova": "./dist/nova.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

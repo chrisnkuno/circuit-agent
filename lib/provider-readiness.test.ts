@@ -76,4 +76,23 @@ describe("provider readiness", () => {
     });
     expect(complete.repositoryProvisioning).toBe(true);
   });
+
+  it("treats Exa as optional Wander discovery, never gating coding execution", () => {
+    const base = {
+      convexDeployment: "dev:one",
+      convexUrl: "https://example.convex.cloud",
+      e2bApiKey: "e2b_key",
+      e2bCodingTemplate: "circuit-coding",
+      codingModelProvider: "openai",
+      openaiApiKey: "model_key",
+      openaiModel: "gpt-5.6-terra",
+      modelInputRwfPerMillion: "2000",
+      modelOutputRwfPerMillion: "8000",
+    };
+    const withoutExa = assessProviderReadiness(base);
+    expect(withoutExa.codingExecution).toBe(true);
+    expect(withoutExa.wanderDiscovery).toBe(false);
+    expect(withoutExa.missing).not.toContain("EXA_API_KEY");
+    expect(assessProviderReadiness({ ...base, exaApiKey: "exa_key" }).wanderDiscovery).toBe(true);
+  });
 });

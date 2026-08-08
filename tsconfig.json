@@ -25,6 +25,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "circuit-nova-core": [
+        "./packages/agent-core/src/index.ts"
+      ],
+      "circuit-nova-core/*": [
+        "./packages/agent-core/src/*"
       ]
     }
   },

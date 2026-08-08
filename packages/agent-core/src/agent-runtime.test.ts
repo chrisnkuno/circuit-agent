@@ -55,7 +55,13 @@ describe("bounded agent runtime", () => {
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "write-1", name: "write_file", arguments: {} }] }),
       turn({ content: "Done" }),
     ], [tool]);
-    await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "needs_verification", toolCallsExecuted: 1 });
+    // The gate leads, but the agent's own account of the work survives it: replacing the summary
+    // outright left a reader with a status and no idea what had been done.
+    await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({
+      status: "needs_verification",
+      toolCallsExecuted: 1,
+      summary: expect.stringContaining("The agent reported:"),
+    });
   });
 
   it("halts before an unapproved external action", async () => {
