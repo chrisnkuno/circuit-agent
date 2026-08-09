@@ -1,4 +1,11 @@
+import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+
+function normalizeCode(value: string, length: number, label: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (normalized.length !== length || !/^[A-Z]+$/.test(normalized)) throw new Error(`${label} must be a ${length}-letter code`);
+  return normalized;
+}
 
 function slugify(value: string): string {
   const base = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -55,5 +62,31 @@ export const ensureOrganization = mutation({
     const organizationId = await ctx.db.insert("organizations", { name: `${label}'s workspace`, slug, createdAt: now });
     await ctx.db.insert("memberships", { organizationId, identitySubject: identity.subject, role: "owner", status: "active", notificationEmail: identity.email, createdAt: now });
     return organizationId;
+  },
+});
+
+/** Saves only the signed-in member's display preference; it cannot alter another member. */
+export const updateMoneyPreferences = mutation({
+  args: {
+    countryCode: v.string(),
+    currencyCode: v.string(),
+    source: v.union(v.literal("automatic"), v.literal("manual")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { countryCode, currencyCode, source }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    const membership = await ctx.db.query("memberships")
+      .withIndex("by_subject", (q) => q.eq("identitySubject", identity.subject))
+      .filter((q) => q.eq(q.field("status"), "active"))
+      .first();
+    if (!membership) throw new Error("Active workspace membership not found");
+    await ctx.db.patch(membership._id, {
+      countryCode: normalizeCode(countryCode, 2, "countryCode"),
+      currencyCode: normalizeCode(currencyCode, 3, "currencyCode"),
+      currencySource: source,
+      moneyPreferencesUpdatedAt: Date.now(),
+    });
+    return null;
   },
 });

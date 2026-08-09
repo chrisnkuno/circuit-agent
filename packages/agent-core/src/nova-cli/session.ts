@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "../agent-runtime";
@@ -13,6 +14,9 @@ import { approximateInputTokens } from "../model-cost";
  */
 
 export type SessionRecord = {
+  schemaVersion: typeof SESSION_SCHEMA_VERSION;
+  /** Optimistic concurrency token. A stale writer is rejected instead of losing a newer turn. */
+  revision: number;
   id: string;
   createdAt: number;
   updatedAt: number;
@@ -22,7 +26,11 @@ export type SessionRecord = {
   /** Standing tool approvals, so a resumed session does not re-ask what was already decided. */
   approvals: Record<string, "allow" | "deny">;
   totalRwf: number;
+  /** SHA-256 over the canonical record without this field. */
+  integrity?: string;
 };
+
+export const SESSION_SCHEMA_VERSION = 2 as const;
 
 export function sessionDirectory(root: string): string {
   return path.join(root, ".nova", "sessions");
@@ -33,17 +41,112 @@ export function newSessionId(now = new Date()): string {
   return `${stamp}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function assertSessionId(id: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) || id === "." || id === "..") {
+    throw new Error("Session id contains unsafe characters");
+  }
+}
+
+function canonicalize(value: unknown): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") return value;
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalize(item)]),
+    );
+  }
+  return null;
+}
+
+function integrityFor(record: Omit<SessionRecord, "integrity">): string {
+  return createHash("sha256").update(JSON.stringify(canonicalize(record))).digest("hex");
+}
+
+async function acquireSessionLock(lockFile: string): Promise<() => Promise<void>> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const handle = await fs.open(lockFile, "wx", 0o600);
+      await handle.writeFile(`${process.pid}\n`, "utf8");
+      await handle.close();
+      return async () => { await fs.unlink(lockFile).catch(() => undefined); };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = await fs.stat(lockFile).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > 30_000) {
+        await fs.unlink(lockFile).catch(() => undefined);
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error("Session is being updated by another Nova process");
+}
+
+/** Atomic, checksummed and conflict-aware: an interrupted write never replaces the last snapshot. */
 export async function saveSession(record: SessionRecord): Promise<string> {
+  assertSessionId(record.id);
   const directory = sessionDirectory(record.root);
   await fs.mkdir(directory, { recursive: true });
   const file = path.join(directory, `${record.id}.json`);
-  await fs.writeFile(file, JSON.stringify({ ...record, updatedAt: Date.now() }, null, 2), "utf8");
-  return file;
+  const lockFile = `${file}.lock`;
+  const release = await acquireSessionLock(lockFile);
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const fileExists = await fs.stat(file).then(() => true).catch(() => false);
+    const current = await loadSession(record.root, record.id);
+    if (fileExists && !current) throw new Error("Existing session is corrupt or incompatible; refusing to overwrite it");
+    if (current && current.revision !== record.revision) {
+      throw new Error(`Session revision conflict: expected ${record.revision}, found ${current.revision}`);
+    }
+    const withoutIntegrity: Omit<SessionRecord, "integrity"> = {
+      ...record,
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      revision: record.revision + 1,
+      updatedAt: Date.now(),
+    };
+    delete (withoutIntegrity as Partial<SessionRecord>).integrity;
+    const next: SessionRecord = { ...withoutIntegrity, integrity: integrityFor(withoutIntegrity) };
+    const handle = await fs.open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(next, null, 2)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, file);
+    const directoryHandle = await fs.open(directory, "r").catch(() => null);
+    if (directoryHandle) {
+      await directoryHandle.sync().catch(() => undefined);
+      await directoryHandle.close();
+    }
+    Object.assign(record, next);
+    return file;
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+    await release();
+  }
 }
 
 export async function loadSession(root: string, id: string): Promise<SessionRecord | null> {
   try {
-    return JSON.parse(await fs.readFile(path.join(sessionDirectory(root), `${id}.json`), "utf8")) as SessionRecord;
+    assertSessionId(id);
+    const parsed = JSON.parse(await fs.readFile(path.join(sessionDirectory(root), `${id}.json`), "utf8")) as Partial<SessionRecord>;
+    if (!parsed || typeof parsed !== "object" || parsed.id !== id || path.resolve(parsed.root ?? "") !== path.resolve(root)) return null;
+    if (!Array.isArray(parsed.messages) || typeof parsed.approvals !== "object" || parsed.approvals === null) return null;
+    if (!Number.isSafeInteger(parsed.totalRwf) || (parsed.totalRwf ?? -1) < 0) return null;
+    if (typeof parsed.schemaVersion === "number" && parsed.schemaVersion > SESSION_SCHEMA_VERSION) return null;
+    if (parsed.integrity) {
+      const { integrity, ...withoutIntegrity } = parsed as SessionRecord;
+      if (integrity !== integrityFor(withoutIntegrity)) return null;
+    }
+    return {
+      ...(parsed as SessionRecord),
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      revision: Number.isSafeInteger(parsed.revision) && (parsed.revision ?? -1) >= 0 ? parsed.revision! : 0,
+    };
   } catch {
     return null;
   }
@@ -57,7 +160,8 @@ export async function listSessions(root: string, limit = 20): Promise<Array<Pick
         .filter((file) => file.endsWith(".json"))
         .map(async (file) => {
           try {
-            const record = JSON.parse(await fs.readFile(path.join(sessionDirectory(root), file), "utf8")) as SessionRecord;
+            const record = await loadSession(root, file.slice(0, -5));
+            if (!record) return null;
             return { id: record.id, title: record.title, updatedAt: record.updatedAt };
           } catch {
             return null;

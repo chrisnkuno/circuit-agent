@@ -4,6 +4,8 @@ An early foundation for a task-priced, multi-interface AI agent system.
 
 Users should know a task's expected RWF cost and maximum approved spend before an agent executes it. Convex persists the durable work state; E2B is the intended isolated execution layer; Circuit Pay is the intended billing adapter.
 
+The web workspace can automatically infer a coarse country from deployment metadata or browser locale, and users can override both country and display currency. Quotes and spend are converted with a dated daily rate for presentation; the authoritative cap, reservation, settlement, and audit ledger remain integer RWF amounts. Approval prompts show that RWF ledger amount alongside any conversion.
+
 ## Current implementation
 
 - Responsive task quote interface with RWF estimate, confidence, assumptions, and hard cap.

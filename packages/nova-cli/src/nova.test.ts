@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { parseArgs, readFxRates, renderProviders } from "./nova";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Interface } from "node:readline/promises";
+import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders } from "./nova";
 
 const plain = (value: string) => value.replace(/\[[0-9;]*m/g, "");
+
+/** Captures every `process.stdout.write` call as plain (colour-stripped) strings. */
+function captureStdout(): { writes: string[]; restore: () => void } {
+  const writes: string[] = [];
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    writes.push(plain(String(chunk)));
+    return true;
+  });
+  return { writes, restore: () => spy.mockRestore() };
+}
 
 describe("argument parsing", () => {
   it("defaults to a local build-mode session in the working directory", () => {
@@ -36,9 +47,14 @@ describe("argument parsing", () => {
     expect(args).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5", currency: "USD", budget: 25 });
   });
 
-  it("ignores a currency it cannot honour rather than inventing one", () => {
-    expect(parseArgs(["--currency", "EUR"]).currency).toBeUndefined();
+  it("accepts supported ISO currencies and ignores values it cannot honour", () => {
+    expect(parseArgs(["--currency", "EUR"]).currency).toBe("EUR");
+    expect(parseArgs(["--currency", "NOPE"]).currency).toBeUndefined();
     expect(parseArgs(["--currency", "rwf"]).currency).toBe("RWF");
+  });
+
+  it("accepts an explicit country for automatic currency selection", () => {
+    expect(parseArgs(["--location", "eg"])).toMatchObject({ country: "EG" });
   });
 
   it("keeps --max-rwf working as the old name for --budget", () => {
@@ -70,6 +86,20 @@ describe("argument parsing", () => {
     expect(parseArgs(["--sessions"]).listSessions).toBe(true);
     expect(parseArgs(["--providers"]).listProviders).toBe(true);
     expect(parseArgs(["--doctor"]).listProviders).toBe(true);
+    expect(parseArgs(["--version"]).version).toBe(true);
+    expect(parseArgs(["-v"]).version).toBe(true);
+  });
+
+  it("recognises both self-update entry forms and their safe controls", () => {
+    expect(parseArgs(["update"])).toMatchObject({ update: true, checkUpdate: false, updateYes: false, prompt: null });
+    expect(parseArgs(["--update", "--yes", "--package-manager", "pnpm"])).toMatchObject({
+      update: true,
+      updateYes: true,
+      packageManager: "pnpm",
+      prompt: null,
+    });
+    expect(parseArgs(["update", "--check"])).toMatchObject({ update: true, checkUpdate: true, prompt: null });
+    expect(parseArgs(["--check-update"])).toMatchObject({ update: true, checkUpdate: true, prompt: null });
   });
 });
 
@@ -91,6 +121,12 @@ describe("exchange rates", () => {
     expect(readFxRates({ NOVA_FX_RWF_PER_USD: "0" })).toEqual([]);
     expect(readFxRates({ NOVA_FX_RWF_PER_USD: "-5" })).toEqual([]);
     expect(readFxRates({ NOVA_FX_RWF_PER_USD: "not-a-number" })).toEqual([]);
+  });
+
+  it("supports an auditable manual rate for any currency pair", () => {
+    expect(readFxRates({ NOVA_FX_FROM: "USD", NOVA_FX_TO: "EGP", NOVA_FX_RATE: "48.5", NOVA_FX_ASOF: "2026-08-08" })[0]).toEqual({
+      from: "USD", to: "EGP", rate: 48.5, asOf: "2026-08-08", source: "NOVA_FX_RATE",
+    });
   });
 });
 
@@ -123,5 +159,238 @@ describe("provider status view", () => {
   it("emits no escape codes when colour is unwanted", () => {
     const rendered = renderProviders({ ANTHROPIC_API_KEY: "k" }, "none");
     expect(rendered).not.toMatch(/\[/);
+  });
+});
+
+describe("renderEvent", () => {
+  // The renderer owns one screen, so its markdown and tool-line state is module-level. Rebuilding
+  // it per test is what keeps a half-streamed line from one case leaking into the next.
+  beforeEach(() => configureRendering("none", true));
+
+  it("prints a checkpoint line naming a short prefix of the tree", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "checkpoint", checkpoint: { tree: "abcdef1234567890", label: "before", createdAt: 0 } });
+    restore();
+    expect(writes.join("")).toContain("checkpoint abcdef12");
+  });
+
+  it("reports a compaction with the before and after message counts", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "compaction", tokensBefore: 0, messagesBefore: 40, messagesAfter: 6 });
+    restore();
+    expect(writes.join("")).toContain("compacted context (40 → 6 messages)");
+  });
+
+  it("announces a tool call with what it was called with, before any result exists", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "src/app.ts" } } });
+    restore();
+    expect(writes[0]).toContain("read_file");
+    expect(writes[0]).toContain("src/app.ts"); // the argument is the useful half of the line
+  });
+
+  it("upgrades the announcement in place rather than printing a second line for the result", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "src/app.ts" } } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "a\nb\nc" } });
+    restore();
+    expect(writes).toContain("\x1b[1A\x1b[2K"); // the announcement row was erased
+    const final = writes.at(-1)!;
+    expect(final).toContain("✓");
+    expect(final).toContain("src/app.ts"); // the argument survives into the completed line
+    expect(final).toContain("3 lines");
+  });
+
+  it("prints the result on its own line when something interleaved after the announcement", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "a.ts" } } });
+    // A checkpoint between the call and its result means the announcement is no longer the last
+    // line on screen, so rewriting it would clobber the checkpoint line instead.
+    renderEvent({ type: "checkpoint", checkpoint: { tree: "abcdef1234567890", label: "x", createdAt: 0 } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "a" } });
+    restore();
+    expect(writes.filter((chunk) => chunk === "\x1b[1A\x1b[2K")).toHaveLength(0);
+    expect(writes.at(-1)).toContain("✓");
+  });
+
+  it("marks a successful tool call distinctly from a failed one", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "file contents" } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c2", toolName: "run_command", isError: true, effect: "workspace", content: "exit 1\nboom" } });
+    restore();
+    const [ok, failed] = writes;
+    expect(ok).toContain("✓");
+    expect(ok).toContain("read_file");
+    expect(failed).toContain("✗");
+    expect(failed).toContain("run_command");
+    expect(failed).toContain("exit 1");
+  });
+
+  it("summarizes a long tool result instead of pasting it into the transcript", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: `${"x".repeat(200)}\nsecond line never shown` } });
+    restore();
+    expect(writes[0]).not.toContain("second line never shown");
+    expect(writes[0]).toContain("2 lines");
+    expect(writes[0].length).toBeLessThan(200);
+  });
+
+  it("says nothing for a model turn, whose calls announce themselves one by one", () => {
+    const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "model_turn", iteration: 1, responseId: "r1", model: "m", toolCallCount: 3, usage } });
+    restore();
+    // A "thinking (3 tool calls)" line would only restate what the next three lines say.
+    expect(writes).toHaveLength(0);
+  });
+
+  it("streams assistant text raw as it arrives, then renders it once the line is whole", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "assistant_delta", iteration: 1, text: "Set **the port**" } });
+    expect(writes).toEqual(["Set **the port**"]); // live, unstyled, no trailing newline
+    renderEvent({ type: "runtime", event: { type: "assistant_delta", iteration: 1, text: " to 8080\n" } });
+    restore();
+    expect(writes.at(-1)).toBe("Set the port to 8080\n"); // re-rendered with the markers consumed
+  });
+});
+
+describe("createApprovalPrompt", () => {
+  function fakeReadline(answer: string): Interface {
+    return { question: async () => answer } as unknown as Interface;
+  }
+
+  it("denies without asking when stdin is not a terminal, and says why", async () => {
+    const { writes, restore } = captureStdout();
+    const approve = createApprovalPrompt(fakeReadline("y"), false);
+    const decision = await approve({ summary: "delete the database" });
+    restore();
+    expect(decision).toBe("deny_always");
+    expect(writes.join("")).toContain("stdin is not a terminal");
+  });
+
+  it.each([
+    ["y", "allow"], ["yes", "allow"], ["", "allow"],
+    ["n", "deny"], ["no", "deny"],
+    ["a", "allow_always"], ["always", "allow_always"],
+    ["d", "deny_always"],
+    ["gibberish", "deny"],
+  ] as const)("reads %j as %s", async (answer, expected) => {
+    const { restore } = captureStdout();
+    const approve = createApprovalPrompt(fakeReadline(answer), true);
+    const decision = await approve({ summary: "write a file" });
+    restore();
+    expect(decision).toBe(expected);
+  });
+
+  it("is case-insensitive and trims whitespace", async () => {
+    const { restore } = captureStdout();
+    const approve = createApprovalPrompt(fakeReadline("  YES  "), true);
+    const decision = await approve({ summary: "write a file" });
+    restore();
+    expect(decision).toBe("allow");
+  });
+});
+
+describe("spending approval", () => {
+  function fakeReadline(answer: string): Interface {
+    return { question: async () => answer } as unknown as Interface;
+  }
+
+  it.each([["", true], ["y", true], ["yes", true], ["n", false], ["anything else", false]] as const)("treats %j as approved=%s", async (answer, expected) => {
+    const { restore } = captureStdout();
+    await expect(confirmSpendingCap(fakeReadline(answer), true, "E£500.00")).resolves.toBe(expected);
+    restore();
+  });
+
+  it("treats an explicit --budget in a non-interactive command as the approval", async () => {
+    await expect(confirmSpendingCap(fakeReadline("n"), false, "$5.00")).resolves.toBe(true);
+  });
+});
+
+describe("main() — branches that resolve before any interactive input is needed", () => {
+  const originalArgv = process.argv;
+  const originalEnv = { ...process.env };
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    tmpRoot = await mkdtemp(path.join(os.tmpdir(), "nova-main-"));
+    // A clean slate: no provider keys leak in from the developer's own shell into the "unconfigured" tests.
+    for (const key of Object.keys(process.env)) {
+      if (/^(ANTHROPIC|OPENAI|CIRCUITNOTION|E2B|NOVA)_/.test(key)) delete process.env[key];
+    }
+  });
+
+  afterEach(async () => {
+    process.argv = originalArgv;
+    process.env = { ...originalEnv };
+    const { rm } = await import("node:fs/promises");
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  async function run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    const out = captureStdout();
+    const err = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => { errWrites.push(plain(String(chunk))); return true; });
+    const errWrites: string[] = [];
+    process.argv = ["node", "nova", ...args];
+    const { main } = await import("./nova");
+    const code = await main();
+    out.restore();
+    err.mockRestore();
+    return { code, stdout: out.writes.join(""), stderr: errWrites.join("") };
+  }
+
+  it("--help prints the command list and exits 0 without touching stdin", async () => {
+    const { code, stdout } = await run(["--help"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("a coding agent in your terminal");
+    expect(stdout).toContain("/todos");
+    expect(stdout).toContain("nova update");
+  });
+
+  it("--version prints the bundled package version without provider setup", async () => {
+    const { code, stdout } = await run(["--version"]);
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/^nova \d+\.\d+\.\d+\n$/);
+  });
+
+  it("--providers reports every provider as unconfigured with nothing set", async () => {
+    const { code, stdout } = await run(["--providers"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("set ANTHROPIC_API_KEY");
+  });
+
+  it("--sessions reports an empty project plainly", async () => {
+    const { code, stdout } = await run(["--sessions", "--cwd", tmpRoot]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("No sessions in this project yet.");
+  });
+
+  it("refuses to run with no model provider configured, and says so on stderr", async () => {
+    const { code, stderr } = await run(["--cwd", tmpRoot, "hello"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("Nova is not configured.");
+  });
+
+  it("refuses a sandbox session without E2B credentials, even with a model configured", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    const { code, stderr } = await run(["--cwd", tmpRoot, "--sandbox", "hello"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("Remote sandboxes need E2B");
+  });
+
+  it("refuses an interactive session with no terminal attached and no one-shot request", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    try {
+      const { code, stderr } = await run(["--cwd", tmpRoot]);
+      expect(code).toBe(1);
+      expect(stderr).toContain("No terminal attached");
+    } finally {
+      if (originalIsTTY) Object.defineProperty(process.stdin, "isTTY", originalIsTTY);
+    }
   });
 });

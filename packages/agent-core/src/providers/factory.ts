@@ -70,13 +70,6 @@ export function createCodingSandboxProvider(environment: ProviderEnvironment): I
   return undefined;
 }
 
-function parsePositiveInteger(value: string | undefined, name: string): number | undefined {
-  if (!value?.trim()) return undefined;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
-  return parsed;
-}
-
 export function createOpenAIProvider(environment: ProviderEnvironment): OpenAICodingModelProvider | undefined {
   const apiKey = environment.OPENAI_API_KEY?.trim();
   const model = environment.OPENAI_MODEL?.trim();

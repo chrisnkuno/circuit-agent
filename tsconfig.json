@@ -26,10 +26,10 @@
       "@/*": [
         "./*"
       ],
-      "circuit-nova-core": [
+      "@circuit-nova/nova-core": [
         "./packages/agent-core/src/index.ts"
       ],
-      "circuit-nova-core/*": [
+      "@circuit-nova/nova-core/*": [
         "./packages/agent-core/src/*"
       ]
     }

@@ -30,6 +30,7 @@ describe("money", () => {
     expect(formatMoney(fromUnits(12.5, "USD"))).toBe("$12.50");
     // RWF has no subunit in practice, so fractions are noise.
     expect(formatMoney(money(1_500_500, "RWF"))).toBe("RWF 2");
+    expect(formatMoney(fromUnits(12.5, "EUR"))).toMatch(/12[.,]50/);
   });
 
   it("refuses to add two different currencies", () => {
@@ -101,9 +102,10 @@ describe("token pricing", () => {
 });
 
 describe("currency guard", () => {
-  it("only accepts currencies the system actually supports", () => {
+  it("accepts supported ISO currencies and rejects arbitrary codes", () => {
     expect(isCurrency("RWF")).toBe(true);
     expect(isCurrency("USD")).toBe(true);
-    expect(isCurrency("EUR")).toBe(false);
+    expect(isCurrency("EUR")).toBe(true);
+    expect(isCurrency("NOPE")).toBe(false);
   });
 });

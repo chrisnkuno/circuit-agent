@@ -3,15 +3,21 @@ import { createInterface, type Interface } from "node:readline/promises";
 import path from "node:path";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { NovaAgent, type NovaEvent } from "circuit-nova-core/nova-cli/agent";
-import type { NovaMode, PermissionDecision } from "circuit-nova-core/nova-cli/permissions";
-import { listSessions, loadSession } from "circuit-nova-core/nova-cli/session";
-import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "circuit-nova-core/providers/agent-matrix";
-import { fromUnits, formatMoney, isCurrency, type Currency, type FxRate } from "circuit-nova-core/money";
-import { createExaClient } from "circuit-nova-core/providers/exa";
-import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "circuit-nova-core/nova-cli/backends";
-import { CostLedger } from "circuit-nova-core/nova-cli/cost";
+import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agent";
+import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
+import { listSessions, loadSession } from "@circuit-nova/nova-core/nova-cli/session";
+import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
+import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
+import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
+import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
+import { box, MarkdownStream, ReplaceableBlock, Spinner, StatusBar } from "./tui";
+import { describeToolCall, summarizeToolResult } from "./transcript";
+import { renderMarkdown } from "./markdown";
+import { completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { fetchDailyFxRate, resolveCurrencyPreference } from "./local-currency";
+import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
 
 /**
  * Nova CLI — the terminal front end.
@@ -23,13 +29,24 @@ import { detectColorDepth, renderBanner, renderTagline } from "./banner";
  */
 
 const RESET = "[0m";
+
+/**
+ * Whether output is going somewhere that can render colour and be drawn on.
+ *
+ * `banner.ts` has always honoured this and `style` never did, so piping Nova's output still wrote
+ * escape codes into whatever was reading it. Both now answer to the same switch.
+ */
+let colorEnabled = false;
+let liveTerminal = false;
+
+const wrap = (code: string) => (value: string) => (colorEnabled ? `${code}${value}${RESET}` : value);
 const style = {
-  dim: (value: string) => `[2m${value}${RESET}`,
-  bold: (value: string) => `[1m${value}${RESET}`,
-  cyan: (value: string) => `[36m${value}${RESET}`,
-  green: (value: string) => `[32m${value}${RESET}`,
-  yellow: (value: string) => `[33m${value}${RESET}`,
-  red: (value: string) => `[31m${value}${RESET}`,
+  dim: wrap("[2m"),
+  bold: wrap("[1m"),
+  cyan: wrap("[36m"),
+  green: wrap("[32m"),
+  yellow: wrap("[33m"),
+  red: wrap("[31m"),
 };
 
 type ParsedArgs = {
@@ -38,6 +55,11 @@ type ParsedArgs = {
   resume: string | null;
   listSessions: boolean;
   listProviders: boolean;
+  update: boolean;
+  checkUpdate: boolean;
+  updateYes: boolean;
+  packageManager: string | undefined;
+  version: boolean;
   root: string;
   help: boolean;
   /** Where files are written: this machine, or a throwaway remote sandbox. */
@@ -52,24 +74,34 @@ type ParsedArgs = {
   provider: string | undefined;
   model: string | undefined;
   currency: Currency | undefined;
+  country: string | undefined;
 };
 
 /** Shape of the ids `newSessionId` mints, e.g. `20260808T001720Z-2ubjpz`. */
 const SESSION_ID = /^\d{8}T\d{6}Z-[a-z0-9]{6}$/;
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
+  const updateRequested = argv[0] === "update" || argv.includes("--update") || argv.includes("--check-update");
   const parsed: ParsedArgs = {
-    mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false, root: process.cwd(), help: false,
-    backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined,
+    mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false,
+    update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false,
+    root: process.cwd(), help: false,
+    backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined,
   };
   const rest: string[] = [];
 
-  for (let index = 0; index < argv.length; index += 1) {
+  for (let index = argv[0] === "update" ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--plan" || argument === "-p") parsed.mode = "plan";
     else if (argument === "--auto" || argument === "-y") parsed.mode = "auto";
     else if (argument === "--build") parsed.mode = "build";
     else if (argument === "--help" || argument === "-h") parsed.help = true;
+    else if (argument === "--version" || argument === "-v") parsed.version = true;
+    else if (argument === "--update") parsed.update = true;
+    else if (argument === "--check-update") { parsed.update = true; parsed.checkUpdate = true; }
+    else if (argument === "--check" && updateRequested) parsed.checkUpdate = true;
+    else if (argument === "--yes" && updateRequested) parsed.updateYes = true;
+    else if (argument === "--package-manager" && updateRequested) { parsed.packageManager = argv[index + 1]; index += 1; }
     else if (argument === "--sessions") parsed.listSessions = true;
     else if (argument === "--providers" || argument === "--doctor") parsed.listProviders = true;
     else if (argument === "--resume") {
@@ -96,13 +128,17 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       if (isCurrency(value)) parsed.currency = value;
       index += 1;
     }
+    else if (argument === "--location" || argument === "--country") { parsed.country = argv[index + 1]?.toUpperCase(); index += 1; }
     else rest.push(argument);
   }
   if (rest.length > 0) parsed.prompt = rest.join(" ");
   return parsed;
 }
 
-const HELP = `
+// A function, not a constant: it is built after `configureRendering` has learned whether the
+// destination can render colour at all, which a module-level template literal would predate.
+function helpText(): string {
+  return `
 ${style.bold("nova")} — a coding agent in your terminal
 
   nova                      Start an interactive session
@@ -112,6 +148,11 @@ ${style.bold("nova")} — a coding agent in your terminal
   nova --resume [id]        Continue a previous session ("latest" by default)
   nova --sessions           List sessions in this project
   nova --cwd <dir>          Work in a different project root
+  nova update               Check, confirm, and install the latest Nova CLI
+  nova --update             Alias for nova update
+  nova update --check       Check for an update without installing it
+  nova update --yes         Update without an interactive confirmation
+  nova --version            Print the installed CLI version
 
 ${style.bold("Where the files go")}
   nova --sandbox            Work in a remote E2B sandbox, not on this machine
@@ -125,58 +166,126 @@ ${style.bold("Model")}
   nova --providers          Show which providers are configured, and what is missing
 
 ${style.bold("Cost")}
-  nova --currency RWF|USD   Currency to display costs in
-  nova --budget N           Stop before spending more than N (display currency)
+  nova --location EG        Select a country (auto-detected from your locale by default)
+  nova --currency EGP       Select any supported ISO display currency
+  nova --budget N           Approve and enforce a cap in the display currency
   /cost                     Token and cost breakdown for this session
 
 ${style.bold("In a session")}
-  /plan /build /auto        Switch mode          /undo     Revert the last turn
-  /clear                    Start a fresh thread /sessions List sessions
-  /pull [dir]               Copy sandbox files here  /where  Show the workspace
-  /cost                     What this session has cost
-  /providers                Which providers are configured
-  /exit                     Leave               Ctrl-C    Interrupt the current turn
+${renderCommandHelp()}
 `;
-
-/**
- * Tracks whether the cursor is sitting mid-line inside streamed assistant text.
- *
- * Deltas arrive without newlines, so anything printed afterwards — a tool line, a status line —
- * would land on the same row and corrupt both. Every other writer closes the stream line first.
- */
-let streaming = false;
-
-function endStreamedLine(): void {
-  if (!streaming) return;
-  process.stdout.write("\n");
-  streaming = false;
 }
 
-function renderEvent(event: NovaEvent): void {
+/**
+ * Everything that can occupy the last rows of the screen, and therefore has to be closed or
+ * cleared before anything else prints there.
+ *
+ * `markdown` holds a partial assistant line, `toolLine` holds a tool call awaiting its result,
+ * and `statusBar` holds the spinner. They are module state for the same reason `renderEvent` is a
+ * module function: the renderer is one thing with one screen, and threading three cursors through
+ * every call site is how the two of them fall out of step.
+ */
+const statusBar = new StatusBar();
+const toolLines = new ReplaceableBlock();
+let markdown = new MarkdownStream(process.stdout, "none");
+let spinner: Spinner | undefined;
+const activity = { awaitingFirstDelta: false, toolCalls: 0, tokens: 0 };
+/** Announced calls awaiting their result, by call id, so each can be rewritten where it sits. */
+const pendingCalls = new Map<string, { line: number; detail: string }>();
+
+/** Points the renderer at the colour depth and terminal the session actually has. */
+export function configureRendering(
+  depth: ReturnType<typeof detectColorDepth>,
+  live: boolean = Boolean(process.stdout.isTTY),
+): void {
+  colorEnabled = depth !== "none";
+  liveTerminal = live;
+  markdown = new MarkdownStream(process.stdout, depth, () => process.stdout.columns ?? 80, live);
+}
+
+function endStreamedLine(): void {
+  markdown.end();
+}
+
+/** Drops the block and the calls it held, once something else owns the bottom of the screen. */
+function forgetToolLines(): void {
+  toolLines.forget();
+  pendingCalls.clear();
+}
+
+/** Composes one tool line: a mark, the tool, what it was called with, and how it went. */
+function toolLineText(mark: string, name: string, detail: string, summary: string): string {
+  const head = `  ${mark} ${style.cyan(name)}`;
+  const middle = detail ? `  ${detail}` : "";
+  const tail = summary ? style.dim(` · ${summary}`) : "";
+  return `${head}${middle}${tail}`;
+}
+
+export function renderEvent(event: NovaEvent): void {
+  // Every event clears the spinner before printing. If the spinner is still running its next tick
+  // redraws the bar underneath whatever just printed, so feedback continues through a whole run of
+  // tool calls rather than only filling the first gap.
+  statusBar.clear();
+
   if (event.type === "runtime" && event.event.type === "assistant_delta") {
-    // Written straight through as it is generated: this is the difference between a session that
-    // looks stalled for twenty seconds and one you can read while it thinks.
-    process.stdout.write(event.event.text);
-    streaming = true;
+    // The model is visibly talking now, so the spinner's job — filling the dead air before the
+    // first thing appears — is done for the rest of this turn. Checkpoint and compaction events
+    // are near-instant bookkeeping fired before the model has produced anything and do not end
+    // that wait; only real model output does.
+    if (activity.awaitingFirstDelta) {
+      activity.awaitingFirstDelta = false;
+      spinner?.stop();
+    }
+    forgetToolLines();
+    markdown.push(event.event.text);
     return;
   }
-  endStreamedLine();
+
+  // Anything else prints on its own row, so a half-written assistant line is closed off first.
+  const wasStreaming = markdown.active;
+  markdown.end();
+  if (wasStreaming) forgetToolLines();
+
   if (event.type === "checkpoint") {
+    forgetToolLines();
     process.stdout.write(style.dim(`  ⎿ checkpoint ${event.checkpoint.tree.slice(0, 8)}\n`));
     return;
   }
   if (event.type === "compaction") {
+    forgetToolLines();
     process.stdout.write(style.dim(`  ⎿ compacted context (${event.messagesBefore} → ${event.messagesAfter} messages)\n`));
     return;
   }
+
   const runtime = event.event;
-  if (runtime.type === "model_turn" && runtime.toolCallCount > 0) {
-    process.stdout.write(style.dim(`  ⎿ thinking (${runtime.toolCallCount} tool call${runtime.toolCallCount === 1 ? "" : "s"})\n`));
+  if (runtime.type === "model_turn") {
+    // Silent by design: every call this turn announces itself below, so a "thinking (3 tool
+    // calls)" line would only restate what the next three lines are about to say.
+    activity.tokens += runtime.usage.inputTokens + runtime.usage.outputTokens;
+    return;
+  }
+  if (runtime.type === "tool_call") {
+    const detail = describeToolCall(runtime.toolName, runtime.arguments);
+    // Announcing then rewriting needs a cursor. Piped, the announcement would be a duplicate line
+    // nobody can erase, so only the completed line below is printed.
+    const line = liveTerminal ? toolLines.append(toolLineText(style.dim("⋯"), runtime.toolName, style.dim(detail), "")) : -1;
+    pendingCalls.set(runtime.toolCallId, { line, detail });
+    return;
   }
   if (runtime.type === "tool_result") {
+    activity.toolCalls += 1;
     const mark = runtime.isError ? style.red("✗") : style.green("✓");
-    const firstLine = runtime.content.split("\n")[0]?.slice(0, 96) ?? "";
-    process.stdout.write(`  ${mark} ${style.cyan(runtime.toolName)} ${style.dim(firstLine)}\n`);
+    const summary = summarizeToolResult(runtime.toolName, runtime.content, runtime.isError);
+    // The announcement and the outcome are the same line, rewritten where it already sits. Reads
+    // parallel-safe calls correctly too: several are announced before the first result returns, so
+    // the line to rewrite is usually not the last one printed.
+    const pending = pendingCalls.get(runtime.toolCallId);
+    const completed = toolLineText(mark, runtime.toolName, style.dim(pending?.detail ?? ""), summary);
+    if (pending === undefined || pending.line < 0 || !toolLines.update(pending.line, completed)) {
+      process.stdout.write(`${completed}\n`);
+    }
+    pendingCalls.delete(runtime.toolCallId);
+    return;
   }
 }
 
@@ -219,19 +328,34 @@ export function renderProviders(environment: Record<string, string | undefined>,
  * a historical figure can be reconciled later.
  */
 export function readFxRates(environment: Record<string, string | undefined>): FxRate[] {
+  const genericRate = Number(environment.NOVA_FX_RATE);
+  const genericFrom = environment.NOVA_FX_FROM?.trim().toUpperCase();
+  const genericTo = environment.NOVA_FX_TO?.trim().toUpperCase();
+  const configured: FxRate[] = [];
+  if (Number.isFinite(genericRate) && genericRate > 0 && genericFrom && genericTo && isCurrency(genericFrom) && isCurrency(genericTo) && genericFrom !== genericTo) {
+    configured.push({
+      from: genericFrom,
+      to: genericTo,
+      rate: genericRate,
+      asOf: environment.NOVA_FX_ASOF?.trim() || new Date().toISOString().slice(0, 10),
+      source: environment.NOVA_FX_SOURCE?.trim() || "NOVA_FX_RATE",
+    });
+  }
   const rate = Number(environment.NOVA_FX_RWF_PER_USD);
-  if (!Number.isFinite(rate) || rate <= 0) return [];
-  return [{
-    from: "USD",
-    to: "RWF",
-    rate,
-    asOf: environment.NOVA_FX_ASOF?.trim() || new Date().toISOString().slice(0, 10),
-    source: environment.NOVA_FX_SOURCE?.trim() || "NOVA_FX_RWF_PER_USD",
-  }];
+  if (Number.isFinite(rate) && rate > 0 && !configured.some((candidate) => candidate.from === "USD" && candidate.to === "RWF")) {
+    configured.push({
+      from: "USD",
+      to: "RWF",
+      rate,
+      asOf: environment.NOVA_FX_ASOF?.trim() || new Date().toISOString().slice(0, 10),
+      source: environment.NOVA_FX_SOURCE?.trim() || "NOVA_FX_RWF_PER_USD",
+    });
+  }
+  return configured;
 }
 
 /** The approval gate, as a person experiences it. */
-function createApprovalPrompt(readline: Interface, interactive: boolean) {
+export function createApprovalPrompt(readline: Interface, interactive: boolean) {
   return async ({ summary }: { summary: string }): Promise<PermissionDecision> => {
     // Without a terminal there is nobody to ask, and a prompt written to a pipe would either hang
     // or read the next line of piped input as an answer. Denying is the only honest result — and
@@ -241,6 +365,12 @@ function createApprovalPrompt(readline: Interface, interactive: boolean) {
       process.stdout.write(`    ${style.dim("Re-run with --auto to pre-approve workspace edits.")}\n`);
       return "deny_always";
     }
+    // A tool call can arrive before the model emits visible text. In that case the TUI spinner is
+    // still redrawing the last row and can overwrite the first approval question unless it is
+    // explicitly stopped here.
+    activity.awaitingFirstDelta = false;
+    spinner?.stop();
+    statusBar.clear();
     endStreamedLine();
     process.stdout.write(`\n  ${style.yellow("?")} Nova wants to ${style.bold(summary)}\n`);
     const answer = (await readline.question(`    ${style.dim("[y]es / [n]o / [a]lways / [d]eny always: ")}`)).trim().toLowerCase();
@@ -251,11 +381,36 @@ function createApprovalPrompt(readline: Interface, interactive: boolean) {
   };
 }
 
+/** Confirms the one bounded amount the session may spend before any sandbox or model is started. */
+export async function confirmSpendingCap(readline: Interface, interactive: boolean, renderedCap: string): Promise<boolean> {
+  // A non-interactive caller supplied --budget in the command itself; that explicit argument is
+  // the approval. Prompting a pipe would hang or consume the task text as an answer.
+  if (!interactive) return true;
+  statusBar.clear();
+  const answer = (await readline.question(`  ${style.yellow("?")} Approve a session spend cap of ${style.bold(renderedCap)}? ${style.dim("[Y/n]: ")}`)).trim().toLowerCase();
+  return answer === "" || answer === "y" || answer === "yes";
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    process.stdout.write(HELP);
+    process.stdout.write(helpText());
     return 0;
+  }
+
+  if (args.version) {
+    process.stdout.write(`nova ${NOVA_CLI_VERSION}\n`);
+    return 0;
+  }
+
+  if (args.update) {
+    const result = await runSelfUpdate({
+      checkOnly: args.checkUpdate,
+      yes: args.updateYes,
+      packageManager: args.packageManager,
+      environment: process.env as Record<string, string | undefined>,
+    });
+    return result.code;
   }
 
   if (args.listProviders) {
@@ -278,16 +433,64 @@ async function main(): Promise<number> {
     process.stderr.write(`${style.red("Nova is not configured.")} ${resolved.error}\n`);
     return 1;
   }
-  const { provider: model, spec, prices } = resolved;
+  let { provider: model, spec, prices } = resolved;
+  let resolvedModelId = resolved.model;
 
-  // Display currency: the flag, then configuration, then the provider's own currency — so a cost
-  // is never silently restated in a unit the user did not choose.
-  const display: Currency = args.currency ?? (isCurrency(environment.NOVA_CURRENCY?.trim().toUpperCase() ?? "") ? environment.NOVA_CURRENCY!.trim().toUpperCase() as Currency : prices?.currency ?? "USD");
+  // Display currency: explicit flags/configuration, then a coarse locale country, then the
+  // provider's own currency. Accounting remains in the provider currency with the dated rate
+  // attached to every converted report.
+  const preference = resolveCurrencyPreference({ currency: args.currency, country: args.country, environment, providerCurrency: prices?.currency ?? "USD" });
+  let display = preference.currency;
   const rates = readFxRates(environment);
+  let localCurrencyWarning: string | null = null;
+  if (prices && display !== prices.currency) {
+    const configured = rates.some((rate) => (rate.from === prices!.currency && rate.to === display) || (rate.to === prices!.currency && rate.from === display));
+    if (!configured && environment.NOVA_FX_OFFLINE !== "true") {
+      const daily = await fetchDailyFxRate(prices.currency, display);
+      if (daily) rates.push(daily);
+    }
+    const convertible = rates.some((rate) => (rate.from === prices!.currency && rate.to === display) || (rate.to === prices!.currency && rate.from === display));
+    if (!convertible) {
+      if (args.budget) {
+        process.stderr.write(`${style.red("Cannot enforce the approved budget.")} No ${prices.currency}→${display} exchange rate is available. Set a manual FX rate, choose --currency ${prices.currency}, or reconnect and retry.\n`);
+        return 1;
+      }
+      localCurrencyWarning = `No current ${prices.currency}→${display} rate was available; costs remain in ${prices.currency}.`;
+      display = prices.currency;
+    }
+  }
+  if (args.budget && !prices) {
+    process.stderr.write(`${style.red("Cannot enforce the approved budget.")} This model has no configured price. Configure its rate or omit --budget.\n`);
+    return 1;
+  }
 
-  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  const readline = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    // Reads the cached project listing below, so completion never blocks on a filesystem walk.
+    completer: (line: string) => completeInput(line, projectFiles),
+  });
+  // Warmed once the workspace exists and refreshed after each turn, since a turn can create files.
+  let projectFiles: string[] = [];
+  const refreshProjectFiles = () => {
+    // Only the REPL completes anything, so a one-shot run should not pay for a project walk.
+    if (!interactive) return;
+    void workspace.glob("**/*").then((files) => { projectFiles = files; }).catch(() => undefined);
+  };
   const interactive = Boolean(process.stdin.isTTY);
+  // The status bar and spinner draw over the current line and redraw in place — meaningless
+  // (and corrupting) output when either end of the pipe is not a real terminal.
+  const ttyMode = interactive && Boolean(process.stdout.isTTY);
+  const depth = detectColorDepth(environment, Boolean(process.stdout.isTTY));
+  configureRendering(depth);
   let mode = args.mode;
+
+  const approvedBudget = args.budget ? fromUnits(args.budget, display) : undefined;
+  if (approvedBudget && !await confirmSpendingCap(readline, interactive, formatMoney(approvedBudget))) {
+    process.stdout.write(style.yellow("  Spending not approved — no sandbox or model was started.\n"));
+    readline.close();
+    return 0;
+  }
 
   // Built once and shared by every agent instance in this process: a mode switch or /clear must
   // keep working in the same sandbox, not silently start a second one and lose the first's files.
@@ -295,8 +498,8 @@ async function main(): Promise<number> {
   if (args.backend === "e2b") {
     // Imported here, not at the top: a local-only session should never load the E2B SDK, which is
     // what lets the published package treat it as an optional dependency.
-    const { findWorkspacePreset } = await import("circuit-nova-core/sandbox-templates");
-    const { createE2BProvider } = await import("circuit-nova-core/providers/factory");
+    const { findWorkspacePreset } = await import("@circuit-nova/nova-core/sandbox-templates");
+    const { createE2BProvider } = await import("@circuit-nova/nova-core/providers/factory");
     const preset = findWorkspacePreset(args.preset);
     const sandbox = createE2BProvider(environment, preset.templateAlias);
     if (!sandbox) {
@@ -325,12 +528,15 @@ async function main(): Promise<number> {
     workspace = new LocalWorkspace(args.root);
   }
 
+  refreshProjectFiles();
+
   const ledger = new CostLedger({
     prices,
     display,
     rates,
-    ...(args.budget ? { budget: fromUnits(args.budget, display) } : {}),
+    ...(approvedBudget ? { budget: approvedBudget } : {}),
   });
+
   const newAgent = () => new NovaAgent({
     root: args.root,
     model,
@@ -338,8 +544,14 @@ async function main(): Promise<number> {
     // real, currency-aware budget. Feeding it the provider's own per-million rates keeps that guard
     // proportionate to actual spend instead of to a unit nobody configured.
     prices: prices
-      ? { inputRwfPerMillionTokens: Math.max(1, Math.round(prices.inputPerMillion / 1_000_000)), outputRwfPerMillionTokens: Math.max(1, Math.round(prices.outputPerMillion / 1_000_000)) }
+      ? approvedBudget
+        // With an approved cap, the runtime accounts in provider-currency micros. Keeping the
+        // full precision lets it clamp output before a provider call rather than notice an
+        // overrun after the response has already been billed.
+        ? { inputRwfPerMillionTokens: prices.inputPerMillion, outputRwfPerMillionTokens: prices.outputPerMillion }
+        : { inputRwfPerMillionTokens: Math.max(1, Math.round(prices.inputPerMillion / 1_000_000)), outputRwfPerMillionTokens: Math.max(1, Math.round(prices.outputPerMillion / 1_000_000)) }
       : { inputRwfPerMillionTokens: 1, outputRwfPerMillionTokens: 1 },
+    ...(approvedBudget && prices ? { budgets: { maxRwf: convertTo(approvedBudget, prices.currency, rates)?.micros ?? approvedBudget.micros } } : {}),
     mode,
     workspace,
     approve: createApprovalPrompt(readline, interactive),
@@ -348,7 +560,6 @@ async function main(): Promise<number> {
       if (event.type === "runtime" && event.event.type === "assistant_delta") streamedAnswer = true;
       renderEvent(event);
     },
-
   });
   let agent = newAgent();
 
@@ -367,6 +578,9 @@ async function main(): Promise<number> {
   // without losing the session that produced it.
   process.on("SIGINT", () => {
     agent.cancel();
+    activity.awaitingFirstDelta = false;
+    spinner?.stop();
+    statusBar.clear();
     process.stdout.write(style.yellow("\n  interrupted — finishing the current tool call\n"));
   });
 
@@ -377,21 +591,61 @@ async function main(): Promise<number> {
       process.stdout.write(`${style.red("Budget spent.")} ${ledger.budgetWarning()}\n`);
       return;
     }
+    if (approvedBudget && prices) {
+      const spent = ledger.displayTotal?.micros ?? 0;
+      const remainingDisplay: Money = { currency: approvedBudget.currency, micros: Math.max(0, approvedBudget.micros - spent) };
+      const remainingProvider = convertTo(remainingDisplay, prices.currency, rates);
+      if (!remainingProvider) {
+        process.stdout.write(`${style.red("Cannot continue safely — the approved cap cannot be converted to the provider currency.")}\n`);
+        return;
+      }
+      agent.setModelSpendLimit(remainingProvider.micros);
+    }
     const started = Date.now();
+    // Per-turn counters, and a clean markdown state: an unclosed code fence from the last answer
+    // must not colour this one as code.
+    activity.toolCalls = 0;
+    activity.tokens = 0;
+    forgetToolLines();
+    markdown.reset();
+    if (ttyMode) {
+      activity.awaitingFirstDelta = true;
+      spinner = new Spinner(() => statusBar.render({
+        mode,
+        spinnerGlyph: spinner!.glyph,
+        elapsedMs: Date.now() - started,
+        toolCalls: activity.toolCalls,
+        tokens: activity.tokens,
+        cost: ledger.displayTotal ? formatMoney(ledger.displayTotal) : "cost unknown",
+      }, depth));
+      spinner.start();
+    }
     try {
       const result = await agent.send(request);
+      activity.awaitingFirstDelta = false;
+      spinner?.stop();
+      statusBar.clear();
       endStreamedLine();
 
       // On a non-completed status the runtime's summary explains the *stop*, not the work — so
       // printing it alone throws away everything the agent actually said. Observed on a real run
-      // that wrote a working script: the answer vanished behind "needs verification".
+      // that wrote a working script: the answer vanished behind "needs verification". But the
+      // summary for `needs_verification` specifically already embeds that same text ("The agent
+      // reported: ..."), and a streamed answer is already on screen either way — printing it raw
+      // *as well* in either case put the same paragraph on screen two or three times over.
       const spoken = [...result.messages].reverse().find(
         (message) => message.role === "assistant" && !("toolCalls" in message) && message.content.trim(),
       );
-      if (result.status !== "completed" && spoken) process.stdout.write(`\n${spoken.content.trim()}\n`);
+      const spokenText = spoken?.content.trim();
+      // A provider that cannot stream reaches here with the whole answer at once. It gets the same
+      // markdown treatment the streamed path gives it, so the two are indistinguishable on screen.
+      const asMarkdown = (text: string) => renderMarkdown(text, { width: process.stdout.columns ?? 80, depth });
+      if (result.status !== "completed" && spokenText && !streamedAnswer && !result.summary.includes(spokenText)) {
+        process.stdout.write(`\n${asMarkdown(spokenText)}\n`);
+      }
       // When the answer streamed, it is already on screen — reprinting it verbatim is noise.
       if (!(result.status === "completed" && streamedAnswer)) {
-        process.stdout.write(`\n${result.status === "completed" ? result.summary : style.yellow(result.summary)}\n`);
+        process.stdout.write(`\n${result.status === "completed" ? asMarkdown(result.summary) : style.yellow(result.summary)}\n`);
       }
 
       const turn = ledger.record({
@@ -403,7 +657,11 @@ async function main(): Promise<number> {
       process.stdout.write(style.dim(`\n  ${result.status} · ${ledger.formatTurn(turn)}\n`));
       const warning = ledger.budgetWarning();
       if (warning) process.stdout.write(`  ${style.yellow(warning)}\n`);
+      refreshProjectFiles(); // a turn can create files, and the next mention should complete them
     } catch (error) {
+      activity.awaitingFirstDelta = false;
+      spinner?.stop();
+      statusBar.clear();
       endStreamedLine();
       const message = error instanceof Error ? error.message : String(error);
       // The runtime enforces the cap by throwing, which on its own reaches the user as a bare
@@ -437,18 +695,20 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const depth = detectColorDepth(environment, Boolean(process.stdout.isTTY));
   const where = workspace.kind === "e2b" ? `sandbox ${workspace.label.split(":")[1]}` : path.basename(args.root);
   process.stdout.write(`${renderBanner({
     width: process.stdout.columns ?? 80,
     depth,
-    subtitle: `${mode} · ${spec.label} ${resolved.model} · ${where}`,
+    subtitle: `${mode} · ${spec.label} ${resolvedModelId} · ${where}`,
     // Seeded per session, so the sky is stable while you are looking at it.
     seed: Date.now() & 0xffff,
   })}\n`);
   process.stdout.write(`${renderTagline("  /help for commands · /exit to leave", depth)}\n`);
+  process.stdout.write(style.dim(`  costs: ${display}${preference.countryCode ? ` · location ${preference.countryCode}` : ""} · ${preference.source === "location" ? "auto-detected" : preference.source}\n`));
+  if (localCurrencyWarning) process.stdout.write(`${style.yellow(`  ${localCurrencyWarning}`)}\n`);
+  if (!args.budget) process.stdout.write(`${style.yellow("  No session spend cap set — use --budget N to approve and enforce one.")}\n`);
   if (!prices) {
-    process.stdout.write(`${style.yellow(`  No price configured for ${resolved.model} — costs will show as unknown.`)}\n`);
+    process.stdout.write(`${style.yellow(`  No price configured for ${resolvedModelId} — costs will show as unknown.`)}\n`);
     process.stdout.write(`${style.dim(`  Set ${PRICE_ENVIRONMENT_HINT}, or run nova --providers.`)}\n`);
   }
 
@@ -457,7 +717,7 @@ async function main(): Promise<number> {
     if (!input) continue;
 
     if (input === "/exit" || input === "/quit") break;
-    if (input === "/help") { process.stdout.write(HELP); continue; }
+    if (input === "/help") { process.stdout.write(helpText()); continue; }
     if (input === "/plan" || input === "/build" || input === "/auto") {
       mode = input.slice(1) as NovaMode;
       // A new mode is a new permission posture; the transcript carries over so the plan the agent
@@ -468,6 +728,41 @@ async function main(): Promise<number> {
       const carried = await loadSession(args.root, previous.sessionId);
       if (carried) agent.resume(carried);
       process.stdout.write(style.dim(`  switched to ${mode} mode\n`));
+      continue;
+    }
+    if (input.startsWith("/model")) {
+      const [, providerArg, modelArg] = input.split(/\s+/);
+      const attempt = resolveProvider(environment, { provider: providerArg, model: modelArg });
+      if ("error" in attempt) {
+        process.stdout.write(`${style.red(attempt.error)}\n`);
+        continue;
+      }
+      model = attempt.provider;
+      spec = attempt.spec;
+      prices = attempt.prices;
+      resolvedModelId = attempt.model;
+      ledger.setPrices(prices);
+      const previous = agent;
+      agent = newAgent();
+      const carried = await loadSession(args.root, previous.sessionId);
+      if (carried) agent.resume(carried);
+      process.stdout.write(style.dim(`  switched to ${spec.label} ${resolvedModelId}${prices ? "" : " — no price configured, costs will show as unknown"}\n`));
+      continue;
+    }
+    if (input === "/todos") {
+      const todos = agent.todos;
+      if (todos.length === 0) { process.stdout.write(style.dim("  no plan yet\n")); continue; }
+      const mark = { pending: "○", in_progress: "◐", done: "●" } as const;
+      process.stdout.write(`${box(todos.map((todo) => `${mark[todo.status]} ${todo.text}`), { depth, title: "todos" })}\n`);
+      continue;
+    }
+    if (input === "/diff") {
+      const stat = await agent.diffStat();
+      process.stdout.write(stat ? `${box(stat.split("\n"), { depth, title: "diff" })}\n` : style.dim("  nothing changed since the last checkpoint\n"));
+      continue;
+    }
+    if (input === "/keys") {
+      process.stdout.write(`${renderKeyboardShortcuts()}\n`);
       continue;
     }
     if (input === "/undo") {
@@ -504,6 +799,15 @@ async function main(): Promise<number> {
       for (const session of await listSessions(args.root)) {
         process.stdout.write(`  ${style.cyan(session.id)}  ${session.title}\n`);
       }
+      continue;
+    }
+
+    if (input.startsWith("/") && !isKnownCommand(input.split(/\s+/)[0])) {
+      // Without this the typo is simply sent to the model, which costs a round trip to be told
+      // it makes no sense.
+      const name = input.split(/\s+/)[0];
+      const suggestion = suggestCommand(name);
+      process.stdout.write(`  ${style.yellow(`Unknown command ${name}.`)}${style.dim(suggestion ? ` Did you mean ${suggestion}?` : " Type /help for the list.")}\n`);
       continue;
     }
 

@@ -69,7 +69,7 @@ const WORDMARK = [
 const WORDMARK_WIDTH = 36;
 
 /** Glyphs by brightness: distant dust through to the few stars that actually shine. */
-const STAR_GLYPHS = [".", "·", "✧", "✦", "✶"];
+export const STAR_GLYPHS = [".", "·", "✧", "✦", "✶"];
 
 /** Deterministic noise, so one session's sky does not flicker between redraws. */
 function random(seed: number): () => number {

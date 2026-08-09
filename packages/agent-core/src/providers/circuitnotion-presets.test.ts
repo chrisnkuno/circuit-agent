@@ -48,4 +48,20 @@ describe("CircuitNotionPresetsProvider", () => {
     expect(() => new CircuitNotionPresetsProvider({ apiKey: "", model: "gpt-5.5-nano" })).toThrow("CIRCUITNOTION_API_KEY");
     expect(() => new CircuitNotionPresetsProvider({ apiKey: "cn_test", model: "" })).toThrow("CIRCUITNOTION_PRESETS_MODEL");
   });
+
+  it("extracts a JSON object from surrounding commentary the model was told not to add", async () => {
+    // The instruction is "JSON only, no commentary" — extractJson is what makes the call still
+    // succeed the one time a model adds "Here you go:" in front of it anyway.
+    const provider = new CircuitNotionPresetsProvider({ apiKey: "cn_test", model: "gpt-5.5-nano" }, async () => ({
+      id: "chatty", model: "gpt-5.5-nano",
+      choices: [{ finish_reason: "stop", message: { content: `Here you go:\n${JSON.stringify({ presets })}\nHope that helps!` } }],
+      usage,
+    }));
+    await expect(provider.generate(context)).resolves.toEqual(presets);
+  });
+
+  it("builds a real client when no call is injected", () => {
+    expect(() => new CircuitNotionPresetsProvider({ apiKey: "cn_test", model: "gpt-5.5-nano" })).not.toThrow();
+    expect(() => new CircuitNotionPresetsProvider({ apiKey: "cn_test", model: "gpt-5.5-nano", relaySecret: "s3cr3t" })).not.toThrow();
+  });
 });

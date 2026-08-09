@@ -21,7 +21,7 @@ import { authClient } from "@/lib/auth-client";
 import { useCurrentOrganization } from "@/components/auth-panel";
 import { DownloadWorkButton } from "@/components/download-work-button";
 import { hasPermission } from "@/lib/authz";
-import { formatRwf } from "@/lib/task-cost";
+import { useMoney } from "@/components/money-preferences";
 import { presetContextKey } from "../packages/agent-core/src/dynamic-presets";
 import { DEFAULT_WORKSPACE_PRESET_ID, findWorkspacePreset, WORKSPACE_PRESETS } from "../packages/agent-core/src/sandbox-templates";
 import type { TaskKind } from "@/lib/task-cost";
@@ -143,18 +143,18 @@ function stageStatusFromStepStatus(status: string): StageStatus {
 }
 
 /** What the person is actually being asked to allow — never just the approval's id or kind. */
-function approvalSummary(approval: PendingApproval): string {
+function approvalSummary(approval: PendingApproval, formatApprovalMoney: (valueRwf: number) => string): string {
   const subject = approval.stepTitle ?? approval.runObjective ?? approval.taskTitle;
   if (approval.kind === "task_start") {
     // The price is the whole point of this gate, so it leads — the objective follows it.
     const range = approval.estimateLowRwf !== null && approval.estimateHighRwf !== null
-      ? `${formatRwf(Number(approval.estimateLowRwf))}–${formatRwf(Number(approval.estimateHighRwf))}`
+      ? `${formatApprovalMoney(Number(approval.estimateLowRwf))}–${formatApprovalMoney(Number(approval.estimateHighRwf))}`
       : "an estimated amount";
-    const cap = approval.requestedRwf ? `, never above ${formatRwf(Number(approval.requestedRwf))}` : "";
+    const cap = approval.requestedRwf ? `, never above ${formatApprovalMoney(Number(approval.requestedRwf))}` : "";
     return `spend ${range}${cap} on "${subject}"`;
   }
   if (approval.kind === "budget_overage") {
-    return approval.requestedRwf ? `raise the cap to ${formatRwf(Number(approval.requestedRwf))} for "${subject}"` : `raise the budget cap for "${subject}"`;
+    return approval.requestedRwf ? `raise the cap to ${formatApprovalMoney(Number(approval.requestedRwf))} for "${subject}"` : `raise the budget cap for "${subject}"`;
   }
   if (approval.kind === "external_action") return `run an external action for "${subject}"`;
   return `run "${subject}"`;
@@ -206,6 +206,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
   const [decidingApprovalId, setDecidingApprovalId] = useState<Id<"approvals"> | null>(null);
   const [controllingBranchId, setControllingBranchId] = useState<string | null>(null);
   const [workspacePresetId, setWorkspacePresetId] = useState<string>(DEFAULT_WORKSPACE_PRESET_ID);
+  const { formatMoney, formatApprovalMoney, preference } = useMoney();
 
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
@@ -394,7 +395,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     if (newEvents.length === 0) return;
     if (runTerminal) {
       const task = tasks?.find((item) => item._id === detail.run.taskId);
-      if (task) appendLineTo(branchId, { tone: detail.run.status === "completed" ? "success" : "error", text: `run ${detail.run.status} — spent ${formatRwf(Number(task.spentRwf))} of ${formatRwf(Number(task.maxRwf))} cap` });
+      if (task) appendLineTo(branchId, { tone: detail.run.status === "completed" ? "success" : "error", text: `run ${detail.run.status} — spent ${formatMoney(Number(task.spentRwf))} of ${formatMoney(Number(task.maxRwf))} cap` });
       if (detail.run.status === "completed" && isWanderObjective(detail.run.objective)) {
         appendLineTo(branchId, { tone: "muted", text: "Wander lab finished — Harvest report appears above once the briefing is ready (Print → Save as PDF)." });
       }
@@ -425,13 +426,18 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
   async function submitApprovalDecision(approval: PendingApproval, decision: "approved" | "rejected") {
     const branchId = branches.find((branch) => branch.runId === approval.runId)?.id ?? activeBranchId;
     setDecidingApprovalId(approval._id);
-    appendLineTo(branchId, { tone: "input", text: `${decision === "approved" ? "approve" : "reject"} ${approvalSummary(approval)}` });
+    appendLineTo(branchId, { tone: "input", text: `${decision === "approved" ? "approve" : "reject"} ${approvalSummary(approval, formatApprovalMoney)}` });
     try {
-      await decideApproval({ approvalId: approval._id, decision });
+      const result = await decideApproval({ approvalId: approval._id, decision });
       const isCostGate = approval.kind === "task_start";
       if (decision === "approved") {
-        appendLineTo(branchId, { tone: "success", text: isCostGate ? "quote accepted — the budget is held and the run is starting" : "approved — the run is back in the dispatch queue and a tick was requested" });
-        if (approval.runId) updateBranch(branchId, { busy: true, track: { stages: initialStages("coding") } });
+        if (result.outcome === "payment_authorization_required") {
+          appendLineTo(branchId, { tone: "warn", text: "spending approved, but no payment hold was authorized — the run remains stopped until Circuit Pay covers the cap" });
+          if (approval.runId) updateBranch(branchId, { busy: false });
+        } else {
+          appendLineTo(branchId, { tone: "success", text: isCostGate ? "spending approved — the budget hold is authorized and the run is starting" : "approved — the run is back in the dispatch queue and a tick was requested" });
+          if (approval.runId) updateBranch(branchId, { busy: true, track: { stages: initialStages("coding") } });
+        }
       } else {
         appendLineTo(branchId, { tone: "warn", text: isCostGate ? "quote declined — nothing was charged and the task is cancelled" : "rejected — the task is blocked and no further work will run against it" });
         if (isCostGate) updateBranch(branchId, { busy: false, track: null });
@@ -603,7 +609,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
       const result = await startLiveRun({ organizationId: organization._id, objective, idempotencyKey: crypto.randomUUID(), workspacePresetId });
       updateBranch(branchId, { runId: result.runId, busy: !result.awaitingCostApproval, track: result.awaitingCostApproval ? null : { stages: initialStages("coding") } });
       if (result.awaitingCostApproval) {
-        appendLineTo(branchId, { tone: "system", text: `quote  ${formatRwf(result.quote.estimateLowRwf)} to ${formatRwf(result.quote.estimateHighRwf)}   ·   hard cap ${formatRwf(result.quote.maxRwf)}   ·   ${result.quote.confidence} confidence` });
+        appendLineTo(branchId, { tone: "system", text: `quote  ${formatMoney(result.quote.estimateLowRwf)} to ${formatMoney(result.quote.estimateHighRwf)}   ·   hard cap ${formatMoney(result.quote.maxRwf)} ${preference.currencyCode}   ·   ${result.quote.confidence} confidence` });
         for (const assumption of result.quote.assumptions) appendLineTo(branchId, { tone: "muted", text: `  · ${assumption}` });
         appendLineTo(branchId, { tone: "warn", text: "nothing is charged and no worker has started — approve the quote below to run it, or reject to drop it" });
       }
@@ -794,8 +800,8 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
                 <span className="terminal-approval-mark" aria-hidden="true">
                   <AlertTriangle size={14} strokeWidth={2} />
                 </span>
-                <span className="terminal-approval-text" title={approvalSummary(approval)}>
-                  Approve to {approvalSummary(approval)}
+                <span className="terminal-approval-text" title={approvalSummary(approval, formatApprovalMoney)}>
+                  Approve to {approvalSummary(approval, formatApprovalMoney)}
                 </span>
                 <button type="button" className="terminal-approval-accept" disabled={decidingApprovalId === approval._id} onClick={() => void submitApprovalDecision(approval, "approved")}>
                   {decidingApprovalId === approval._id ? "…" : "Approve"}

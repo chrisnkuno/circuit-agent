@@ -6,9 +6,9 @@
       "name": "circuit-nova",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.116.0",
+        "@circuit-nova/nova-core": "workspace:*",
         "@convex-dev/better-auth": "^0.12.5",
         "better-auth": "~1.6.15",
-        "circuit-nova-core": "workspace:*",
         "convex": "^1.31.2",
         "e2b": "^2.36.0",
         "lucide-react": "^1.29.0",
@@ -30,8 +30,8 @@
       },
     },
     "packages/agent-core": {
-      "name": "circuit-nova-core",
-      "version": "0.1.0",
+      "name": "@circuit-nova/nova-core",
+      "version": "0.1.1",
       "dependencies": {
         "openai": "^6.49.0",
         "zod": "^4.4.3",
@@ -46,8 +46,8 @@
       ],
     },
     "packages/nova-cli": {
-      "name": "circuit-nova",
-      "version": "0.1.0",
+      "name": "@circuit-nova/nova-cli",
+      "version": "0.1.2",
       "bin": {
         "nova": "./dist/nova.js",
       },
@@ -89,6 +89,10 @@
     "@better-fetch/fetch": ["@better-fetch/fetch@1.3.1", "", {}, "sha512-ABkD1WhyfPZprKRQI3bhATjeiFuNWC9PXhfGWqL+sg/gKrM977oFrYkdb4msM3hgUGonr7KlOsOFT5TU2rht9g=="],
 
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.13.0", "", {}, "sha512-acq7c49vxfm1ggJ95P70TX7ABDM0vxr1SYD3BB0o0jnBLB4OAqeHyKuN+cD3w80gXEDQ2zxHpR6CUeA+O/aU9g=="],
+
+    "@circuit-nova/nova-cli": ["@circuit-nova/nova-cli@workspace:packages/nova-cli"],
+
+    "@circuit-nova/nova-core": ["@circuit-nova/nova-core@workspace:packages/agent-core"],
 
     "@connectrpc/connect": ["@connectrpc/connect@2.1.2", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA=="],
 
@@ -355,10 +359,6 @@
     "check-error": ["check-error@2.1.3", "", {}, "sha512-PAJdDJusoxnwm1VwW07VWwUN1sl7smmC3OKggvndJFadxxDRyFJBX/ggnu/KE4kQAB7a3Dp8f/YXC1FlUprWmA=="],
 
     "chownr": ["chownr@3.0.0", "", {}, "sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g=="],
-
-    "circuit-nova": ["circuit-nova@workspace:packages/nova-cli"],
-
-    "circuit-nova-core": ["circuit-nova-core@workspace:packages/agent-core"],
 
     "client-only": ["client-only@0.0.1", "", {}, "sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA=="],
 

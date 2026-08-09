@@ -141,7 +141,7 @@ test("quotes a real coding run and executes nothing until the price is accepted"
   const priceRow = approval.locator(".terminal-approval-text");
   // \s, not a literal space: Intl currency formatting separates "RWF" from the digits
   // with a non-breaking space.
-  await expect(priceRow).toContainText(/^Approve to spend RWF\s[\d,]+/);
+  await expect(priceRow).toContainText(/^Approve to spend (?:RWF\s[\d,]+|≈.+\(RWF\s[\d,]+ ledger\))/);
   if (testInfo.project.name.includes("mobile")) {
     await expect(priceRow).toHaveCSS("white-space", "normal");
     const clipped = await priceRow.evaluate((node) => node.scrollWidth > node.clientWidth + 1);

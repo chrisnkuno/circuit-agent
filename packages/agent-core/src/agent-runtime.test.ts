@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { BoundedAgentRuntime, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool } from "./agent-runtime";
+import { BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool } from "./agent-runtime";
 
 const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 const prices = { inputRwfPerMillionTokens: 1_610, outputRwfPerMillionTokens: 9_660 };
 
 function harness(turns: AgentModelTurn[], tools: AgentTool[], approved = true) {
   const events: AgentRuntimeEvent[] = [];
+  const requests: AgentModelRequest[] = [];
   let modelCalls = 0;
   const runtime = new BoundedAgentRuntime({
-    model: { async complete() { const turn = turns[modelCalls++]; if (!turn) throw new Error("Unexpected model call"); return turn; } },
+    model: { async complete(request) { requests.push(request); const turn = turns[modelCalls++]; if (!turn) throw new Error("Unexpected model call"); return turn; } },
     tools,
     prices,
     control: {
@@ -18,7 +19,7 @@ function harness(turns: AgentModelTurn[], tools: AgentTool[], approved = true) {
       async persistEvent(event) { events.push(event); },
     },
   });
-  return { runtime, events, executed: () => modelCalls };
+  return { runtime, events, requests, executed: () => modelCalls };
 }
 
 const baseRequest = {
@@ -32,6 +33,30 @@ function turn(overrides: Partial<AgentModelTurn>): AgentModelTurn {
 }
 
 describe("bounded agent runtime", () => {
+  it("preserves native structured history and refuses orphaned tool results", async () => {
+    const value = harness([turn({ finishReason: "stop", content: "continued" })], []);
+    const history = [
+      { role: "user" as const, content: "read it" },
+      { role: "assistant" as const, content: "", toolCalls: [{ id: "old_1", name: "read_file", arguments: { path: "a.ts" } }] },
+      { role: "tool" as const, content: "contents", toolCallId: "old_1", name: "read_file" },
+      { role: "assistant" as const, content: "I read it." },
+    ];
+    await value.runtime.execute({ ...baseRequest, history, objective: "continue" });
+    expect(value.requests[0].messages.slice(1, -1)).toEqual(history);
+
+    await expect(value.runtime.execute({
+      ...baseRequest,
+      history: [{ role: "tool", content: "orphan", toolCallId: "missing", name: "read_file" }],
+    })).rejects.toThrow(/orphaned tool result/);
+  });
+  it("does not contact the model when the approved reservation cannot cover a conservative request", async () => {
+    const value = harness([turn({ content: "should never be reached" })], []);
+    const result = await value.runtime.execute({ ...baseRequest, modelReservationRwf: 0 });
+    expect(result).toMatchObject({ status: "iteration_limit", iterations: 0, actualModelRwf: 0 });
+    expect(result.summary).toContain("approved model budget");
+    expect(value.executed()).toBe(0);
+  });
+
   it("runs a multi-turn coding loop and requires real verification after edits", async () => {
     const calls: string[] = [];
     const tools: AgentTool[] = [
@@ -46,7 +71,13 @@ describe("bounded agent runtime", () => {
     const result = await harnessValue.runtime.execute(baseRequest);
     expect(result).toMatchObject({ status: "completed", iterations: 3, toolCallsExecuted: 2, actualModelRwf: 2 });
     expect(calls).toEqual(["write", "test"]);
-    expect(harnessValue.events.map((event) => event.type)).toEqual(["model_turn", "tool_result", "model_turn", "tool_result", "model_turn", "runtime_stop"]);
+    // Each tool is announced before it runs and reported after, so a front end can show the work
+    // in progress rather than only its outcome.
+    expect(harnessValue.events.map((event) => event.type)).toEqual([
+      "model_turn", "tool_call", "tool_result",
+      "model_turn", "tool_call", "tool_result",
+      "model_turn", "runtime_stop",
+    ]);
   });
 
   it("does not claim completion when workspace changes lack verification", async () => {
@@ -76,6 +107,64 @@ describe("bounded agent runtime", () => {
   it("fails closed when the model reaches outside its capability scope", async () => {
     const value = harness([turn({ finishReason: "tool_calls", toolCalls: [{ id: "bad-1", name: "unknown_tool", arguments: {} }] })], []);
     await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "failed", toolCallsExecuted: 0 });
+  });
+
+  it("announces a tool call with its arguments before running it", async () => {
+    const tool: AgentTool = {
+      name: "read_file", description: "Read", inputSchema: {}, capabilityId: "workspace.files",
+      effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "contents" }; },
+    };
+    const value = harness([
+      turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "src/app.ts" } }] }),
+      turn({ content: "Read it." }),
+    ], [tool]);
+    await value.runtime.execute(baseRequest);
+
+    const announced = value.events.find((event) => event.type === "tool_call");
+    expect(announced).toMatchObject({ toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "src/app.ts" } });
+    // Before, not after — the ordering is the whole point of the event.
+    expect(value.events.indexOf(announced!)).toBeLessThan(value.events.findIndex((event) => event.type === "tool_result"));
+  });
+
+  it("does not announce a tool call that cancellation stopped before it started", async () => {
+    const tool: AgentTool = {
+      name: "read_file", description: "Read", inputSchema: {}, capabilityId: "workspace.files",
+      effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "contents" }; },
+    };
+    const events: AgentRuntimeEvent[] = [];
+    const runtime = new BoundedAgentRuntime({
+      model: { async complete() { return turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: {} }] }); } },
+      tools: [tool],
+      prices,
+      control: {
+        async heartbeat() {},
+        // Cancelled between preparing the call and running it: nothing ran, so nothing is claimed.
+        async isCancellationRequested() { return events.some((event) => event.type === "model_turn"); },
+        async isToolCallApproved() { return true; },
+        async persistEvent(event) { events.push(event); },
+      },
+    });
+    await runtime.execute(baseRequest);
+    expect(events.some((event) => event.type === "tool_call")).toBe(false);
+  });
+
+  it("turns a thrown tool error into a tool result instead of crashing the run", async () => {
+    // A tool that throws (a network error, an unexpected exception) must not take the whole
+    // session down with it — the model needs to see the failure as a tool result and can retry
+    // or change approach, the same as it would for a tool that returns isError itself.
+    const tool: AgentTool = {
+      name: "flaky_tool", description: "Sometimes throws", inputSchema: {}, capabilityId: "workspace.files",
+      effect: "none", requiresApproval: false, parallelSafe: false,
+      async execute() { throw new Error("ECONNRESET"); },
+    };
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "call-1", name: "flaky_tool", arguments: {} }] }),
+      turn({ content: "Recovered" }),
+    ], [tool]);
+    const result = await value.runtime.execute(baseRequest);
+    expect(result.status).toBe("completed");
+    const toolResult = value.events.find((event) => event.type === "tool_result");
+    expect(toolResult).toMatchObject({ isError: true, content: "ECONNRESET" });
   });
 
   it("runs only explicitly safe read tools concurrently", async () => {

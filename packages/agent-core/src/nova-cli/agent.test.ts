@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "../agent-runtime";
 import { NovaAgent, type NovaEvent } from "./agent";
 import { LocalWorkspace } from "./backends";
+import { readEventJournal } from "./protocol";
 import { loadSession } from "./session";
 
 let root: string;
@@ -122,8 +123,15 @@ describe("NovaAgent", () => {
     });
 
     const result = await agent.send("create a file");
-    expect(result.status).toBe("needs_approval");
+    expect(result.status).toBe("blocked");
     await expect(fs.readFile(path.join(root, "new.ts"), "utf8")).rejects.toThrow();
+    const events = await readEventJournal(root, agent.sessionId);
+    expect(events.filter((event) => event.payload.type === "turn_status").map((event) => event.payload)).toMatchObject([
+      { from: "queued", to: "running" },
+      { from: "running", to: "waiting_approval" },
+      { from: "waiting_approval", to: "blocked" },
+    ]);
+    expect(events.some((event) => event.payload.type === "approval_requested" && event.payload.request.actionDigest.length === 64)).toBe(true);
   });
 
   it("persists the session so a later run can resume the thread", async () => {
@@ -139,8 +147,9 @@ describe("NovaAgent", () => {
     const resumed = new NovaAgent({ root, model: second, prices, mode: "plan", approve: async () => "allow" });
     resumed.resume(saved!);
     await resumed.send("now do the same for the tests");
-    // The follow-up must carry the earlier exchange, or "the same" means nothing.
-    expect(second.requests[0].messages.at(-1)?.content).toContain("Earlier in this session");
+    // The follow-up must carry native earlier messages, not a lossy rendered transcript.
+    expect(second.requests[0].messages.some((message) => message.role === "assistant" && message.content === "All set.")).toBe(true);
+    expect(second.requests[0].messages.at(-1)).toEqual({ role: "user", content: "now do the same for the tests" });
   });
 
   it("takes a checkpoint before a build turn and can revert to it", async () => {
@@ -177,6 +186,87 @@ describe("NovaAgent", () => {
     expect(gitCalled).toBe(false);
   });
 
+  it("summarizes the transcript once it approaches the context limit, and carries the summary forward", async () => {
+    const readCall = (id: string) => ({ finishReason: "tool_calls" as const, content: "", toolCalls: [{ id, name: "read_file", arguments: { path: "app.ts" } }] });
+    const model = scriptedModel([
+      readCall("c1"), readCall("c2"), readCall("c3"), readCall("c4"), readCall("c5"), readCall("c6"),
+      { finishReason: "stop", content: "Turn 1 complete." }, // ends turn 1
+      { finishReason: "stop", content: "Summary of turn 1." }, // consumed by compaction's own summarizer call
+      { finishReason: "stop", content: "Turn 2 complete." }, // turn 2's real response
+    ]);
+    const events: NovaEvent[] = [];
+    const agent = new NovaAgent({
+      root, model, prices, mode: "plan",
+      approve: async () => "allow",
+      // A tiny context limit and the default keepRecent(6) guarantee the six-tool-call transcript
+      // from turn 1 crosses the compaction threshold by the time turn 2 starts. maxOutputTokens
+      // stays at the runtime's own floor (256) — the runtime validates it independently of budget.
+      budgets: { contextLimit: 300, maxOutputTokens: 256 },
+      onEvent: (event) => events.push(event),
+    });
+
+    const firstResult = await agent.send("read the file six times over");
+    const messagesBeforeTurn2 = model.requests.length;
+    const secondResult = await agent.send("now do something else");
+
+    const compaction = events.find((event) => event.type === "compaction");
+    expect(compaction).toBeDefined();
+    // The compaction's own summarizer call is a real extra request the scripted queue had to serve.
+    expect(model.requests.length).toBeGreaterThan(messagesBeforeTurn2 + 1);
+    // Turn 2's request must see the summary, not the raw six-tool-call transcript it replaced.
+    const turn2System = model.requests.at(-1)?.messages.map((message) => message.content).join("\n");
+    expect(turn2System).toContain("Summary of turn 1.");
+    // The summarizer is a paid model call, not invisible overhead.
+    expect(secondResult.usage.totalTokens).toBe(usage.totalTokens * 2);
+    expect((await loadSession(root, agent.sessionId))?.totalRwf).toBe(firstResult.actualModelRwf + secondResult.actualModelRwf);
+  });
+
+  it("exposes the plan and workspace diff for the TUI's /todos and /diff commands", async () => {
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "todo_write", arguments: { items: ["read the config"] } }] },
+      { finishReason: "stop", content: "Noted the plan." },
+    ]);
+    const gitCalls: string[][] = [];
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async () => "allow",
+      git: async (args) => {
+        gitCalls.push(args);
+        if (args[0] === "write-tree") return { exitCode: 0, stdout: "tree_abc\n", stderr: "" };
+        if (args[0] === "diff") return { exitCode: 0, stdout: " app.ts | 2 +-\n", stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(agent.todos).toEqual([]); // nothing recorded before the first turn
+    await agent.send("record a plan");
+    expect(agent.todos).toEqual([{ id: 1, text: "read the config", status: "pending" }]);
+
+    expect(await agent.diffStat()).toBe("app.ts | 2 +-");
+    expect(gitCalls.some((args) => args[0] === "diff")).toBe(true);
+  });
+
+  it("lists every checkpoint taken so far, and disposes the workspace on request", async () => {
+    const model = scriptedModel([{ finishReason: "stop", content: "Done." }, { finishReason: "stop", content: "Done again." }]);
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async () => "allow",
+      git: async (args) => ({ exitCode: 0, stdout: args[0] === "write-tree" ? `tree_${model.requests.length}\n` : "", stderr: "" }),
+    });
+
+    await agent.send("first change");
+    await agent.send("second change");
+    expect(agent.listCheckpoints().map((checkpoint) => checkpoint.tree)).toEqual(["tree_0", "tree_1"]);
+
+    await expect(agent.dispose()).resolves.toBeUndefined(); // LocalWorkspace.dispose() is a no-op.
+  });
+
+  it("reports no diff before any checkpoint exists", async () => {
+    const model = scriptedModel([{ finishReason: "stop", content: "Nothing to do yet." }]);
+    const agent = new NovaAgent({ root, model, prices, mode: "plan", approve: async () => "allow" });
+    expect(await agent.diffStat()).toBe("");
+  });
+
   it("refuses to spend past its own budget ceiling", async () => {
     const model = scriptedModel([{
       finishReason: "stop",
@@ -184,6 +274,9 @@ describe("NovaAgent", () => {
       usage: { inputTokens: 10_000_000, outputTokens: 10_000_000, totalTokens: 20_000_000, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
     }]);
     const agent = new NovaAgent({ root, model, prices, mode: "plan", approve: async () => "allow", budgets: { maxRwf: 10 } });
-    await expect(agent.send("do something expensive")).rejects.toThrow(/exceeds the reserved model budget/);
+    const result = await agent.send("do something expensive");
+    expect(result).toMatchObject({ status: "iteration_limit", actualModelRwf: 0, iterations: 0 });
+    expect(result.summary).toContain("approved model budget");
+    expect(model.requests).toHaveLength(0);
   });
 });

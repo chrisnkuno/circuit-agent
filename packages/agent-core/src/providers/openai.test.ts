@@ -72,4 +72,27 @@ describe("OpenAI coding model provider", () => {
     await expect(provider.generateCodingPlan({ ...request, maxOutputTokens: 1 })).rejects.toThrow("maxOutputTokens");
     expect(() => new OpenAICodingModelProvider({ apiKey: "", model: "gpt-5.6-terra" })).toThrow("OPENAI_API_KEY");
   });
+
+  it("refuses a request missing identity, or with an out-of-range timeout or safety identifier", async () => {
+    const provider = new OpenAICodingModelProvider({ apiKey: "openai_test", model: "gpt-5.6-terra" }, async () => ({
+      id: "r", model: "gpt-5.6-terra", status: "completed", output_parsed: null, output: [], usage,
+    }));
+    await expect(provider.generateCodingPlan({ ...request, taskId: " " })).rejects.toThrow("taskId and stepId");
+    await expect(provider.generateCodingPlan({ ...request, timeoutMs: 500 })).rejects.toThrow("timeoutMs");
+    await expect(provider.generateCodingPlan({ ...request, safetyIdentifier: "" })).rejects.toThrow("safetyIdentifier");
+    await expect(provider.generateCodingPlan({ ...request, safetyIdentifier: "x".repeat(65) })).rejects.toThrow("safetyIdentifier");
+  });
+
+  it("refuses to claim a plan exists when the response has neither a plan nor a refusal", async () => {
+    // A response that is neither is not a smaller answer — it's the model doing something the
+    // schema doesn't allow for, and pretending otherwise would hand the caller a null plan.
+    const provider = new OpenAICodingModelProvider({ apiKey: "openai_test", model: "gpt-5.6-terra" }, async () => ({
+      id: "r", model: "gpt-5.6-terra", status: "completed", output_parsed: null, output: [{ type: "message", content: [{ type: "text" }] }], usage,
+    }));
+    await expect(provider.generateCodingPlan(request)).rejects.toThrow("neither a coding plan nor a refusal");
+  });
+
+  it("builds a real client when no call is injected", () => {
+    expect(() => new OpenAICodingModelProvider({ apiKey: "openai_test", model: "gpt-5.6-terra" })).not.toThrow();
+  });
 });

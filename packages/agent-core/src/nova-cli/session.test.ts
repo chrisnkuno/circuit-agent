@@ -27,6 +27,8 @@ afterEach(async () => {
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
+    schemaVersion: 2,
+    revision: 0,
     id: newSessionId(),
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -47,6 +49,35 @@ describe("session storage", () => {
     expect(loaded?.title).toBe("Add a health check");
     expect(loaded?.approvals).toEqual({ edit_file: "allow" });
     expect(loaded?.totalRwf).toBe(12);
+    expect(loaded?.revision).toBe(1);
+    expect(loaded?.integrity).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("writes atomically and rejects a stale writer instead of losing a newer turn", async () => {
+    const first = record({ id: "shared" });
+    await saveSession(first);
+    const stale = { ...first, revision: 0 };
+    first.title = "newer state";
+    await saveSession(first);
+
+    await expect(saveSession(stale)).rejects.toThrow(/revision conflict/);
+    expect((await loadSession(root, "shared"))?.title).toBe("newer state");
+    expect((await fs.readdir(path.join(root, ".nova", "sessions"))).some((file) => file.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("fails closed when a saved session is tampered with", async () => {
+    const saved = record({ id: "tampered" });
+    const file = await saveSession(saved);
+    const raw = JSON.parse(await fs.readFile(file, "utf8")) as SessionRecord;
+    raw.totalRwf += 1;
+    await fs.writeFile(file, JSON.stringify(raw));
+    expect(await loadSession(root, "tampered")).toBeNull();
+    await expect(saveSession(saved)).rejects.toThrow(/refusing to overwrite/);
+  });
+
+  it("rejects path traversal in session ids", async () => {
+    await expect(loadSession(root, "../outside")).resolves.toBeNull();
+    await expect(saveSession(record({ id: "../outside" }))).rejects.toThrow(/unsafe/);
   });
 
   it("lists sessions newest first and survives a corrupt file", async () => {
@@ -158,6 +189,33 @@ describe("checkpoints", () => {
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
     expect(await store.capture("anything")).toBeUndefined();
     expect(store.latest()).toBeUndefined();
+  });
+
+  it("records no checkpoint when write-tree itself fails", async () => {
+    const { git } = fakeGit({ "write-tree": { exitCode: 128, stdout: "" } });
+    const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
+    expect(await store.capture("anything")).toBeUndefined();
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it("records no checkpoint when write-tree exits clean but names no tree", async () => {
+    // An empty tree id is not a smaller checkpoint; it is not a checkpoint at all.
+    const { git } = fakeGit({ "write-tree": { exitCode: 0, stdout: "\n" } });
+    const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
+    expect(await store.capture("anything")).toBeUndefined();
+  });
+
+  it("refuses to restore when staging the current tree fails", async () => {
+    const { git } = fakeGit({ "write-tree": { exitCode: 0, stdout: "tree1\n" }, add: { exitCode: 1, stdout: "" } });
+    const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
+    expect(await store.restore("tree1")).toBe(false);
+  });
+
+  it("reports no diff when git itself fails, the same as when there is nothing to compare", async () => {
+    const { git } = fakeGit({ "write-tree": { exitCode: 0, stdout: "tree1\n" }, diff: { exitCode: 128, stdout: "" } });
+    const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
+    await store.capture("before");
+    expect(await store.diffStat()).toBe("");
   });
 });
 

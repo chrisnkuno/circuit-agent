@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agent-runtime";
 import { priceUsage, toUnits } from "../money";
 import { availableProviders, isProviderId, PROVIDERS, resolveProvider, resolvePrices } from "./agent-matrix";
@@ -28,6 +28,19 @@ describe("provider matrix", () => {
     expect(resolved.prices?.currency).toBe("USD");
     // $5 per million input tokens, held in micros.
     expect(resolved.prices?.inputPerMillion).toBe(5_000_000);
+  });
+
+  it("actually constructs OpenAI and CircuitNotion's own turn provider, not just Anthropic's", () => {
+    // Every other test in this file resolves against Anthropic; without this, the OpenAI and
+    // CircuitNotion entries in PROVIDERS could have a construction bug (a typo'd env var, a
+    // wrong default base URL) that nothing would ever catch.
+    const openai = resolveProvider({ OPENAI_API_KEY: "sk-openai" }, { provider: "openai" });
+    expect("error" in openai).toBe(false);
+    if (!("error" in openai)) expect(typeof openai.provider.complete).toBe("function");
+
+    const circuitnotion = resolveProvider({ CIRCUITNOTION_API_KEY: "cn-key" }, { provider: "circuitnotion" });
+    expect("error" in circuitnotion).toBe(false);
+    if (!("error" in circuitnotion)) expect(typeof circuitnotion.provider.complete).toBe("function");
   });
 
   it("takes the model from an explicit flag, then the environment, then the default", () => {
@@ -192,5 +205,40 @@ describe("Anthropic adapter", () => {
     // 10k uncached at $5/M + 90k cached at $0.50/M + 2k output at $25/M.
     const total = (10_000 * 5 + 90_000 * 0.5 + 2_000 * 25) / 1_000_000;
     expect(toUnits(priceUsage(cost, prices))).toBeCloseTo(total, 6);
+  });
+
+  it("collects a streamed response through the same path a buffered one takes", async () => {
+    async function* stream() {
+      yield { type: "message_start" as const, message: { id: "m", model: "claude-opus-5", usage: { input_tokens: 500, output_tokens: 0 } } };
+      yield { type: "content_block_start" as const, index: 0, content_block: { type: "text" as const } };
+      yield { type: "content_block_delta" as const, index: 0, delta: { type: "text_delta" as const, text: "Look" } };
+      yield { type: "content_block_delta" as const, index: 0, delta: { type: "text_delta" as const, text: "ing." } };
+      yield { type: "message_delta" as const, delta: { stop_reason: "end_turn" as const }, usage: { output_tokens: 42 } };
+    }
+    const provider = new AnthropicAgentTurnProvider({ apiKey: "sk-ant", model: "claude-opus-5" }, async () => stream());
+    const seen: string[] = [];
+    const turn = await provider.complete({ ...request, onTextDelta: (text) => seen.push(text) });
+    expect(seen).toEqual(["Look", "ing."]);
+    expect(turn).toMatchObject({ finishReason: "stop", content: "Looking." });
+  });
+
+  it("lazily loads the real SDK on first use, and names the missing peer dependency clearly if it can't", async () => {
+    // The SDK is loaded on first use, not at module load, so an app without it installed can still
+    // import everything else in this package. That deferred import is what this test exercises —
+    // constructing the provider must not touch it; only `complete()` does.
+    vi.resetModules();
+    vi.doMock("@anthropic-ai/sdk", () => ({
+      default: class FakeAnthropic {
+        options: unknown;
+        constructor(options: unknown) { this.options = options; }
+        messages = { create: async () => ({ id: "m", model: "claude-opus-5", stop_reason: "end_turn", content: [{ type: "text", text: "Real client." }], usage: { input_tokens: 1, output_tokens: 1 } }) };
+      },
+    }));
+    const { AnthropicAgentTurnProvider: FreshProvider } = await import("./anthropic-agent");
+    const provider = new FreshProvider({ apiKey: "sk-ant-real", model: "claude-opus-5" });
+    const turn = await provider.complete(request);
+    expect(turn.content).toBe("Real client.");
+    vi.doUnmock("@anthropic-ai/sdk");
+    vi.resetModules();
   });
 });

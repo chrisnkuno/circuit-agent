@@ -4,11 +4,12 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { estimateTaskCost, formatRwf, type QualityTier, type TaskKind } from "@/lib/task-cost";
+import { estimateTaskCost, type QualityTier, type TaskKind } from "@/lib/task-cost";
 import { AgentBoard } from "@/components/agent-board";
 import { IntegrationBoard } from "@/components/integration-board";
 import { AuthPanel, useCurrentOrganization } from "@/components/auth-panel";
 import { authClient } from "@/lib/auth-client";
+import { useMoney } from "@/components/money-preferences";
 
 const taskKinds: { value: TaskKind; label: string; copy: string }[] = [
   { value: "coding", label: "Build or fix software", copy: "E2B sandbox, checks, review-ready evidence" },
@@ -39,6 +40,7 @@ export default function Home() {
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
   const createQuotedTask = useMutation(api.tasks.createQuotedTask);
+  const { formatMoney, preference, rateDate } = useMoney();
 
   function resetStatus() {
     setStatus("idle");
@@ -72,13 +74,13 @@ export default function Home() {
 
   return <main>
     <header className="topbar"><a className="brand" href="#top">CIRCUIT<span>NOVA</span></a><nav className="topbar-nav"><Link href="/terminal" className="terminal-nav-link">Agent terminal ↗</Link><AuthPanel /></nav></header>
-    <section className="hero" id="top"><p className="eyebrow">TASK-PRICED AGENT OPERATING SYSTEM</p><h1>Know the cost.<br /><em>Keep the control.</em></h1><p className="lede">A durable agent workspace for coding and everyday execution—quoted in RWF before work begins, observable from your phone, and capped by your approval.</p></section>
+    <section className="hero" id="top"><p className="eyebrow">TASK-PRICED AGENT OPERATING SYSTEM</p><h1>Know the cost.<br /><em>Keep the control.</em></h1><p className="lede">A durable agent workspace for coding and everyday execution—shown in your local currency before work begins, observable from your phone, and capped by your approval.</p></section>
     <section className="workspace" aria-label="Task quote builder">
       <div className="builder"><div className="section-label">01 / Define the work</div><h2>What should the agent complete?</h2>
         <div className="task-grid">{taskKinds.map((item) => <button className={kind === item.value ? "task-card selected" : "task-card"} key={item.value} onClick={() => { setKind(item.value); resetStatus(); }}><strong>{item.label}</strong><span>{item.copy}</span></button>)}</div>
         <div className="controls"><label>Task title<input placeholder={selected.label} value={title} onChange={(event) => { setTitle(event.target.value); resetStatus(); }} /></label><label>Quality<select value={quality} onChange={(event) => { setQuality(event.target.value as QualityTier); resetStatus(); }}><option value="fast">Fast — routine work</option><option value="balanced">Balanced — default</option><option value="expert">Expert — complex work</option></select></label><label>Attached files<input min="0" max="10" step="1" type="number" value={attachments} onChange={(event) => { setAttachments(normalizeAttachmentCount(event.target.value)); resetStatus(); }} /></label><label className="check"><input type="checkbox" checked={browser} onChange={(event) => { setBrowser(event.target.checked); resetStatus(); }} /> Includes browser or app work</label></div>
       </div>
-      <aside className="quote"><div className="quote-head"><span>02 / Your quote</span><b className={`confidence ${quote.confidence}`}>{quote.confidence} confidence</b></div><p className="task-name">{selected.label}</p><div className="range"><strong>{formatRwf(quote.estimateLowRwf)}</strong><span>to</span><strong>{formatRwf(quote.estimateHighRwf)}</strong></div><p className="quote-copy">Expected cost based on the selected execution plan.</p><div className="cap"><span>Never exceeds without approval</span><b>{formatRwf(quote.maxRwf)}</b></div><ul>{quote.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul><button className="primary" onClick={reserve} disabled={status === "pending"}>{status === "pending" ? "Reserving…" : "Reserve task cap"} <span>→</span></button>{status === "done" && <p className="notice">Task and quote persisted in Convex. Circuit Pay authorization is still blocked until its webhook contract is verified; execution awaits the dispatcher.</p>}{status === "error" && <p className="notice">{error}</p>}</aside>
+      <aside className="quote"><div className="quote-head"><span>02 / Your quote · {preference.currencyCode}</span><b className={`confidence ${quote.confidence}`}>{quote.confidence} confidence</b></div><p className="task-name">{selected.label}</p><div className="range"><strong>{formatMoney(quote.estimateLowRwf)}</strong><span>to</span><strong>{formatMoney(quote.estimateHighRwf)}</strong></div><p className="quote-copy">Expected cost based on the selected execution plan. {preference.currencyCode === "RWF" ? "Ledger amount." : `Approximate daily conversion${rateDate ? ` (${rateDate})` : ""}; approval also shows the RWF ledger amount.`}</p><div className="cap"><span>Never exceeds without approval</span><b>{formatMoney(quote.maxRwf)}</b></div><ul>{quote.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul><button className="primary" onClick={reserve} disabled={status === "pending"}>{status === "pending" ? "Reserving…" : "Reserve task cap"} <span>→</span></button>{status === "done" && <p className="notice">Task and quote persisted in Convex. Circuit Pay authorization is still blocked until its webhook contract is verified; execution awaits the dispatcher.</p>}{status === "error" && <p className="notice">{error}</p>}</aside>
     </section>
     <section className="principles"><div><span>01</span><h3>Durable by default</h3><p>Convex persists task plans, quotes, approvals, events, and payment holds.</p></div><div><span>02</span><h3>Isolated execution</h3><p>E2B runs code and browser work away from the user’s device.</p></div><div><span>03</span><h3>Human authority</h3><p>No overage, send, merge, or payment action happens silently.</p></div></section>
     <IntegrationBoard organizationId={organization?._id} />

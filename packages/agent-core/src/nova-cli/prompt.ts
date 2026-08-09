@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { NovaWorkspace } from "./backends";
 import type { NovaMode } from "./permissions";
@@ -14,29 +16,74 @@ import type { NovaMode } from "./permissions";
 
 export type ProjectContext = {
   root: string;
-  /** Contents of NOVA.md / AGENTS.md / CLAUDE.md, whichever the project actually has. */
+  /** Broad-to-specific instruction chain selected from repository and working-directory files. */
   instructions: string | null;
   instructionsFile: string | null;
+  instructionSources?: Array<{ path: string; sha256: string; truncated: boolean }>;
   /** Top-level entries, so the model does not spend its first turn listing the root. */
   layout: string[];
   packageScripts: string[];
   gitBranch: string | null;
 };
 
-const INSTRUCTION_FILES = ["NOVA.md", "AGENTS.md", "CLAUDE.md", ".novarules"];
+const INSTRUCTION_FILES = ["AGENTS.override.md", "NOVA.md", "AGENTS.md", "CLAUDE.md", ".novarules"];
+
+async function instructionBoundary(root: string): Promise<string> {
+  const requestedRoot = path.resolve(root);
+  const temporaryRoot = path.resolve(os.tmpdir());
+  let current = path.resolve(root);
+  while (true) {
+    // A shared /tmp may itself be a checkout in CI; temporary test/workspace children must not
+    // inherit unrelated instructions from that ambient repository.
+    if (current !== temporaryRoot && await fs.stat(path.join(current, ".git")).then(() => true).catch(() => false)) return current;
+    const parent = path.dirname(current);
+    if (current === temporaryRoot || parent === current) return requestedRoot;
+    current = parent;
+  }
+}
 
 export async function collectProjectContext(root: string, maxInstructionChars = 8_000): Promise<ProjectContext> {
-  const context: ProjectContext = { root, instructions: null, instructionsFile: null, layout: [], packageScripts: [], gitBranch: null };
+  const context: ProjectContext = { root, instructions: null, instructionsFile: null, instructionSources: [], layout: [], packageScripts: [], gitBranch: null };
 
-  for (const candidate of INSTRUCTION_FILES) {
-    try {
-      const text = await fs.readFile(path.join(root, candidate), "utf8");
-      context.instructions = text.slice(0, maxInstructionChars);
-      context.instructionsFile = candidate;
-      break;
-    } catch {
-      // Absent is the normal case, not an error.
+  const boundary = await instructionBoundary(root);
+  const directories: string[] = [];
+  for (let current = path.resolve(root); ; current = path.dirname(current)) {
+    directories.unshift(current);
+    if (current === boundary) break;
+  }
+  const discovered: Array<{ file: string; relative: string; text: string }> = [];
+  for (const directory of directories) {
+    for (const candidate of INSTRUCTION_FILES) {
+      try {
+        const file = path.join(directory, candidate);
+        const text = await fs.readFile(file, "utf8");
+        discovered.push({ file, relative: path.relative(boundary, file).split(path.sep).join("/") || candidate, text });
+        break;
+      } catch {
+        // One instruction file per directory; a missing candidate just advances precedence.
+      }
     }
+  }
+  let remaining = Math.max(0, maxInstructionChars);
+  const selected: Array<{ path: string; content: string; sha256: string; truncated: boolean }> = [];
+  // Deeper instructions are more specific, so they receive the budget first.
+  for (const item of [...discovered].reverse()) {
+    if (remaining <= 0) break;
+    const content = item.text.slice(0, remaining);
+    selected.unshift({
+      path: item.relative,
+      content,
+      sha256: createHash("sha256").update(item.text).digest("hex"),
+      truncated: content.length < item.text.length,
+    });
+    remaining -= content.length;
+  }
+  if (selected.length > 0) {
+    context.instructions = selected.length === 1
+      ? selected[0].content
+      : selected.map((source) => `[${source.path}]\n${source.content}`).join("\n\n");
+    context.instructionsFile = selected.map((source) => source.path).join(" -> ");
+    context.instructionSources = selected.map(({ path: sourcePath, sha256, truncated }) => ({ path: sourcePath, sha256, truncated }));
   }
 
   try {
@@ -58,7 +105,7 @@ export async function collectProjectContext(root: string, maxInstructionChars = 
   }
 
   try {
-    const head = await fs.readFile(path.join(root, ".git", "HEAD"), "utf8");
+    const head = await fs.readFile(path.join(boundary, ".git", "HEAD"), "utf8");
     const match = head.match(/ref:\s*refs\/heads\/(.+)/);
     context.gitBranch = match?.[1]?.trim() ?? null;
   } catch {
@@ -127,8 +174,9 @@ export function buildNovaSystemPrompt(context: ProjectContext, mode: NovaMode, t
   sections.push(project.join("\n"));
 
   if (context.instructions?.trim()) {
+    const provenance = context.instructionSources?.map((source) => `${source.path}@${source.sha256.slice(0, 12)}${source.truncated ? " (truncated)" : ""}`).join(", ");
     sections.push(
-      `Project instructions from ${context.instructionsFile}. These come from the project's maintainers and take precedence over your general habits:\n\n${context.instructions.trim()}`,
+      `Project instructions from ${context.instructionsFile}. These come from the project's maintainers, apply from broad to specific, and take precedence over your general habits.${provenance ? ` Provenance: ${provenance}.` : ""}\n\n${context.instructions.trim()}`,
     );
   }
 

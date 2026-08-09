@@ -106,6 +106,26 @@ describe("E2B workspace", () => {
     await expect(workspace.editFile("app.py", "absent", "x")).rejects.toThrow(/was not found/);
   });
 
+  it("lists a directory to a bounded depth, implying directories from the file paths beneath them", async () => {
+    const { workspace } = e2b({
+      "/workspace/repo/README.md": "a",
+      "/workspace/repo/src/main.ts": "b",
+      "/workspace/repo/src/deep/util.ts": "c",
+    });
+    // find -type f never lists directories themselves — E2BWorkspace has to imply "src/" from
+    // seeing a file underneath it, the same way the local backend's real directory walk does.
+    expect(await workspace.list("", 1)).toEqual(["README.md", "src/"]);
+    expect(await workspace.list("", 2)).toEqual(["README.md", "src/", "src/deep/", "src/main.ts"]);
+  });
+
+  it("lists only inside the given prefix, not the whole workspace", async () => {
+    const { workspace } = e2b({
+      "/workspace/repo/src/main.ts": "a",
+      "/workspace/repo/README.md": "b",
+    });
+    expect(await workspace.list("src", 1)).toEqual(["src/main.ts"]);
+  });
+
   it("globs remotely using the same matcher the local backend uses", async () => {
     const { workspace } = e2b({
       "/workspace/repo/src/main.ts": "a",
@@ -139,6 +159,22 @@ describe("E2B workspace", () => {
     ]);
     // The include glob must mean the same thing on both paths.
     expect(await workspace.grep("value", { include: "**/*.py" })).toEqual([{ path: "a.py", line: 1, text: "value = 1" }]);
+  });
+
+  it("skips a file it cannot read during the fallback search, rather than failing the whole search", async () => {
+    // Exactly what ripgrep itself does with a binary file — skip it and keep going — so the
+    // fallback path (used when the image has no rg at all) has to behave the same way.
+    const sandbox = fakeSandbox({ "/workspace/repo/a.py": "value = 1\n", "/workspace/repo/photo.png": "value in binary\n" });
+    const original = sandbox.runCommand;
+    sandbox.runCommand = async (id, command) => (command.program === "rg" ? { exitCode: 127, stdout: "", stderr: "rg: not found" } : original(id, command));
+    const originalRead = sandbox.readFile;
+    sandbox.readFile = async (id, filePath) => {
+      if (filePath.endsWith(".png")) throw new Error("EISDIR or binary content");
+      return originalRead(id, filePath);
+    };
+    const workspace = new E2BWorkspace({ sandbox, sandboxId: "sbx_1", workspaceRoot: "/workspace/repo" });
+
+    expect(await workspace.grep("value")).toEqual([{ path: "a.py", line: 1, text: "value = 1" }]);
   });
 
   it("reports no matches as an empty result rather than an error", async () => {
@@ -218,6 +254,19 @@ describe("moving a project between backends", () => {
 
     expect(result.written.sort()).toEqual(["main.py", "out/result.md"]);
     expect(await fs.readFile(path.join(destination, "out", "result.md"), "utf8")).toBe("# findings\n");
+  });
+
+  it("skips a file it cannot read during download, rather than failing the whole pull", async () => {
+    const sandbox = fakeSandbox({ "/workspace/repo/a.py": "ok\n", "/workspace/repo/broken.py": "irrelevant\n" });
+    const originalRead = sandbox.readFile;
+    sandbox.readFile = async (id, filePath) => {
+      if (filePath.endsWith("broken.py")) throw new Error("read failed");
+      return originalRead(id, filePath);
+    };
+    const workspace = new E2BWorkspace({ sandbox, sandboxId: "sbx_1", workspaceRoot: "/workspace/repo" });
+    const result = await downloadProject(workspace, path.join(root, "pulled"));
+    expect(result.written).toEqual(["a.py"]);
+    expect(result.failed).toEqual(["broken.py"]);
   });
 });
 

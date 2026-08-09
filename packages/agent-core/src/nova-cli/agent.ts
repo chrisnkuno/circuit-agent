@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { BoundedAgentRuntime, type AgentMessage, type AgentRuntimeEvent, type AgentRuntimeResult, type AgentTurnProvider } from "../agent-runtime";
-import type { ModelPriceCatalog } from "../model-cost";
+import { affordableOutputTokens, priceActualModelUsage, type ModelPriceCatalog } from "../model-cost";
+import type { ModelUsage } from "../providers/model";
 import type { ExaSearchClient } from "../providers/exa";
 import { CheckpointStore, type Checkpoint, type GitRunner } from "./checkpoints";
 import { capabilitiesForMode, PermissionLedger, type ApprovalPrompt, type NovaMode } from "./permissions";
 import { buildNovaSystemPrompt, collectProjectContext, type ProjectContext } from "./prompt";
+import { assertTurnTransition, EventJournal, runtimeEventForJournal, type TurnStatus } from "./protocol";
 import {
   buildCompactedMessages,
   COMPACTION_INSTRUCTION,
@@ -14,7 +17,7 @@ import {
   titleFromObjective,
   type SessionRecord,
 } from "./session";
-import { createNovaTools, TodoList } from "./tools";
+import { createNovaTools, TodoList, type TodoItem } from "./tools";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
 import type { WorkspaceLimits } from "./workspace";
 
@@ -79,7 +82,7 @@ export const DEFAULT_NOVA_BUDGETS: NovaBudgets = {
 export type NovaTurnResult = AgentRuntimeResult & { checkpoint?: Checkpoint };
 
 export class NovaAgent {
-  private readonly todos = new TodoList();
+  private readonly todoList = new TodoList();
   private readonly workspace: NovaWorkspace;
   private readonly permissions: PermissionLedger;
   private readonly checkpoints: CheckpointStore;
@@ -88,13 +91,17 @@ export class NovaAgent {
   private context: ProjectContext | null = null;
   private cancelled = false;
   private session: SessionRecord;
+  private journal: EventJournal;
+  private activeTurnId: string | null = null;
+  private activeTransition: ((to: TurnStatus, durable?: boolean) => Promise<void>) | null = null;
 
   constructor(private readonly options: NovaAgentOptions) {
     this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...options.budgets };
     this.workspace = options.workspace ?? new LocalWorkspace(options.root, options.limits);
-    this.permissions = new PermissionLedger(options.mode, options.approve);
     this.checkpoints = new CheckpointStore(options.root, path.join(options.root, ".nova", "checkpoint-index"), options.git);
     this.session = {
+      schemaVersion: 2,
+      revision: 0,
       id: newSessionId(),
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -104,6 +111,27 @@ export class NovaAgent {
       approvals: {},
       totalRwf: 0,
     };
+    this.journal = new EventJournal(options.root, this.session.id);
+    this.permissions = new PermissionLedger(options.mode, async (request) => {
+      const turnId = this.activeTurnId ?? "turn_unbound";
+      await this.activeTransition?.("waiting_approval", true);
+      await this.journal.append({
+        type: "approval_requested",
+        turnId,
+        request: {
+          toolCallId: request.call.id,
+          toolName: request.tool.name,
+          summary: request.summary,
+          actionDigest: request.actionDigest,
+          scopeKey: request.scopeKey,
+          policyVersion: request.policyVersion,
+        },
+      }, { durable: true });
+      const decision = await options.approve(request);
+      await this.journal.append({ type: "approval_decided", turnId, actionDigest: request.actionDigest, decision }, { durable: true });
+      if (decision === "allow" || decision === "allow_always") await this.activeTransition?.("running", true);
+      return decision;
+    });
   }
 
   get sessionId(): string {
@@ -115,10 +143,17 @@ export class NovaAgent {
     this.session = record;
     this.messages = [...record.messages];
     this.permissions.restore(record.approvals ?? {});
+    this.journal = new EventJournal(this.options.root, record.id);
   }
 
   cancel(): void {
     this.cancelled = true;
+  }
+
+  /** Updates the amount this next exchange may spend; used by the CLI's session-wide cap. */
+  setModelSpendLimit(remaining: number): void {
+    if (!Number.isSafeInteger(remaining) || remaining < 0) throw new Error("remaining model spend must be a non-negative integer");
+    this.budgets.maxRwf = remaining;
   }
 
   /** Where this agent is reading and writing — a directory, or a sandbox id. */
@@ -130,8 +165,19 @@ export class NovaAgent {
     return this.workspace.kind;
   }
 
+  /** The agent's current plan, for `/todos` — a read-only snapshot, empty before the first turn. */
+  get todos(): TodoItem[] {
+    return this.todoList.list();
+  }
+
+  /** What changed since the last checkpoint, for `/diff`. */
+  diffStat(): Promise<string> {
+    return this.checkpoints.diffStat();
+  }
+
   /** Releases the backend. For E2B that stops the sandbox; locally it does nothing. */
   async dispose(): Promise<void> {
+    await this.journal.close();
     await this.workspace.dispose();
   }
 
@@ -155,70 +201,112 @@ export class NovaAgent {
   async send(objective: string): Promise<NovaTurnResult> {
     if (!objective.trim()) throw new Error("A request is required");
     this.cancelled = false;
-    this.context ??= await collectProjectContext(this.options.root);
-
-    const tools = createNovaTools({ workspace: this.workspace, todos: this.todos, search: this.options.search });
-    const capabilities = capabilitiesForMode(this.options.mode);
-    const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
-    const systemPrompt = buildNovaSystemPrompt(this.context, this.options.mode, scoped.map((tool) => tool.name), this.workspace);
-
-    // Snapshot before the agent can touch anything, so `/undo` returns to the state the user saw
-    // when they typed. Taken per turn rather than per tool call: a turn is the unit a person
-    // actually thinks in, and forty checkpoints for one request is a list nobody can navigate.
-    // Checkpoints snapshot the local git tree, so they mean nothing for a remote sandbox: the
-    // machine's files were never touched, and the sandbox is disposable by construction.
-    let checkpoint: Checkpoint | undefined;
-    if (this.options.mode !== "plan" && this.workspace.kind === "local") {
-      checkpoint = await this.checkpoints.capture(titleFromObjective(objective));
-      if (checkpoint) this.options.onEvent?.({ type: "checkpoint", checkpoint });
-    }
-
-    await this.compactIfNeeded();
-
-    const runtime = new BoundedAgentRuntime({
-      model: this.options.model,
-      tools: scoped,
-      prices: this.options.prices,
-      control: {
-        heartbeat: async () => {},
-        isCancellationRequested: async () => this.cancelled,
-        isToolCallApproved: (call, tool) => this.permissions.isApproved(call, tool),
-        persistEvent: async (event) => this.options.onEvent?.({ type: "runtime", event }),
-      },
-    });
-
-    // The runtime owns one exchange; the CLI owns the conversation. Prior turns are replayed as
-    // history so the agent continues rather than restarting, while the runtime still sees the
-    // clean (system, objective) opening it validates.
-    const priorHistory = this.messages.filter((message) => message.role !== "system");
-    const result = await runtime.execute({
-      taskId: this.session.id,
-      runId: this.session.id,
-      stepId: `turn_${this.messages.length}`,
-      objective: priorHistory.length > 0 ? renderContinuation(priorHistory, objective) : objective,
-      systemPrompt,
-      allowedCapabilityIds: capabilities,
-      maxIterations: this.budgets.maxIterations,
-      maxToolCalls: this.budgets.maxToolCalls,
-      maxToolCallsPerTurn: this.budgets.maxToolCallsPerTurn,
-      maxToolResultChars: this.budgets.maxToolResultChars,
-      maxTotalToolResultChars: this.budgets.maxTotalToolResultChars,
-      maxOutputTokens: this.budgets.maxOutputTokens,
-      modelReservationRwf: this.budgets.maxRwf,
-      safetyIdentifier: `nova_cli_${this.session.id}`.slice(0, 64),
-    });
-
-    this.messages = result.messages;
-    this.session = {
-      ...this.session,
-      title: this.session.messages.length === 0 ? titleFromObjective(objective) : this.session.title,
-      messages: this.messages,
-      approvals: this.permissions.snapshot(),
-      totalRwf: this.session.totalRwf + result.actualModelRwf,
-      updatedAt: Date.now(),
+    const turnId = `turn_${randomUUID()}`;
+    this.activeTurnId = turnId;
+    let turnStatus: TurnStatus = "queued";
+    const transition = async (to: TurnStatus, durable = false) => {
+      assertTurnTransition(turnStatus, to);
+      await this.journal.append({ type: "turn_status", turnId, from: turnStatus, to }, { durable });
+      turnStatus = to;
     };
-    await saveSession(this.session).catch(() => undefined);
-    return { ...result, checkpoint };
+    this.activeTransition = transition;
+    try {
+      // Recording start is ordered but not fsynced: no side effect has happened yet, so forcing a
+      // disk barrier here would add latency without improving recovery. Tool calls and approvals
+      // do use durable barriers before they can affect the world.
+      await transition("running");
+
+      // Repository instructions and cheap world-state signals are refreshed at every user turn.
+      // A long-lived session must not keep following an AGENTS.md that changed three turns ago.
+      this.context = await collectProjectContext(this.options.root);
+
+      const tools = createNovaTools({ workspace: this.workspace, todos: this.todoList, search: this.options.search });
+      const capabilities = capabilitiesForMode(this.options.mode);
+      const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
+      const systemPrompt = buildNovaSystemPrompt(
+        this.context,
+        this.options.mode,
+        scoped.map((tool) => tool.name),
+        this.workspace,
+      );
+
+      // Snapshot before the agent can touch anything, so `/undo` returns to the state the user saw
+      // when they typed. Taken per turn rather than per tool call: a turn is the unit a person
+      // actually thinks in, and forty checkpoints for one request is a list nobody can navigate.
+      // Checkpoints snapshot the local git tree, so they mean nothing for a remote sandbox: the
+      // machine's files were never touched, and the sandbox is disposable by construction.
+      let checkpoint: Checkpoint | undefined;
+      if (this.options.mode !== "plan" && this.workspace.kind === "local") {
+        checkpoint = await this.checkpoints.capture(titleFromObjective(objective));
+        if (checkpoint) this.options.onEvent?.({ type: "checkpoint", checkpoint });
+      }
+
+      const compaction = await this.compactIfNeeded(turnId);
+      const runtime = new BoundedAgentRuntime({
+        model: this.options.model,
+        tools: scoped,
+        prices: this.options.prices,
+        control: {
+          heartbeat: async () => {},
+          isCancellationRequested: async () => this.cancelled,
+          isToolCallApproved: (call, tool) => this.permissions.decide(call, tool),
+          persistEvent: async (event) => {
+            this.options.onEvent?.({ type: "runtime", event });
+            if (event.type !== "assistant_delta") {
+              await this.journal.append(
+                { type: "runtime", turnId, event: runtimeEventForJournal(event) },
+                { durable: event.type === "tool_call" && event.effect !== "none" },
+              );
+            }
+          },
+        },
+      });
+
+      // The runtime owns one exchange; the CLI owns the conversation. Native messages preserve
+      // provider tool-call structure and prompt caching across turns.
+      const priorHistory = this.messages.filter((message) => message.role !== "system");
+      const result = await runtime.execute({
+        taskId: this.session.id,
+        runId: this.session.id,
+        stepId: `turn_${this.messages.length}`,
+        objective,
+        history: priorHistory,
+        systemPrompt,
+        allowedCapabilityIds: capabilities,
+        maxIterations: this.budgets.maxIterations,
+        maxToolCalls: this.budgets.maxToolCalls,
+        maxToolCallsPerTurn: this.budgets.maxToolCallsPerTurn,
+        maxToolResultChars: this.budgets.maxToolResultChars,
+        maxTotalToolResultChars: this.budgets.maxTotalToolResultChars,
+        maxOutputTokens: this.budgets.maxOutputTokens,
+        modelReservationRwf: Math.max(0, this.budgets.maxRwf - compaction.actualRwf),
+        safetyIdentifier: `nova_cli_${this.session.id}`.slice(0, 64),
+      });
+
+      const combinedUsage = addModelUsage(compaction.usage, result.usage);
+      const combinedRwf = compaction.actualRwf + result.actualModelRwf;
+      this.messages = result.messages;
+      this.session = {
+        ...this.session,
+        title: this.session.messages.length === 0 ? titleFromObjective(objective) : this.session.title,
+        messages: this.messages,
+        approvals: this.permissions.snapshot(),
+        totalRwf: this.session.totalRwf + combinedRwf,
+        updatedAt: Date.now(),
+      };
+      const terminalStatus = runtimeStatusToTurnStatus(result.status);
+      await transition(terminalStatus, true);
+      await saveSession(this.session);
+      return { ...result, usage: combinedUsage, actualModelRwf: combinedRwf, checkpoint };
+    } catch (error) {
+      if (isActiveTurnStatus(turnStatus)) {
+        await transition("failed", true).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      this.activeTurnId = null;
+      this.activeTransition = null;
+    }
   }
 
   /**
@@ -227,47 +315,56 @@ export class NovaAgent {
    * Uses the same model that does the work, with no tools: compaction is a reading task, and a
    * summarizer holding an `edit_file` tool is a summarizer that will eventually use it.
    */
-  private async compactIfNeeded(): Promise<void> {
+  private async compactIfNeeded(turnId: string): Promise<{ usage: ModelUsage; actualRwf: number }> {
     const plan = planCompaction(this.messages, { contextLimit: this.budgets.contextLimit, outputBudget: this.budgets.maxOutputTokens });
-    if (!plan) return;
+    if (!plan) return { usage: emptyModelUsage(), actualRwf: 0 };
     const before = this.messages.length;
+
+    const maximumOutputTokens = affordableOutputTokens(
+      [...plan.toSummarize.map((message) => message.content), COMPACTION_INSTRUCTION],
+      Math.min(this.budgets.maxOutputTokens, 4_000),
+      this.budgets.maxRwf,
+      this.options.prices,
+    );
+    if (maximumOutputTokens < 1) return { usage: emptyModelUsage(), actualRwf: 0 };
 
     const turn = await this.options.model.complete({
       messages: [...plan.toSummarize, { role: "user", content: COMPACTION_INSTRUCTION }],
       tools: [],
-      maxOutputTokens: Math.min(this.budgets.maxOutputTokens, 4_000),
+      maxOutputTokens: maximumOutputTokens,
       safetyIdentifier: `nova_cli_${this.session.id}`.slice(0, 64),
     });
-    if (!turn.content.trim()) return;
+    const actualRwf = priceActualModelUsage(turn.usage.inputTokens, turn.usage.outputTokens, this.options.prices);
+    if (actualRwf > this.budgets.maxRwf) throw new Error("Compaction usage exceeds the approved model budget");
+    if (!turn.content.trim()) return { usage: turn.usage, actualRwf };
 
     this.messages = buildCompactedMessages(turn.content, plan);
     this.options.onEvent?.({ type: "compaction", tokensBefore: 0, messagesBefore: before, messagesAfter: this.messages.length });
+    await this.journal.append({ type: "compaction", turnId, messagesBefore: before, messagesAfter: this.messages.length, actualRwf });
+    return { usage: turn.usage, actualRwf };
   }
 }
 
-/**
- * Replays prior turns into the next request.
- *
- * The runtime deliberately accepts a single objective, which keeps its own contract simple and
- * its validation honest. Rather than widening that contract for the CLI's sake, the conversation
- * is rendered into the request — the model sees what happened, and the runtime stays the same
- * component the hosted product runs.
- */
-function renderContinuation(history: readonly AgentMessage[], objective: string): string {
-  const transcript = history
-    .map((message) => {
-      if (message.role === "tool") return `[tool ${message.name}] ${truncateLine(message.content, 800)}`;
-      if (message.role === "assistant" && "toolCalls" in message) {
-        const names = message.toolCalls.map((call) => call.name).join(", ");
-        return `Nova: ${truncateLine(message.content, 800)}${names ? ` (called: ${names})` : ""}`;
-      }
-      return `${message.role === "user" ? "User" : "Nova"}: ${truncateLine(message.content, 800)}`;
-    })
-    .join("\n");
-  return `Earlier in this session:\n${transcript}\n\nThe user now says:\n${objective}`;
+function emptyModelUsage(): ModelUsage {
+  return { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 }
 
-function truncateLine(value: string, maximum: number): string {
-  const clean = (value ?? "").replace(/\s+/g, " ").trim();
-  return clean.length <= maximum ? clean : `${clean.slice(0, maximum)}…`;
+function addModelUsage(left: ModelUsage, right: ModelUsage): ModelUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    reasoningTokens: left.reasoningTokens + right.reasoningTokens,
+  };
+}
+
+function runtimeStatusToTurnStatus(status: AgentRuntimeResult["status"]): TurnStatus {
+  if (status === "needs_approval") return "waiting_approval";
+  return status;
+}
+
+function isActiveTurnStatus(status: TurnStatus): boolean {
+  return status === "queued" || status === "running" || status === "waiting_approval";
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentTool, AgentToolCall } from "../agent-runtime";
 
 /**
@@ -16,6 +17,7 @@ import type { AgentTool, AgentToolCall } from "../agent-runtime";
 export type NovaMode = "plan" | "build" | "auto";
 
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
+export type ToolApprovalOutcome = "approved" | "denied";
 
 /** Capability ids the runtime scopes tools by, mirrored from `lib/capability-registry.ts`. */
 export const NOVA_CAPABILITIES = {
@@ -41,19 +43,62 @@ export type ApprovalRequest = {
   tool: AgentTool;
   /** One line a human can act on without reading JSON — "edit src/app.ts", "run npm test". */
   summary: string;
+  /** Exact proposed action. Recomputed before every lookup, so changed arguments need consent. */
+  actionDigest: string;
+  /** Versioned authorization key persisted by `allow_always` / `deny_always`. */
+  scopeKey: string;
+  policyVersion: typeof APPROVAL_POLICY_VERSION;
 };
 
 export type ApprovalPrompt = (request: ApprovalRequest) => Promise<PermissionDecision>;
 
 /**
- * Remembers standing decisions so a person is asked once per kind of action, not once per call.
+ * Remembers standing decisions for the exact normalized action, not merely its tool name.
  *
  * Approval fatigue is a safety problem, not an ergonomics one: an agent that asks forty times
  * trains the human to press `y` without reading, which is strictly worse than asking twice.
- * Decisions are keyed by tool name, so "always allow reads" never silently also allows writes.
+ * A changed path, command, argument or effect creates a different digest and must be considered
+ * again. This is intentionally narrower than Cline-style UI categories: categories are useful for
+ * presentation, but too broad to be authorization keys.
  */
+export const APPROVAL_POLICY_VERSION = "nova-approval-v1" as const;
+
+function canonicalize(value: unknown): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Approval arguments contain a non-finite number");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return Object.fromEntries(entries.map(([key, item]) => [key, canonicalize(item)]));
+  }
+  throw new Error(`Approval arguments contain unsupported ${typeof value} value`);
+}
+
+/** Stable across object key order, but deliberately changes when any meaningful argument changes. */
+export function actionDigest(call: AgentToolCall, tool: AgentTool): string {
+  const action = JSON.stringify(canonicalize({
+    policyVersion: APPROVAL_POLICY_VERSION,
+    tool: tool.name,
+    capabilityId: tool.capabilityId,
+    effect: tool.effect,
+    arguments: call.arguments ?? {},
+  }));
+  return createHash("sha256").update(action).digest("hex");
+}
+
+export function approvalScopeKey(call: AgentToolCall, tool: AgentTool): string {
+  return `${APPROVAL_POLICY_VERSION}:${actionDigest(call, tool)}`;
+}
+
 export class PermissionLedger {
   private readonly standing = new Map<string, "allow" | "deny">();
+  /** Old broad denials remain safe; old broad allows are intentionally not migrated. */
+  private readonly legacyDeniedTools = new Set<string>();
 
   constructor(private readonly mode: NovaMode, private readonly prompt: ApprovalPrompt) {}
 
@@ -63,23 +108,41 @@ export class PermissionLedger {
   }
 
   restore(decisions: Record<string, "allow" | "deny">): void {
-    for (const [tool, decision] of Object.entries(decisions)) this.standing.set(tool, decision);
+    for (const [scope, decision] of Object.entries(decisions)) {
+      if (scope.startsWith(`${APPROVAL_POLICY_VERSION}:`)) this.standing.set(scope, decision);
+      else if (decision === "deny") this.legacyDeniedTools.add(scope);
+    }
   }
 
   async isApproved(call: AgentToolCall, tool: AgentTool): Promise<boolean> {
+    return (await this.decide(call, tool)) === "approved";
+  }
+
+  /** Rich outcome lets the runtime distinguish a real rejection from an unresolved request. */
+  async decide(call: AgentToolCall, tool: AgentTool): Promise<ToolApprovalOutcome> {
     // A tool that changes nothing needs no gate; the runtime only asks about the ones that do.
-    if (tool.effect === "none") return true;
+    if (tool.effect === "none") return "approved";
     // `auto` pre-approves workspace changes but never external ones — sending an email or opening
     // a pull request is not undoable by a checkpoint, so it stays a human decision in every mode.
-    if (this.mode === "auto" && tool.effect === "workspace") return true;
+    if (this.mode === "auto" && tool.effect === "workspace") return "approved";
 
-    const standing = this.standing.get(tool.name);
-    if (standing) return standing === "allow";
+    if (this.legacyDeniedTools.has(tool.name)) return "denied";
+    const action = actionDigest(call, tool);
+    const scopeKey = `${APPROVAL_POLICY_VERSION}:${action}`;
+    const standing = this.standing.get(scopeKey);
+    if (standing) return standing === "allow" ? "approved" : "denied";
 
-    const decision = await this.prompt({ call, tool, summary: describeToolCall(call, tool) });
-    if (decision === "allow_always") this.standing.set(tool.name, "allow");
-    if (decision === "deny_always") this.standing.set(tool.name, "deny");
-    return decision === "allow" || decision === "allow_always";
+    const decision = await this.prompt({
+      call,
+      tool,
+      summary: describeToolCall(call, tool),
+      actionDigest: action,
+      scopeKey,
+      policyVersion: APPROVAL_POLICY_VERSION,
+    });
+    if (decision === "allow_always") this.standing.set(scopeKey, "allow");
+    if (decision === "deny_always") this.standing.set(scopeKey, "deny");
+    return decision === "allow" || decision === "allow_always" ? "approved" : "denied";
   }
 }
 

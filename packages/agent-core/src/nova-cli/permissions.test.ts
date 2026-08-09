@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTool, AgentToolCall } from "../agent-runtime";
-import { capabilitiesForMode, describeToolCall, NOVA_CAPABILITIES, PermissionLedger, type PermissionDecision } from "./permissions";
+import { actionDigest, capabilitiesForMode, describeToolCall, NOVA_CAPABILITIES, PermissionLedger, type PermissionDecision } from "./permissions";
 
 function tool(overrides: Partial<AgentTool> & { name: string }): AgentTool {
   return {
@@ -39,14 +39,16 @@ describe("permission ledger", () => {
     expect(asked).toBe(0);
   });
 
-  it("asks once per tool and remembers 'always'", async () => {
+  it("remembers 'always' only for the exact action digest", async () => {
     const asked: string[] = [];
     const ledger = new PermissionLedger("build", async (request) => { asked.push(request.tool.name); return "allow_always"; });
 
     await ledger.isApproved(call("edit_file", { path: "a.ts" }), tool({ name: "edit_file" }));
+    await ledger.isApproved(call("edit_file", { path: "a.ts" }), tool({ name: "edit_file" }));
     await ledger.isApproved(call("edit_file", { path: "b.ts" }), tool({ name: "edit_file" }));
-    expect(asked).toEqual(["edit_file"]);
-    expect(ledger.snapshot()).toEqual({ edit_file: "allow" });
+    expect(asked).toEqual(["edit_file", "edit_file"]);
+    expect(Object.keys(ledger.snapshot())).toHaveLength(2);
+    expect(Object.keys(ledger.snapshot()).every((key) => key.startsWith("nova-approval-v1:"))).toBe(true);
   });
 
   it("keeps a standing 'always allow' scoped to the one tool it was given for", async () => {
@@ -85,11 +87,31 @@ describe("permission ledger", () => {
   it("restores standing decisions when a session resumes", async () => {
     let asked = 0;
     const ledger = new PermissionLedger("build", async () => { asked += 1; return "allow"; });
-    ledger.restore({ edit_file: "allow", run_command: "deny" });
+    const edit = call("edit_file", { path: "a.ts" });
+    const editTool = tool({ name: "edit_file" });
+    const key = `nova-approval-v1:${actionDigest(edit, editTool)}`;
+    ledger.restore({ [key]: "allow", run_command: "deny" });
 
-    expect(await ledger.isApproved(call("edit_file"), tool({ name: "edit_file" }))).toBe(true);
+    expect(await ledger.isApproved(edit, editTool)).toBe(true);
     expect(await ledger.isApproved(call("run_command"), tool({ name: "run_command" }))).toBe(false);
     expect(asked).toBe(0);
+  });
+
+  it("does not migrate a legacy broad allow across arbitrary arguments", async () => {
+    let asked = 0;
+    const ledger = new PermissionLedger("build", async () => { asked += 1; return "deny"; });
+    ledger.restore({ run_command: "allow" });
+    expect(await ledger.isApproved(call("run_command", { command: "curl secret.example" }), tool({ name: "run_command" }))).toBe(false);
+    expect(asked).toBe(1);
+  });
+
+  it("generates the same digest regardless of object key order and a new digest for a new command", () => {
+    const commandTool = tool({ name: "run_command", capabilityId: NOVA_CAPABILITIES.terminal });
+    const first = actionDigest(call("run_command", { command: "bun test", timeoutMs: 1000 }), commandTool);
+    const reordered = actionDigest(call("run_command", { timeoutMs: 1000, command: "bun test" }), commandTool);
+    const changed = actionDigest(call("run_command", { command: "bun run build", timeoutMs: 1000 }), commandTool);
+    expect(first).toBe(reordered);
+    expect(changed).not.toBe(first);
   });
 
   it("treats an unrecognised answer as refusal, so a stray keypress never approves a write", async () => {

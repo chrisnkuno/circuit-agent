@@ -3,7 +3,8 @@ import { E2BSandboxProvider } from "./e2b";
 import { DockerSandboxProvider } from "./docker";
 import { OpenAICodingModelProvider } from "./openai";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
-import { createCircuitNotionAgentProvider, createCircuitNotionProvider, createCodingModelProvider, createCodingSandboxProvider, createDockerProvider, createE2BProvider, createModelPriceCatalog, createOpenAIProvider } from "./factory";
+import { CircuitNotionPresetsProvider } from "./circuitnotion-presets";
+import { createCircuitNotionAgentProvider, createCircuitNotionProvider, createCodingModelProvider, createCodingSandboxProvider, createDockerProvider, createDynamicPresetsProvider, createE2BProvider, createModelPriceCatalog, createOpenAIProvider } from "./factory";
 
 describe("provider factory", () => {
   it("keeps E2B disabled until both credential and approved template exist", () => {
@@ -58,6 +59,13 @@ describe("provider factory", () => {
 
   it("rejects an unrecognized sandbox backend rather than guessing", () => {
     expect(createCodingSandboxProvider({ CODING_SANDBOX_PROVIDER: "unknown-backend", E2B_API_KEY: "e2b_test", E2B_CODING_TEMPLATE: "circuit-coding" })).toBeUndefined();
+  });
+
+  it("creates the dynamic-presets provider from its own, cheaper model slot", () => {
+    // Deliberately a separate env var from the coding model — presets must not silently start
+    // spending at the (possibly much more expensive) coding model's rate.
+    expect(createDynamicPresetsProvider({ CIRCUITNOTION_API_KEY: "cn_test" })).toBeUndefined();
+    expect(createDynamicPresetsProvider({ CIRCUITNOTION_API_KEY: "cn_test", CIRCUITNOTION_PRESETS_MODEL: "gpt-5.6-nano" })).toBeInstanceOf(CircuitNotionPresetsProvider);
   });
 
   it("parses a versioned RWF model price catalog", () => {

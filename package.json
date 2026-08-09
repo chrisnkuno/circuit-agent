@@ -31,7 +31,7 @@
     "react-dom": "^19.0.0",
     "react-resizable-panels": "^4.12.2",
     "zod": "^4.4.3",
-    "circuit-nova-core": "workspace:*"
+    "@circuit-nova/nova-core": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",

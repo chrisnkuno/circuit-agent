@@ -181,7 +181,7 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
     if (call) this.call = call;
     else {
       // The SDK is loaded on first use, not at module load. It is an optional peer dependency, and
-      // importing it eagerly made `import { formatMoney } from "circuit-nova-core"` crash outright
+      // importing it eagerly made `import { formatMoney } from "@circuit-nova/nova-core"` crash outright
       // for anyone who had not installed it — a package that cannot be imported without a
       // dependency it calls optional is lying about the dependency.
       let client: { messages: { create(body: unknown, options: unknown): Promise<unknown> } } | undefined;

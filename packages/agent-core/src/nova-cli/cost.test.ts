@@ -109,4 +109,39 @@ describe("cost ledger", () => {
     expect(ledger.budgetWarning()).toBeUndefined();
     expect(ledger.formatReport()).not.toContain("budget");
   });
+
+  it("breaks the report down per request once there is more than one, and shows the budget line", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", budget: fromUnits(2, "USD") });
+    ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 1, elapsedMs: 1_000 });
+    ledger.record({ usage: usage(50_000, 500), iterations: 2, toolCalls: 0, elapsedMs: 2_000 });
+
+    const report = ledger.formatReport();
+    expect(report).toContain("Per request:");
+    expect(report).toContain("1. ");
+    expect(report).toContain("2. ");
+    expect(report).toMatch(/budget\s+\$[\d.]+ of \$2\.00/);
+  });
+
+  it("reports a turn as unpriced in the per-request breakdown when the model has no known price", () => {
+    const ledger = new CostLedger({ display: "USD" }); // no prices at all
+    ledger.record({ usage: usage(1_000, 100), iterations: 1, toolCalls: 0, elapsedMs: 500 });
+    ledger.record({ usage: usage(1_000, 100), iterations: 1, toolCalls: 0, elapsedMs: 500 });
+    expect(ledger.formatReport()).toContain("unpriced");
+  });
+
+  it("reprices future turns after /model switches to a different provider", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD" });
+    const before = ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
+    expect(before.cost).toBeDefined();
+
+    const cheaper = tokenPrices("USD", 1, 2);
+    ledger.setPrices(cheaper);
+    const after = ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
+    // The same usage, priced at the new, much cheaper rate — proof the switch actually took effect.
+    expect(toUnits(after.cost!)).toBeLessThan(toUnits(before.cost!));
+
+    ledger.setPrices(undefined);
+    const unpriced = ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
+    expect(unpriced.cost).toBeUndefined();
+  });
 });

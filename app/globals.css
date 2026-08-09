@@ -13,3 +13,16 @@
 .auth-workspace-ready { background:#6ebf3a; }
 .auth-panel.signed-in b { display:inline-flex; align-items:center; }
 
+/* Local currency control shared by the homepage and terminal. The popover explains that local
+   values are converted presentation while the auditable ledger remains integer RWF. */
+.money-preferences { position:relative; }
+.money-trigger { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); background:#fff; color:var(--ink); padding:7px 9px; font:700 11px inherit; cursor:pointer; }
+.money-popover { position:absolute; z-index:80; top:calc(100% + 8px); right:0; width:min(310px,calc(100vw - 24px)); padding:15px; border:1px solid var(--line); background:#fff; color:var(--ink); box-shadow:0 18px 45px rgba(17,34,29,.18); display:grid; gap:12px; }
+.money-popover-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.money-popover-head div { display:grid; gap:3px; }
+.money-popover-head b { font-size:13px; }
+.money-popover-head span,.money-popover p { font-size:10px; line-height:1.45; color:var(--muted); margin:0; }
+.money-popover-head button { border:0; background:transparent; color:var(--muted); cursor:pointer; padding:1px; }
+.money-popover label { display:grid; gap:5px; font-size:10px; color:var(--muted); }
+.money-popover select { width:100%; border:1px solid var(--line); background:#fff; color:var(--ink); padding:8px; font:inherit; font-size:12px; }
+.money-detect { display:flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--forest); background:transparent; color:var(--forest); padding:8px; font:700 11px inherit; cursor:pointer; }

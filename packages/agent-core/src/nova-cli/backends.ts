@@ -16,7 +16,8 @@ import {
   type ReadResult,
   type WorkspaceLimits,
 } from "./workspace";
-import { runShellCommand, type CommandRunner } from "./tools";
+import { hasShellSyntax, runLocalCommand, tokenizeCommand, type CommandRunner } from "./command";
+export { hasShellSyntax, tokenizeCommand } from "./command";
 
 /**
  * Where Nova's files actually live.
@@ -54,7 +55,7 @@ export class LocalWorkspace implements NovaWorkspace {
   readonly kind = "local" as const;
   readonly commandGuidance = "Runs in a real shell, so pipes and redirection work.";
 
-  constructor(private readonly root: string, private readonly limits: WorkspaceLimits = DEFAULT_WORKSPACE_LIMITS, private readonly runner: CommandRunner = runShellCommand) {}
+  constructor(private readonly root: string, private readonly limits: WorkspaceLimits = DEFAULT_WORKSPACE_LIMITS, private readonly runner: CommandRunner = runLocalCommand) {}
 
   get label(): string {
     return this.root;
@@ -107,50 +108,6 @@ export class LocalWorkspace implements NovaWorkspace {
  * get to weaken it just because a human is watching. Shell metacharacters are refused rather than
  * quietly passed through as literal arguments, which would otherwise produce a baffling failure.
  */
-export function tokenizeCommand(command: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  let hasToken = false;
-
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (quote) {
-      if (character === quote) quote = null;
-      else current += character;
-      continue;
-    }
-    if (character === '"' || character === "'") { quote = character; hasToken = true; continue; }
-    if (/\s/.test(character)) {
-      if (hasToken) { tokens.push(current); current = ""; hasToken = false; }
-      continue;
-    }
-    current += character;
-    hasToken = true;
-  }
-  if (quote) throw new Error("Unbalanced quote in command");
-  if (hasToken) tokens.push(current);
-  if (tokens.length === 0) throw new Error("Command is empty");
-  return tokens;
-}
-
-const SHELL_METACHARACTERS = /[|&;><`$()]|\|\||&&/;
-
-export function hasShellSyntax(command: string): boolean {
-  // Only outside quotes: `git commit -m "a && b"` is one plain argument, not a shell operator.
-  let quote: '"' | "'" | null = null;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (quote) {
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") { quote = character; continue; }
-    if (SHELL_METACHARACTERS.test(character)) return true;
-  }
-  return false;
-}
-
 export type E2BWorkspaceOptions = {
   sandbox: InteractiveCodingSandboxProvider;
   sandboxId: string;

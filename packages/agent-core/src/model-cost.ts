@@ -66,6 +66,21 @@ export function estimateModelCost(parts: string[], maximumOutputTokens: number, 
 }
 
 /**
+ * Largest output allowance whose conservative input + output cost fits the money still approved.
+ * Returning zero means the caller must not contact the provider: discovering an overrun after the
+ * response arrives is accounting, not enforcement.
+ */
+export function affordableOutputTokens(parts: string[], requestedOutputTokens: number, approvedRwf: number, prices: ModelPriceCatalog): number {
+  assertTokens(requestedOutputTokens, "requestedOutputTokens");
+  assertTokens(approvedRwf, "approvedRwf");
+  const inputCost = estimateModelCost(parts, 0, prices).maximumRwf;
+  const availableForOutput = approvedRwf - inputCost;
+  if (availableForOutput <= 0) return 0;
+  const affordable = Math.floor((availableForOutput * 1_000_000) / prices.outputRwfPerMillionTokens);
+  return Math.max(0, Math.min(requestedOutputTokens, affordable));
+}
+
+/**
  * Actual cost with cache-aware input pricing.
  *
  * `priceActualModelUsage` charges every input token at the full rate, which is the safe assumption

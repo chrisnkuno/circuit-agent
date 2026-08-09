@@ -11,9 +11,16 @@
  * module — a number without a currency is not money, and a conversion without a rate is a guess.
  */
 
-export type Currency = "RWF" | "USD";
+/** ISO 4217 alphabetic currency code, validated at every CLI/configuration boundary. */
+export type Currency = string;
 
-export const CURRENCIES: readonly Currency[] = ["RWF", "USD"];
+export const CURRENCIES: readonly Currency[] = (() => {
+  try {
+    return Intl.supportedValuesOf("currency");
+  } catch {
+    return ["RWF", "USD"];
+  }
+})();
 
 export function isCurrency(value: string): value is Currency {
   return (CURRENCIES as readonly string[]).includes(value);
@@ -95,7 +102,7 @@ export function convertTo(value: Money, target: Currency, rates: readonly FxRate
  * costs, often more than cents: a request that costs $0.0004 should not display as $0.00, because
  * "free" and "very cheap" lead to different decisions.
  */
-const FORMATS: Record<Currency, { symbol: string; minimumFractionDigits: number; maximumFractionDigits: number; smallThreshold: number; smallDigits: number }> = {
+const FORMATS: Record<string, { symbol: string; minimumFractionDigits: number; maximumFractionDigits: number; smallThreshold: number; smallDigits: number }> = {
   RWF: { symbol: "RWF", minimumFractionDigits: 0, maximumFractionDigits: 0, smallThreshold: 0, smallDigits: 0 },
   USD: { symbol: "$", minimumFractionDigits: 2, maximumFractionDigits: 2, smallThreshold: 0.01, smallDigits: 4 },
 };
@@ -104,6 +111,16 @@ export function formatMoney(value: Money): string {
   const format = FORMATS[value.currency];
   const units = toUnits(value);
   const magnitude = Math.abs(units);
+  if (!format) {
+    const digits = magnitude > 0 && magnitude < 0.01 ? 4 : 2;
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: value.currency,
+      currencyDisplay: "narrowSymbol",
+      minimumFractionDigits: Math.min(2, digits),
+      maximumFractionDigits: digits,
+    }).format(units);
+  }
   // Below the threshold, show enough digits for the number to mean something.
   const digits = magnitude > 0 && magnitude < format.smallThreshold ? format.smallDigits : format.maximumFractionDigits;
   const rendered = units.toLocaleString("en-US", { minimumFractionDigits: Math.min(format.minimumFractionDigits, digits), maximumFractionDigits: digits });

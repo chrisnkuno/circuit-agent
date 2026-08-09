@@ -5,9 +5,9 @@ import { useMutation, useQuery } from "convex/react";
 import { ChevronRight, FolderOpen, History, Square } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
-import { formatRwf } from "@/lib/task-cost";
 import { SidePanel } from "@/components/side-panel";
 import { DownloadWorkButton } from "@/components/download-work-button";
+import { useMoney } from "@/components/money-preferences";
 
 type TaskDoc = Doc<"tasks">;
 type TaskStatus = TaskDoc["status"];
@@ -60,6 +60,7 @@ export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { org
   const [openFolder, setOpenFolder] = useState<string | null>("active");
   const [stoppingTaskId, setStoppingTaskId] = useState<Id<"tasks"> | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
+  const { formatMoney } = useMoney();
 
   async function stop(taskId: Id<"tasks">) {
     setStoppingTaskId(taskId);
@@ -131,7 +132,7 @@ export function TaskHistory({ organizationId, onResumeTask, onOpenFiles }: { org
                         </div>
                       )}
                       <div className="task-card-meta">
-                        <span>{formatRwf(Number(task.spentRwf))} of {formatRwf(Number(task.maxRwf))}</span>
+                        <span title="Authoritative amounts are settled in RWF">{formatMoney(Number(task.spentRwf))} of {formatMoney(Number(task.maxRwf))} cap</span>
                         <span>{relativeTime(task.createdAt)}</span>
                       </div>
                       <div className="task-card-actions">

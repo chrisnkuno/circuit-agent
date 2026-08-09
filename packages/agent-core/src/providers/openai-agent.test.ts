@@ -96,4 +96,24 @@ describe("OpenAI agent adapter", () => {
     const provider = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async () => respond());
     await expect(provider.complete({ ...request, safetyIdentifier: "  " })).rejects.toThrow("safetyIdentifier");
   });
+
+  it("builds a real client when no call is injected, without making a network request", () => {
+    // Constructing the SDK client is local (no I/O); only invoking it would reach the network,
+    // which the test never does. This just proves the real, non-test construction path works.
+    expect(() => new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" })).not.toThrow();
+    expect(() => new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra", baseURL: "https://example.com/v1" })).not.toThrow();
+  });
+
+  it("collects a streamed response the same way the buffered one is read", async () => {
+    async function* stream() {
+      yield { id: "chatcmpl_1", model: "gpt-5.6-terra", choices: [{ delta: { content: "Hel" } }] };
+      yield { choices: [{ delta: { content: "lo." }, finish_reason: "stop" }] };
+      yield { choices: [], usage };
+    }
+    const provider = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async () => stream());
+    const seen: string[] = [];
+    const turn = await provider.complete({ ...request, onTextDelta: (text) => seen.push(text) });
+    expect(seen).toEqual(["Hel", "lo."]);
+    expect(turn).toMatchObject({ finishReason: "stop", content: "Hello." });
+  });
 });

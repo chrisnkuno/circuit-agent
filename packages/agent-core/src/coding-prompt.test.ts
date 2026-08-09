@@ -15,6 +15,27 @@ describe("coding planner prompt", () => {
     expect(JSON.parse(prompt.input)).toMatchObject({ objective: "Fix the failing test", maxCommands: 6 });
   });
 
+  it("tells the planner about a previous failure so it repairs rather than repeats it", () => {
+    const withFailure = buildCodingPlannerPrompt({
+      objective: "Fix the failing test",
+      repositoryContext: "",
+      workspaceRoot: "/workspace/repo",
+      maxCommands: 6,
+      previousFailure: { intent: "run the test suite", command: "npm test", exitCode: 1, output: "TypeError: x is not a function" },
+    });
+    expect(withFailure.instructions).toContain("previous attempt at this step failed");
+    expect(withFailure.instructions).toContain("Do not simply repeat the failed command unchanged");
+    expect(JSON.parse(withFailure.input)).toMatchObject({
+      previousFailure: { intent: "run the test suite", command: "npm test", exitCode: 1 },
+    });
+
+    const withoutFailure = buildCodingPlannerPrompt({
+      objective: "Fix the failing test", repositoryContext: "", workspaceRoot: "/workspace/repo", maxCommands: 6,
+    });
+    expect(withoutFailure.instructions).not.toContain("previous attempt");
+    expect(JSON.parse(withoutFailure.input)).not.toHaveProperty("previousFailure");
+  });
+
   it("injects the Wander multi-pass protocol only for Wander objectives", () => {
     const coding = buildCodingPlannerPrompt({
       objective: "add a README",

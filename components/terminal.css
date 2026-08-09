@@ -190,6 +190,30 @@
 }
 .nova-topbar-auth .auth-panel .outline:hover { border-color: var(--nova-border-strong); }
 
+.nova-topbar-auth .money-trigger {
+  border-color: var(--nova-border);
+  background: rgba(255,255,255,.04);
+  color: var(--nova-accent);
+  border-radius: 8px;
+}
+.nova-topbar-auth .money-popover {
+  border-color: var(--nova-border-strong);
+  background: var(--nova-panel-solid);
+  color: var(--nova-text);
+  border-radius: var(--nova-radius-sm);
+  box-shadow: 0 20px 55px rgba(0,0,0,.55);
+}
+.nova-topbar-auth .money-popover-head span,
+.nova-topbar-auth .money-popover p,
+.nova-topbar-auth .money-popover label { color: var(--nova-muted); }
+.nova-topbar-auth .money-popover select {
+  border-color: var(--nova-border);
+  background: #111a27;
+  color: var(--nova-text);
+  border-radius: 7px;
+}
+.nova-topbar-auth .money-detect { border-color: var(--nova-cyan); color: var(--nova-cyan); border-radius: 7px; }
+
 .nova-topbar-auth .auth-panel .primary {
   background: var(--nova-cyan);
   color: #06131f;
@@ -203,7 +227,7 @@
 }
 .nova-topbar-auth .auth-panel .primary:disabled { opacity: 0.55; cursor: default; }
 
-.nova-topbar-auth .auth-panel.signed-in b {
+.nova-topbar-auth .auth-panel.signed-in > b {
   display: flex;
   align-items: center;
   gap: 8px;

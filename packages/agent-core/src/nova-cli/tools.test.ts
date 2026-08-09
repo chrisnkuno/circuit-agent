@@ -112,6 +112,20 @@ describe("nova tool set", () => {
     expect(read.content).toContain("[x] 1. read the config");
   });
 
+  it("applies the ids that exist and reports the rest, instead of failing the whole batch", async () => {
+    // Observed live: a model referenced an id (3) from an earlier turn's list. The old
+    // implementation threw on the first unknown id, which silently discarded a *valid* update
+    // (id 1, present in the same call) along with it — a single stale id failed the whole batch.
+    const tools = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const write = toolNamed(tools, "todo_write");
+    await write.execute({ items: ["read the config", "add the flag"] }, context);
+
+    const result = await write.execute({ complete: [1, 3] }, context);
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("[x] 1. read the config"); // the valid id still applied
+    expect(result.content).toContain("No todo with id 3");
+  });
+
   it("offers web_search only when search is configured", () => {
     const withoutSearch = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     expect(withoutSearch.some((tool) => tool.name === "web_search")).toBe(false);
@@ -142,6 +156,49 @@ describe("nova tool set", () => {
   });
 });
 
+describe("web_fetch", () => {
+  it("offers web_fetch only when a fetch implementation is available", () => {
+    const withFetch = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: async () => new Response("ok") });
+    expect(withFetch.some((tool) => tool.name === "web_fetch")).toBe(true);
+
+    const withoutFetch = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: undefined as unknown as typeof fetch });
+    // Falls back to globalThis.fetch, which exists in this runtime — the tool is still offered.
+    expect(withoutFetch.some((tool) => tool.name === "web_fetch")).toBe(true);
+  });
+
+  it("rejects a non-http(s) url before ever calling fetch", async () => {
+    let called = false;
+    const tools = createNovaTools({
+      workspace: new LocalWorkspace(root), todos: new TodoList(),
+      fetchImpl: async () => { called = true; return new Response("ok"); },
+    });
+    await expect(toolNamed(tools, "web_fetch").execute({ url: "file:///etc/passwd" }, context)).rejects.toThrow(/http or https/);
+    expect(called).toBe(false);
+  });
+
+  it("reports a failed fetch as a tool error rather than throwing", async () => {
+    const tools = createNovaTools({
+      workspace: new LocalWorkspace(root), todos: new TodoList(),
+      fetchImpl: async () => new Response("not found", { status: 404 }),
+    });
+    const result = await toolNamed(tools, "web_fetch").execute({ url: "https://example.com/missing" }, context);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("404");
+  });
+
+  it("strips markup and decodes entities so the model reads text, not tags", async () => {
+    const html = "<html><head><style>body{color:red}</style></head><body><script>evil()</script><p>Fish &amp; Chips &lt;3</p></body></html>";
+    const tools = createNovaTools({
+      workspace: new LocalWorkspace(root), todos: new TodoList(),
+      fetchImpl: async () => new Response(html, { status: 200 }),
+    });
+    const result = await toolNamed(tools, "web_fetch").execute({ url: "https://example.com/page" }, context);
+    expect(result.content).toBe("Fish & Chips <3");
+    expect(result.content).not.toContain("evil()");
+    expect(result.content).not.toContain("color:red");
+  });
+});
+
 describe("verification detection", () => {
   it("recognises the commands whose exit code is real evidence", () => {
     expect(looksLikeVerification("npm test")).toBe(true);
@@ -149,5 +206,24 @@ describe("verification detection", () => {
     expect(looksLikeVerification("pytest -q")).toBe(true);
     expect(looksLikeVerification("git status")).toBe(false);
     expect(looksLikeVerification("echo hello")).toBe(false);
+  });
+
+  it("recognises a compile check, even with an underscore before it", () => {
+    // Observed live: writing tetris.py then running `python3 -m py_compile tetris.py` (a real,
+    // passing syntax check) still reported needs_verification, because "compile" has no word
+    // boundary right after the underscore in "py_compile" and the original list had no bare
+    // "compile" alternative either.
+    expect(looksLikeVerification("python3 -m py_compile tetris.py")).toBe(true);
+    expect(looksLikeVerification("gcc -fsyntax-only main.c && echo compile ok")).toBe(true);
+  });
+
+  it("recognises linters and type checkers whose tool name itself contains 'lint'", () => {
+    // A bare \blint\b never matched "eslint" or "pylint" — there is no word boundary between the
+    // preceding letter and "lint" inside either name.
+    expect(looksLikeVerification("eslint .")).toBe(true);
+    expect(looksLikeVerification("pylint src")).toBe(true);
+    expect(looksLikeVerification("ruff check .")).toBe(true);
+    expect(looksLikeVerification("mypy .")).toBe(true);
+    expect(looksLikeVerification("cargo clippy")).toBe(true);
   });
 });

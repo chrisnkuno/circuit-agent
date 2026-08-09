@@ -49,4 +49,25 @@ describe("CircuitNotion agent turn provider", () => {
     const noUsage = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async () => ({ id: "chat-4", model: "gpt-5.6-luna", usage: null, choices: [{ finish_reason: "stop", message: { content: "done" } }] }));
     await expect(noUsage.complete({ messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org" })).rejects.toThrow("usage accounting");
   });
+
+  it("builds a real client when no call is injected, relaying through CircuitNotion's own base URL and headers", () => {
+    expect(() => new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" })).not.toThrow();
+    expect(() => new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna", relaySecret: "s3cr3t" })).not.toThrow();
+  });
+
+  it("collects a streamed response through the same path a buffered one takes", async () => {
+    async function* stream() {
+      yield { id: "chat-5", model: "gpt-5.6-luna", choices: [{ delta: { content: "Look" } }] };
+      yield { choices: [{ delta: { content: "ing." }, finish_reason: "stop" }] };
+      yield { choices: [], usage };
+    }
+    const provider = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async () => stream());
+    const seen: string[] = [];
+    const turn = await provider.complete({
+      messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org-1",
+      onTextDelta: (text) => seen.push(text),
+    });
+    expect(seen).toEqual(["Look", "ing."]);
+    expect(turn).toMatchObject({ finishReason: "stop", content: "Looking." });
+  });
 });

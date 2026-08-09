@@ -14,6 +14,12 @@ export default defineSchema({
     // signed in at least since this field existed; a member without one is simply not emailed
     // rather than emailed at a guessed address.
     notificationEmail: v.optional(v.string()),
+    // Presentation preferences only. Every budget, reservation, and settlement remains an
+    // integer RWF amount; these fields choose how that authoritative ledger is displayed.
+    countryCode: v.optional(v.string()),
+    currencyCode: v.optional(v.string()),
+    currencySource: v.optional(v.union(v.literal("automatic"), v.literal("manual"))),
+    moneyPreferencesUpdatedAt: v.optional(v.number()),
     role: v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer")),
     status: v.union(v.literal("active"), v.literal("suspended")),
     createdAt: v.number(),

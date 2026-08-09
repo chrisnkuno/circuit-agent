@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
 import type { AgentTool } from "../agent-runtime";
 import type { ExaSearchClient } from "../providers/exa";
 import type { NovaWorkspace } from "./backends";
+export { runShellCommand } from "./command";
+export type { CommandRunner } from "./command";
 import { NOVA_CAPABILITIES } from "./permissions";
 
 /**
@@ -40,13 +41,23 @@ export class TodoList {
     return this.list();
   }
 
-  setStatus(ids: readonly number[], status: TodoItem["status"]): TodoItem[] {
+  /**
+   * Applies every id that exists and reports the rest, rather than throwing on the first miss.
+   *
+   * Observed live: a model referencing an id from an earlier turn's list (ids are never reused
+   * once `replace()` hands out a fresh set) turned an otherwise-valid batch — "mark 2 and 4 done" —
+   * into a hard tool error that discarded id 2's real, valid update along with it. Reporting the
+   * miss and keeping the rest lets the model self-correct in its next line of text instead of
+   * spending a whole round trip recovering from an error.
+   */
+  setStatus(ids: readonly number[], status: TodoItem["status"]): { items: TodoItem[]; unknownIds: number[] } {
+    const unknownIds: number[] = [];
     for (const id of ids) {
       const item = this.items.find((candidate) => candidate.id === id);
-      if (!item) throw new Error(`No todo with id ${id}`);
+      if (!item) { unknownIds.push(id); continue; }
       item.status = status;
     }
-    return this.list();
+    return { items: this.list(), unknownIds };
   }
 
   /** True when every todo is already in the requested state — nothing to report, nothing to do. */
@@ -58,44 +69,6 @@ export class TodoList {
     return this.items.map((item) => ({ ...item }));
   }
 }
-
-export type CommandRunner = (
-  command: string,
-  options: { cwd: string; timeoutMs: number },
-) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
-
-export const runShellCommand: CommandRunner = (command, options) =>
-  new Promise((resolve) => {
-    // A real shell, deliberately: the hosted worker uses an argv allowlist because it runs
-    // unattended in a container, but the CLI runs a developer's own commands on their own machine
-    // with their approval on every call. Refusing pipes and redirects there would only teach them
-    // to work around the tool.
-    const child = spawn(command, { cwd: options.cwd, shell: true, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGKILL");
-      resolve({ exitCode: 124, stdout, stderr: `${stderr}\nCommand exceeded ${options.timeoutMs}ms and was killed.` });
-    }, options.timeoutMs);
-
-    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-    child.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ exitCode: 127, stdout, stderr: error.message });
-    });
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ exitCode: code ?? 0, stdout, stderr });
-    });
-  });
 
 export type NovaToolOptions = {
   /** Local directory or remote sandbox — the tools are identical either way. */
@@ -299,7 +272,7 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
     {
       name: "todo_write",
       description:
-        "Record the plan as a checklist at the start of any multi-step task, then keep it current. Update several todos in ONE call — pass arrays to complete and start — rather than calling this repeatedly. Do not call it again when nothing has changed.",
+        "Record the plan as a checklist at the start of any multi-step task, then keep it current. Update several todos in ONE call — pass arrays to complete and start — rather than calling this repeatedly. Do not call it again when nothing has changed. Passing `items` replaces the whole list and assigns new ids — always use the ids from the most recent todo_write or todo_read result, never ones from earlier in the conversation.",
       inputSchema: {
         type: "object",
         properties: {
@@ -327,10 +300,15 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
         // Saying so is cheaper than letting the model discover it by re-reading an identical list,
         // which is exactly the loop that made this the most-called tool in every measured run.
         const redundant = todos.alreadyIn(complete, "done") && start.length === 0;
-        if (start.length > 0) todos.setStatus(start, "in_progress");
-        const updated = complete.length > 0 ? todos.setStatus(complete, "done") : todos.list();
+        const unknownIds = new Set<number>();
+        if (start.length > 0) todos.setStatus(start, "in_progress").unknownIds.forEach((id) => unknownIds.add(id));
+        const updated = complete.length > 0 ? todos.setStatus(complete, "done") : { items: todos.list(), unknownIds: [] as number[] };
+        updated.unknownIds.forEach((id) => unknownIds.add(id));
         const note = redundant ? "Already recorded; no change. Do not call todo_write again unless the plan changes.\n" : "";
-        return { content: `${note}${renderTodos(updated)}` };
+        const warning = unknownIds.size > 0
+          ? `No todo with id ${[...unknownIds].join(", ")} — it may be from an earlier list. Current ids are shown below.\n`
+          : "";
+        return { content: `${note}${warning}${renderTodos(updated.items)}` };
       },
     },
     {
@@ -421,9 +399,19 @@ function renderTodos(items: TodoItem[]): string {
   return items.map((item) => `[${mark[item.status]}] ${item.id}. ${item.text}`).join("\n");
 }
 
-/** Commands whose exit code is meaningful evidence that the work is correct, not just finished. */
+/**
+ * Whether a command's *success* is evidence the workspace change it followed actually works.
+ *
+ * Observed missing in practice: `python3 -m py_compile file.py` after writing a script is exactly
+ * this kind of evidence — it is a real syntax check — but matched none of the original keywords,
+ * so the runtime reported `needs_verification` on a turn that had, in fact, been verified. `lint`
+ * as a bare word also never matched an invocation like `eslint .`, since "eslint" has no word
+ * boundary before "lint". The list below is deliberately generous: a false "counts as verification"
+ * only matters if the command also exits non-zero and gets ignored, which `run_command` cannot do
+ * silently — its exit code is always shown.
+ */
 export function looksLikeVerification(command: string): boolean {
-  return /\b(test|tests|pytest|jest|vitest|typecheck|tsc|lint|check|build)\b/.test(command);
+  return /\b(test|tests|pytest|jest|vitest|mocha|typecheck|tsc|lint|eslint|pylint|ruff|flake8|mypy|pyright|check|build|compile|py_compile|vet|clippy|rubocop|audit)\b/.test(command);
 }
 
 function stripMarkup(html: string): string {

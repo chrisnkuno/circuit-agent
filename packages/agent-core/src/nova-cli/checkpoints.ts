@@ -112,4 +112,15 @@ export class CheckpointStore {
   latest(): Checkpoint | undefined {
     return this.checkpoints[this.checkpoints.length - 1];
   }
+
+  /** A stat summary of what changed since the last checkpoint, for `/diff`. Empty before any turn. */
+  async diffStat(): Promise<string> {
+    const checkpoint = this.latest();
+    if (!checkpoint) return "";
+    // Compared against the real working tree and the real index (no GIT_INDEX_FILE override) — this
+    // is read-only, so there is nothing to protect it from the way capture()/restore() protect
+    // themselves from touching the user's own staged changes.
+    const result = await this.git(["diff", "--stat", checkpoint.tree, "--", ...EXCLUDE_NOVA], { cwd: this.root });
+    return result.exitCode === 0 ? result.stdout.trim() : "";
+  }
 }

@@ -181,4 +181,9 @@ export class CostLedger {
   get exhausted(): boolean {
     return (this.budgetFraction ?? 0) >= 1;
   }
+
+  /** Reprices future turns against a different model's rate card — for switching models mid-session. */
+  setPrices(prices: TokenPrices | undefined): void {
+    this.options.prices = prices;
+  }
 }

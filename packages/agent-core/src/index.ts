@@ -3,11 +3,11 @@
  *
  * Deliberately a short list of entry points rather than a re-export of everything: a package whose
  * index exposes every internal module has no seam to change behind. Anything not named here is
- * still reachable at its own subpath (`circuit-nova-core/providers/e2b`), which keeps the boundary
+ * still reachable at its own subpath (`@circuit-nova/nova-core/providers/e2b`), which keeps the boundary
  * honest without making internals unreachable during the transition.
  */
 
-export { BoundedAgentRuntime } from "./agent-runtime";
+export { BoundedAgentRuntime, validateHistory } from "./agent-runtime";
 export type {
   AgentMessage,
   AgentModelRequest,
@@ -29,11 +29,14 @@ export { LocalWorkspace, E2BWorkspace, uploadProject, downloadProject } from "./
 export type { NovaWorkspace } from "./nova-cli/backends";
 
 export { createNovaTools, TodoList } from "./nova-cli/tools";
-export { PermissionLedger, capabilitiesForMode } from "./nova-cli/permissions";
-export type { NovaMode, PermissionDecision } from "./nova-cli/permissions";
+export type { TodoItem } from "./nova-cli/tools";
+export { PermissionLedger, actionDigest, approvalScopeKey, capabilitiesForMode } from "./nova-cli/permissions";
+export type { NovaMode, PermissionDecision, ToolApprovalOutcome } from "./nova-cli/permissions";
 export { CheckpointStore } from "./nova-cli/checkpoints";
 export { CostLedger } from "./nova-cli/cost";
 export { listSessions, loadSession, saveSession } from "./nova-cli/session";
+export { assertTurnTransition, EventJournal, readEventJournal, runtimeEventForJournal, NOVA_PROTOCOL_VERSION } from "./nova-cli/protocol";
+export type { NovaEventEnvelope, NovaProtocolPayload, TurnStatus } from "./nova-cli/protocol";
 
 export { resolveProvider, describeProviders, availableProviders, PROVIDERS, PROVIDER_IDS } from "./providers/agent-matrix";
 export type { ProviderId, ProviderSpec, ProviderStatus } from "./providers/agent-matrix";

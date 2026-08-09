@@ -107,4 +107,23 @@ describe("Docker sandbox provider", () => {
     await provider.stopSandbox("sandbox_1");
     expect(fake.calls[0]).toEqual(["rm", "-f", "sandbox_1"]);
   });
+
+  it("throws when creating the parent directory fails, before ever attempting docker cp", async () => {
+    const fake = fakeRunner((argv) => {
+      if (argv.includes("mkdir")) return { exitCode: 1, stdout: "", stderr: "permission denied" };
+      return undefined;
+    });
+    const provider = new DockerSandboxProvider({ image: "circuit-nova-coding:latest" }, fake.run);
+    await expect(provider.writeFile("sandbox_1", "/workspace/repo/src/math.js", "x")).rejects.toThrow("permission denied");
+    expect(fake.calls.some((argv) => argv[0] === "cp")).toBe(false);
+  });
+
+  it("leaves an already-running container alone between steps, since it survives on its own", async () => {
+    // Unlike E2B's pause/resume, a container needs nothing done to it between commands — the
+    // no-op itself is the behaviour under test, not a placeholder for one.
+    const fake = fakeRunner(() => ({ exitCode: 0, stdout: "", stderr: "" }));
+    const provider = new DockerSandboxProvider({ image: "circuit-nova-coding:latest" }, fake.run);
+    await expect(provider.suspendSandbox()).resolves.toBeUndefined();
+    expect(fake.calls).toHaveLength(0);
+  });
 });
