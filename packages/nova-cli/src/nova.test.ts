@@ -85,7 +85,7 @@ describe("argument parsing", () => {
     expect(parseArgs(["-h"]).help).toBe(true);
     expect(parseArgs(["--sessions"]).listSessions).toBe(true);
     expect(parseArgs(["--providers"]).listProviders).toBe(true);
-    expect(parseArgs(["--doctor"]).listProviders).toBe(true);
+    expect(parseArgs(["--doctor"]).doctor).toBe(true);
     expect(parseArgs(["--version"]).version).toBe(true);
     expect(parseArgs(["-v"]).version).toBe(true);
   });

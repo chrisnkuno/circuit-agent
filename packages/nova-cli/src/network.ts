@@ -1,0 +1,176 @@
+import { hostOf } from "./endpoints";
+
+/**
+ * Turns raw fetch/undici/SDK errors into one actionable sentence.
+ *
+ * The CLI used to print whatever the transport threw — `error fetch failed`, `getaddrinfo
+ * ENOTFOUND api.circuitnotion.com`, `The operation was aborted` — which reads as "internet is
+ * broken" and tells the user nothing about which endpoint failed, why, or what to do about it.
+ * This classifier owns that translation so every network surface (the turn loop, the FX lookup,
+ * the update check, `nova --doctor`) reports the same way.
+ *
+ * A non-network error (a schema failure, a budget refusal, a tool error) returns null and the
+ * caller falls back to the raw message, so this never rewrites errors that have nothing to do
+ * with the network.
+ */
+
+export type NetworkErrorKind = "timeout" | "dns" | "refused" | "reset" | "unreachable" | "tls" | "aborted";
+
+export type NetworkDiagnosis = {
+  kind: NetworkErrorKind;
+  /** One sentence naming the host and what happened, for direct display. */
+  message: string;
+  /** The concrete next step, when one exists. */
+  hint?: string;
+};
+
+export type ClassifyOptions = {
+  /** Host the call was trying to reach, when known. */
+  host?: string;
+  /** What the call was for, e.g. "the model API". */
+  purpose?: string;
+};
+
+/** Error codes the transport layer emits for each failure class. */
+const CODES: Record<NetworkErrorKind, readonly string[]> = {
+  dns: ["ENOTFOUND", "EAI_AGAIN", "EAI_NONAME", "EAI_FAIL", "EAI_MEMORY", "EAI_SYSTEM", "DNS_E_NAME_NOT_FOUND", "DNS_E_QUERY_PENDING"],
+  timeout: ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "ERR_SOCKET_CONNECTION_TIMEOUT", "connection_timeout"],
+  refused: ["ECONNREFUSED"],
+  reset: ["ECONNRESET", "EPIPE", "UND_ERR_SOCKET", "ERR_SOCKET_CONNECTION_RESET", "ENETRESET", "ECONNABORTED"],
+  unreachable: ["ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EHOSTDOWN", "EADDRNOTAVAIL"],
+  tls: [
+    "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "UNABLE_TO_GET_ISSUER_CERT", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID",
+    "CERT_UNTRUSTED", "ERR_TLS_CERT_ALTNAME_INVALID", "ERR_TLS_BAD_CERTIFICATE", "ERR_SSL_",
+  ],
+  aborted: ["UND_ERR_ABORTED", "ABORT_ERR"],
+};
+
+const KIND_HINTS: Partial<Record<NetworkErrorKind, string>> = {
+  dns: "Check the base-URL setting, or run `nova --doctor` to test each endpoint.",
+  timeout: "Retry, or run `nova --doctor` to see exactly which endpoint is slow or blocked.",
+  refused: "A firewall, proxy, or the host itself is refusing the connection. Run `nova --doctor` to confirm.",
+  reset: "A proxy or firewall may be dropping the connection. Retry, or run `nova --doctor`.",
+  unreachable: "The network cannot reach this destination — check the connection or a blocking firewall.",
+  tls: "If a corporate proxy is intercepting traffic this is expected; otherwise the certificate may be misconfigured.",
+};
+
+/** The SDKs wrap the transport error; unwrap a few levels so classification sees the real one. */
+function unwrap(error: unknown): unknown {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (current === null || typeof current !== "object") break;
+    const cause = (current as { cause?: unknown }).cause;
+    if (!cause || cause === current) break;
+    current = cause;
+  }
+  return current;
+}
+
+function codeOf(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function nameOf(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const name = (error as Error).name;
+  return typeof name === "string" ? name : undefined;
+}
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): NetworkDiagnosis {
+  const host = options.host ?? "the server";
+  const purpose = options.purpose ? `${options.purpose} to ${host}` : `The request to ${host}`;
+  switch (kind) {
+    case "dns":
+      return {
+        kind,
+        message: `${purpose} could not be resolved — DNS failed for ${host}, so the address may be wrong or the network's resolver is blocking it.`,
+        hint: KIND_HINTS.dns,
+      };
+    case "timeout":
+      return {
+        kind,
+        message: `${purpose} timed out — ${host} is slow, or the network is blocking it.`,
+        hint: KIND_HINTS.timeout,
+      };
+    case "refused":
+      return {
+        kind,
+        message: `${purpose} was refused — nothing is listening at ${host}, or a firewall/proxy blocked it.`,
+        hint: KIND_HINTS.refused,
+      };
+    case "reset":
+      return {
+        kind,
+        message: `The connection to ${host} was reset mid-request — a proxy, firewall, or the server dropped it.`,
+        hint: KIND_HINTS.reset,
+      };
+    case "unreachable":
+      return {
+        kind,
+        message: `No network route to ${host} — the destination is unreachable from this network.`,
+        hint: KIND_HINTS.unreachable,
+      };
+    case "tls":
+      return {
+        kind,
+        message: `The TLS certificate for ${host} could not be verified — a proxy is intercepting the connection, or the certificate is invalid.`,
+        hint: KIND_HINTS.tls,
+      };
+    case "aborted":
+      return {
+        kind,
+        message: `${purpose} was aborted before completing — it timed out or was cancelled.`,
+      };
+  }
+}
+
+/**
+ * Classifies a thrown error as a network failure, or returns null when it is not one.
+ *
+ * The `host` in the message is the caller's `options.host` when provided; otherwise it is taken
+ * from the error itself (e.g. "getaddrinfo ENOTFOUND api.example.com") so a bare undici error
+ * still names the endpoint.
+ */
+export function classifyNetworkError(error: unknown, options: ClassifyOptions = {}): NetworkDiagnosis | null {
+  const raw = unwrap(error);
+  const name = nameOf(raw) ?? nameOf(error);
+  const code = codeOf(raw) ?? codeOf(error);
+  const message = messageOf(raw);
+
+  // AbortSignal.timeout and user cancellation both surface as an abort; without more signal it is
+  // safest to call it a timeout — a cancelled call is still "did not complete", never "internet".
+  if (name === "AbortError" || name === "TimeoutError" || name === "APIConnectionTimeoutError") {
+    return diagnosisFor("timeout", options);
+  }
+  // The SDKs surface any transport failure as APIConnectionError with the real error as `cause`.
+  if (name === "APIConnectionError") {
+    return classifyNetworkError(raw, options) ?? { kind: "reset", message: `The connection failed — ${message}`, hint: KIND_HINTS.reset };
+  }
+  if (name === "APIUserAbortError") return null; // the user (or the runtime) cancelled; not a network fault
+
+  const hostFromError = /getaddrinfo (?:ENOTFOUND|EAI_AGAIN) ([^\s]+)/i.exec(message)?.[1]
+    ?? /([a-z0-9.-]+\.[a-z]{2,})(?::\d+)?/.exec(message)?.[1];
+  const host = options.host ?? hostFromError;
+
+  for (const kind of Object.keys(CODES) as NetworkErrorKind[]) {
+    if (code && CODES[kind].some((candidate) => code === candidate || (candidate.endsWith("_") && code.startsWith(candidate)))) {
+      return diagnosisFor(kind, { ...options, host });
+    }
+  }
+  // Node's fetch wraps undici failures in `TypeError: fetch failed` whose `cause` has the code;
+  // if unwrapping already happened, the raw error itself may carry the useful text.
+  if (code || /fetch failed/i.test(message) || /network|socket|tls|certificate/i.test(message)) {
+    return { kind: "reset", message: `The connection to ${host} failed — ${message}`, hint: KIND_HINTS.reset };
+  }
+  return null;
+}
+
+export { hostOf };

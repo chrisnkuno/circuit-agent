@@ -16,7 +16,10 @@ import { box, MarkdownStream, ReplaceableBlock, Spinner, StatusBar } from "./tui
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
-import { fetchDailyFxRate, resolveCurrencyPreference } from "./local-currency";
+import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
+import { hostOf, providerBaseUrl } from "./endpoints";
+import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
+import { classifyNetworkError } from "./network";
 import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
 
 /**
@@ -55,6 +58,7 @@ type ParsedArgs = {
   resume: string | null;
   listSessions: boolean;
   listProviders: boolean;
+  doctor: boolean;
   update: boolean;
   checkUpdate: boolean;
   updateYes: boolean;
@@ -83,7 +87,7 @@ const SESSION_ID = /^\d{8}T\d{6}Z-[a-z0-9]{6}$/;
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const updateRequested = argv[0] === "update" || argv.includes("--update") || argv.includes("--check-update");
   const parsed: ParsedArgs = {
-    mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false,
+    mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false, doctor: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false,
     root: process.cwd(), help: false,
     backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined,
@@ -103,7 +107,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--yes" && updateRequested) parsed.updateYes = true;
     else if (argument === "--package-manager" && updateRequested) { parsed.packageManager = argv[index + 1]; index += 1; }
     else if (argument === "--sessions") parsed.listSessions = true;
-    else if (argument === "--providers" || argument === "--doctor") parsed.listProviders = true;
+    else if (argument === "--providers") parsed.listProviders = true;
+    else if (argument === "--doctor") parsed.doctor = true;
     else if (argument === "--resume") {
       // Only swallow the next word when it is actually a session id. Otherwise `nova --resume "fix
       // the test"` silently treats the request as an id, resumes nothing, and drops into the REPL.
@@ -164,6 +169,7 @@ ${style.bold("Model")}
   nova --provider <name>    ${PROVIDER_IDS.join(" | ")}
   nova --model <id>         Model to run (defaults to the provider's)
   nova --providers          Show which providers are configured, and what is missing
+  nova --doctor             Test every endpoint Nova needs and name the one that fails
 
 ${style.bold("Cost")}
   nova --location EG        Select a country (auto-detected from your locale by default)
@@ -392,6 +398,13 @@ export async function confirmSpendingCap(readline: Interface, interactive: boole
 }
 
 async function main(): Promise<number> {
+  // A closed pipe (`nova --help | head`, `nova --providers | less -F`) is not an error. Without
+  // this, the write throws EPIPE and the CLI dies with a stack trace the user never asked for.
+  process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") process.exit(0);
+    throw error;
+  });
+
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     process.stdout.write(helpText());
@@ -416,6 +429,14 @@ async function main(): Promise<number> {
   if (args.listProviders) {
     process.stdout.write(`${renderProviders(process.env as Record<string, string | undefined>, detectColorDepth(process.env as Record<string, string | undefined>, Boolean(process.stdout.isTTY)))}\n`);
     return 0;
+  }
+
+  if (args.doctor) {
+    const environment = process.env as Record<string, string | undefined>;
+    const depth = detectColorDepth(environment, Boolean(process.stdout.isTTY));
+    const probes = await runDoctor(environment);
+    process.stdout.write(`${renderDoctor(probes, depth)}\n`);
+    return doctorExitCode(probes);
   }
 
   if (args.listSessions) {
@@ -445,17 +466,20 @@ async function main(): Promise<number> {
   let localCurrencyWarning: string | null = null;
   if (prices && display !== prices.currency) {
     const configured = rates.some((rate) => (rate.from === prices!.currency && rate.to === display) || (rate.to === prices!.currency && rate.from === display));
+    const fxFailures: FxLookupFailure[] = [];
     if (!configured && environment.NOVA_FX_OFFLINE !== "true") {
-      const daily = await fetchDailyFxRate(prices.currency, display);
+      const daily = await fetchDailyFxRate(prices.currency, display, undefined, (failure) => fxFailures.push(failure));
       if (daily) rates.push(daily);
     }
     const convertible = rates.some((rate) => (rate.from === prices!.currency && rate.to === display) || (rate.to === prices!.currency && rate.from === display));
     if (!convertible) {
+      const tried = fxFailures.map((failure) => `${failure.host}: ${failure.diagnosis.message}`).join(" ");
       if (args.budget) {
-        process.stderr.write(`${style.red("Cannot enforce the approved budget.")} No ${prices.currency}→${display} exchange rate is available. Set a manual FX rate, choose --currency ${prices.currency}, or reconnect and retry.\n`);
+        process.stderr.write(`${style.red("Cannot enforce the approved budget.")} No ${prices.currency}→${display} exchange rate is available${tried ? ` — the automatic lookup failed (${tried})` : ""}.\n`);
+        process.stderr.write(`  ${style.dim(`Continue offline with a manual rate: set NOVA_FX_RWF_PER_USD=1320 (or NOVA_FX_FROM/NOVA_FX_TO/NOVA_FX_RATE), or keep costs in the provider currency with --currency ${prices.currency}. Run nova --doctor to see exactly which endpoint is failing.`)}\n`);
         return 1;
       }
-      localCurrencyWarning = `No current ${prices.currency}→${display} rate was available; costs remain in ${prices.currency}.`;
+      localCurrencyWarning = `No current ${prices.currency}→${display} rate was available${tried ? ` (${tried})` : ""}; costs remain in ${prices.currency}.`;
       display = prices.currency;
     }
   }
@@ -671,7 +695,19 @@ async function main(): Promise<number> {
         process.stdout.write(style.dim(`  Raise it with --budget, or ask for something smaller.\n`));
         return;
       }
-      process.stdout.write(`${style.red("error")} ${message}\n`);
+      // A raw transport error ("fetch failed", "getaddrinfo ENOTFOUND …") reads as "the internet
+      // is broken", which is usually wrong — it is one endpoint failing. Name the host, the
+      // failure class, and the next step; anything that is not a network fault prints as before.
+      const diagnosis = classifyNetworkError(error, {
+        host: hostOf(providerBaseUrl(environment, spec.id)),
+        purpose: `the model API (${spec.label})`,
+      });
+      if (diagnosis) {
+        process.stdout.write(`${style.red("error")} ${diagnosis.message}\n`);
+        if (diagnosis.hint) process.stdout.write(`  ${style.dim(diagnosis.hint)}\n`);
+      } else {
+        process.stdout.write(`${style.red("error")} ${message}\n`);
+      }
     }
   };
 
