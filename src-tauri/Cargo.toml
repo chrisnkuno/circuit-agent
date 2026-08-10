@@ -1,0 +1,28 @@
+[package]
+name = "nova-desktop"
+version = "0.1.0"
+description = "Nova coding agent desktop app"
+authors = ["CircuitNotion"]
+edition = "2021"
+
+[lib]
+name = "nova_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "io-util", "process", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
