@@ -1,0 +1,7 @@
+node_modules/
+dist/
+sidecar/dist/
+src-tauri/target/
+src-tauri/binaries/nova-sidecar-*
+*.log
+.DS_Store
