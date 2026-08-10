@@ -1,0 +1,39 @@
+{
+  "name": "@circuit-nova/nova-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "sidecar:build": "tsc -p sidecar/tsconfig.json",
+    "sidecar:dev": "tsx sidecar/src/index.ts",
+    "sidecar:bundle": "tsx scripts/bundle-sidecar.ts",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "package:windows": "node scripts/package-windows.mjs",
+    "tauri:build": "tauri build",
+    "typecheck": "tsc -b && tsc -p sidecar/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@circuit-nova/nova-core": "^0.1.1",
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-shell": "^2.3.0",
+    "@tauri-apps/plugin-store": "^2.4.0",
+    "e2b": "^2.36.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

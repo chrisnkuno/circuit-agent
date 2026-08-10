@@ -1,0 +1,117 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { IpcEvent, NovaMode, NovaSettings, PermissionDecision, ProviderId } from "./settings";
+
+type RequestPayload = Record<string, unknown> & { type: string };
+
+let seq = 0;
+
+export async function ensureSidecar(): Promise<void> {
+  await invoke("sidecar_start");
+}
+
+export async function sidecarRequest<T = unknown>(payload: RequestPayload): Promise<T> {
+  const id = `req_${++seq}_${Date.now()}`;
+  return await invoke<T>("sidecar_request", { request: { id, ...payload } });
+}
+
+export async function setSettings(settings: NovaSettings) {
+  return await sidecarRequest({ type: "settings.set", settings });
+}
+
+export async function openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
+  return await sidecarRequest<{
+    sessionId: string;
+    root: string;
+    mode: NovaMode;
+    sandbox: boolean;
+    workspace: string;
+    model: string;
+    provider: string;
+  }>({ type: "session.open", root, mode, sandbox, upload });
+}
+
+export async function listSessions(root: string) {
+  return await sidecarRequest<Array<{ id: string; title: string; updatedAt: number }>>({
+    type: "session.list",
+    root,
+  });
+}
+
+export async function resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
+  return await sidecarRequest({ type: "session.resume", root, sessionId, mode, sandbox, upload });
+}
+
+export async function sendTurn(objective: string) {
+  return await sidecarRequest<{ status: string; summary: string; sessionId: string }>({
+    type: "turn.send",
+    objective,
+  });
+}
+
+export async function setMode(mode: NovaMode) {
+  return await sidecarRequest({ type: "mode.set", mode });
+}
+
+export async function setModel(model: string, provider?: ProviderId) {
+  return await sidecarRequest({ type: "model.set", model, provider });
+}
+
+export async function respondApproval(requestId: string, decision: PermissionDecision) {
+  return await sidecarRequest({ type: "approval.respond", requestId, decision });
+}
+
+export async function undoTurn() {
+  return await sidecarRequest({ type: "undo" });
+}
+
+export async function cancelTurn() {
+  return await sidecarRequest({ type: "cancel" });
+}
+
+export async function getCost() {
+  return await sidecarRequest<{
+    report: string;
+    priced: boolean;
+    displayTotal?: string;
+    budgetFraction?: number;
+    warning?: string;
+    exhausted?: boolean;
+  }>({ type: "cost.get" });
+}
+
+export async function getDiff() {
+  return await sidecarRequest<{ diff: string }>({ type: "diff.get" });
+}
+
+export async function getTodos() {
+  return await sidecarRequest<{ todos: Array<{ id: string; content: string; status: string }> }>({ type: "todos.get" });
+}
+
+export async function pullSandbox(dest?: string) {
+  return await sidecarRequest<{ dest: string }>({ type: "sandbox.pull", dest });
+}
+
+export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promise<UnlistenFn> {
+  return await listen<IpcEvent>("sidecar-event", (event) => handler(event.payload));
+}
+
+/** Non-blocking folder picker via the dialog plugin (safe on Linux/GTK). */
+export async function pickFolder(): Promise<string | null> {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Open project folder",
+  });
+  if (typeof selected === "string" && selected.trim()) return selected;
+  return null;
+}
+
+export async function loadPersistedSettings(): Promise<NovaSettings | null> {
+  return await invoke<NovaSettings | null>("load_settings");
+}
+
+export async function savePersistedSettings(settings: NovaSettings): Promise<void> {
+  await invoke("save_settings", { settings });
+}
