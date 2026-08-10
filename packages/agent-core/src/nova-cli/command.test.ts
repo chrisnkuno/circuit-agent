@@ -22,6 +22,11 @@ describe("local command executor", () => {
     expect(result).toMatchObject({ exitCode: 0, stdout: "direct" });
   });
 
+  it("preserves Windows path separators in direct argv commands", () => {
+    expect(tokenizeCommand('node C:\\Users\\Nova\\project\\script.js "C:\\Program Files\\Nova\\config.json"', "win32"))
+      .toEqual(["node", "C:\\Users\\Nova\\project\\script.js", "C:\\Program Files\\Nova\\config.json"]);
+  });
+
   it("uses the explicit shell path only when syntax requires it", async () => {
     expect(hasShellSyntax("printf first && printf second")).toBe(true);
     const result = await runLocalCommand("printf first && printf second", { cwd: root, timeoutMs: 5_000 });

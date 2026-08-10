@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { affordableOutputTokens, approximateInputTokens, estimateModelCost, priceActualModelUsage, priceUsageWithCache } from "./model-cost";
+import { affordableOutputTokens, approximateInputTokens, estimateModelCost, estimateTextTokens, priceActualModelUsage, priceUsageWithCache } from "./model-cost";
 
 const prices = { inputRwfPerMillionTokens: 2_000, outputRwfPerMillionTokens: 8_000 };
 
@@ -7,6 +7,15 @@ describe("model cost estimation", () => {
   it("keeps a conservative token cap above the expected estimate", () => {
     const tokens = approximateInputTokens(["Implement a small TypeScript change", "src/index.ts"]);
     expect(tokens.maximumInputTokens).toBeGreaterThan(tokens.expectedInputTokens);
+  });
+
+  it("accounts for code and multilingual text instead of treating everything as English prose", () => {
+    const prose = estimateTextTokens("This is a short sentence written in plain English.");
+    const code = estimateTextTokens("const user_id = records.map((item) => item.user_id);\n");
+    const multilingual = estimateTextTokens("مرحبا بالعالم 👋🏽");
+    expect(prose).toBeGreaterThan(0);
+    expect(code).toBeGreaterThan(prose);
+    expect(multilingual).toBeGreaterThan(0);
   });
 
   it("quotes an expected cost and a hard reservation in integer RWF", () => {

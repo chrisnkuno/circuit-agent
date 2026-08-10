@@ -3,6 +3,35 @@ export type TokenEstimate = {
   maximumInputTokens: number;
 };
 
+/**
+ * Provider-neutral estimate for text that has not been sent yet.
+ *
+ * Exact tokenization depends on the selected model. This is deliberately more language-aware than
+ * a flat characters-per-token ratio: source identifiers, punctuation and multibyte writing split
+ * very differently. Actual provider usage remains the accounting source of truth.
+ */
+export function estimateTextTokens(text: string): number {
+  if (!text) return 0;
+  let tokens = 0;
+  for (const segment of text.match(/[A-Za-z0-9_]+|\s+|[^A-Za-z0-9_\s]+/gu) ?? []) {
+    if (/^\s+$/u.test(segment)) {
+      tokens += Math.ceil((segment.match(/\n/g)?.length ?? 0) / 2) + Math.floor(segment.length / 16);
+    } else if (/^[A-Za-z0-9_]+$/u.test(segment)) {
+      tokens += Math.max(1, Math.ceil(segment.length / (/[_\d]/.test(segment) ? 3.2 : 4)));
+    } else {
+      let asciiPunctuation = 0;
+      let multibyteBytes = 0;
+      for (const character of segment) {
+        const bytes = new TextEncoder().encode(character).byteLength;
+        if (bytes === 1) asciiPunctuation += 1;
+        else multibyteBytes += bytes;
+      }
+      tokens += asciiPunctuation + Math.ceil(multibyteBytes / 2.5);
+    }
+  }
+  return Math.max(1, tokens);
+}
+
 export type ModelPriceCatalog = {
   inputRwfPerMillionTokens: number;
   outputRwfPerMillionTokens: number;
@@ -45,9 +74,10 @@ function costRwf(inputTokens: number, outputTokens: number, prices: ModelPriceCa
 export function approximateInputTokens(parts: string[]): TokenEstimate {
   const text = parts.join("\n");
   const utf8Bytes = new TextEncoder().encode(text).byteLength;
+  const expectedInputTokens = parts.reduce((sum, part) => sum + estimateTextTokens(part) + 4, 0) + 64;
   return {
-    expectedInputTokens: Math.ceil(text.length / 3.2) + 128,
-    maximumInputTokens: utf8Bytes + 1_024,
+    expectedInputTokens,
+    maximumInputTokens: Math.max(expectedInputTokens + 256, utf8Bytes + 1_024),
   };
 }
 

@@ -6,7 +6,7 @@ export type CommandRunner = (
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 /** Minimal shell-compatible tokenization for the direct-exec fast path. */
-export function tokenizeCommand(command: string): string[] {
+export function tokenizeCommand(command: string, platform: NodeJS.Platform = process.platform): string[] {
   const tokens: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
@@ -15,7 +15,9 @@ export function tokenizeCommand(command: string): string[] {
 
   for (const character of command) {
     if (escaped) { current += character; escaped = false; hasToken = true; continue; }
-    if (character === "\\" && quote !== "'") { escaped = true; hasToken = true; continue; }
+    // A Windows backslash is normally a path separator, not a Unix escape. Shell syntax takes the
+    // platform shell path below; direct argv execution must preserve `C:\\Users\\...` exactly.
+    if (character === "\\" && quote !== "'" && platform !== "win32") { escaped = true; hasToken = true; continue; }
     if (quote) {
       if (character === quote) quote = null;
       else current += character;
@@ -58,7 +60,15 @@ function terminateProcessTree(pid: number | undefined, signal: NodeJS.Signals): 
   if (!pid) return;
   try {
     if (process.platform !== "win32") process.kill(-pid, signal);
-    else process.kill(pid, signal);
+    else {
+      // Windows has no Unix process groups. taskkill /T is the native equivalent and prevents a
+      // timed-out test runner from leaving compilers or dev servers behind.
+      spawn("taskkill", ["/PID", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])], {
+        detached: false,
+        stdio: "ignore",
+        windowsHide: true,
+      }).unref();
+    }
   } catch {
     // The process may have exited between the event and the signal.
   }

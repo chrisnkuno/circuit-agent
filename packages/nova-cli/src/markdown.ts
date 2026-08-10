@@ -15,6 +15,7 @@ const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 const ITALIC = "\x1b[3m";
+const STRIKE = "\x1b[9m";
 const CYAN = "\x1b[36m";
 const BLUE = "\x1b[34m";
 const GREEN = "\x1b[32m";
@@ -54,7 +55,8 @@ function isWide(code: number): boolean {
 /** A run of text and the escape code it is painted with. Empty code means unstyled. */
 export type StyledToken = { text: string; code: string };
 
-const INLINE_PATTERN = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)/g;
+const INLINE_PATTERN = /(?<!\\)(`[^`\n]+`)|(?<!\\)(\*\*[^*\n]+\*\*)|(?<!\\)(__[^_\n]+__)|(?<!\\)(~~[^~\n]+~~)|(?<!\\)(\*[^*\n]+\*)|(?<!\\)(_[^_\n]+_)|(!?\[([^\]\n]+)\]\((https?:\/\/[^\s)\n]+)\))|(<(https?:\/\/[^>\s]+)>)/g;
+const unescapeMarkdown = (text: string) => text.replace(/\\([\\`*_[\]{}()#+.!~>-])/g, "$1");
 
 /**
  * Splits a line into styled runs: code spans, bold, italic, and the plain text between them.
@@ -68,16 +70,19 @@ export function parseInline(line: string): StyledToken[] {
   INLINE_PATTERN.lastIndex = 0;
 
   for (let match = INLINE_PATTERN.exec(line); match !== null; match = INLINE_PATTERN.exec(line)) {
-    if (match.index > lastIndex) tokens.push({ text: line.slice(lastIndex, match.index), code: "" });
-    const [whole, code, boldStars, boldUnderscores, italicStars, italicUnderscores] = match;
+    if (match.index > lastIndex) tokens.push({ text: unescapeMarkdown(line.slice(lastIndex, match.index)), code: "" });
+    const [whole, code, boldStars, boldUnderscores, strike, italicStars, italicUnderscores, link, linkLabel, linkUrl, autolink, autolinkUrl] = match;
     if (code !== undefined) tokens.push({ text: code.slice(1, -1), code: CYAN });
     else if (boldStars !== undefined) tokens.push({ text: boldStars.slice(2, -2), code: BOLD });
     else if (boldUnderscores !== undefined) tokens.push({ text: boldUnderscores.slice(2, -2), code: BOLD });
+    else if (strike !== undefined) tokens.push({ text: strike.slice(2, -2), code: STRIKE });
     else if (italicStars !== undefined) tokens.push({ text: italicStars.slice(1, -1), code: ITALIC });
     else if (italicUnderscores !== undefined) tokens.push({ text: italicUnderscores.slice(1, -1), code: ITALIC });
+    else if (link !== undefined) tokens.push({ text: `${link.startsWith("!") ? `image: ${linkLabel}` : linkLabel} (${linkUrl})`, code: CYAN });
+    else if (autolink !== undefined) tokens.push({ text: autolinkUrl, code: CYAN });
     lastIndex = match.index + whole.length;
   }
-  if (lastIndex < line.length) tokens.push({ text: line.slice(lastIndex), code: "" });
+  if (lastIndex < line.length) tokens.push({ text: unescapeMarkdown(line.slice(lastIndex)), code: "" });
   return tokens.filter((token) => token.text.length > 0);
 }
 
@@ -172,10 +177,41 @@ export function newMarkdownState(): MarkdownState {
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const BULLET = /^(\s*)([-*+])\s+(.*)$/;
+const TASK = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/;
 const NUMBERED = /^(\s*)(\d+[.)])\s+(.*)$/;
 const BLOCKQUOTE = /^>\s?(.*)$/;
 const RULE = /^\s*([-*_])\s*(?:\1\s*){2,}$/;
 const FENCE = /^\s*```(.*)$/;
+const TABLE_SEPARATOR_CELL = /^:?-{3,}:?$/;
+
+function tableCells(line: string): string[] | null {
+  if (!line.includes("|")) return null;
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = trimmed.split("|").map((cell) => cell.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function fitCell(text: string, width: number): string {
+  let result = "";
+  for (const character of text) {
+    if (visibleWidth(result + character) > width) {
+      const target = Math.max(0, width - 1);
+      while (visibleWidth(result) > target) result = [...result].slice(0, -1).join("");
+      result += "…";
+      return result + " ".repeat(Math.max(0, width - visibleWidth(result)));
+    }
+    result += character;
+  }
+  return result + " ".repeat(Math.max(0, width - visibleWidth(result)));
+}
+
+function renderTableLine(cells: string[], separator: boolean, width: number, depth: ColorDepth): string {
+  const cellWidth = Math.max(3, Math.floor((Math.max(width, 12) - cells.length - 1) / cells.length));
+  if (separator) return paint(`├${cells.map(() => "─".repeat(cellWidth)).join("┼")}┤`, DIM, depth);
+  const contentWidth = Math.max(1, cellWidth - 2);
+  const rendered = cells.map((cell) => fitCell(parseInline(cell).map((token) => token.text).join(""), contentWidth));
+  return `│${rendered.map((cell) => ` ${cell} `).join("│")}│`;
+}
 
 /**
  * Renders one source line into the physical terminal lines it occupies.
@@ -209,6 +245,12 @@ export function renderMarkdownLine(
     return [`${paint("  │ ", DIM, depth)}${paint(line, GREEN, depth)}`];
   }
 
+  const table = tableCells(line);
+  if (table) {
+    const separator = table.every((cell) => TABLE_SEPARATOR_CELL.test(cell));
+    return [renderTableLine(table, separator, width, depth)];
+  }
+
   if (RULE.test(line) && line.trim().length > 0) {
     return [paint("  " + "─".repeat(Math.max(4, Math.min(width - 4, 40))), DIM, depth)];
   }
@@ -221,6 +263,15 @@ export function renderMarkdownLine(
     // then painted uniformly: a code span inside an already-coloured heading reads as a mistake.
     const tokens = parseInline(heading[2]).map((token) => ({ text: token.text, code }));
     return wrapTokens(tokens, width, { depth });
+  }
+
+  const task = TASK.exec(line);
+  if (task) {
+    return wrapTokens(parseInline(task[3]), width, {
+      firstPrefix: `${task[1]}${paint(task[2].trim() ? "☑" : "☐", task[2].trim() ? GREEN : BLUE, depth)} `,
+      continuationPrefix: `${task[1]}  `,
+      depth,
+    });
   }
 
   const bullet = BULLET.exec(line);
@@ -260,8 +311,9 @@ export function renderMarkdownLine(
 /** Renders a whole markdown document, for text that is already complete when it arrives. */
 export function renderMarkdown(text: string, options: { width: number; depth: ColorDepth }): string {
   const state = newMarkdownState();
-  return text
+  const rendered = text
     .split("\n")
     .flatMap((line) => renderMarkdownLine(line, state, options))
-    .join("\n");
+  if (state.inFence) rendered.push(paint("  ╰────", DIM, options.depth));
+  return rendered.join("\n");
 }

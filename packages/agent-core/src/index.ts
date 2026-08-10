@@ -32,6 +32,8 @@ export { createNovaTools, TodoList } from "./nova-cli/tools";
 export type { TodoItem } from "./nova-cli/tools";
 export { PermissionLedger, actionDigest, approvalScopeKey, capabilitiesForMode } from "./nova-cli/permissions";
 export type { NovaMode, PermissionDecision, ToolApprovalOutcome } from "./nova-cli/permissions";
+export { assessTaskSafety, assessToolSafety } from "./nova-cli/safety";
+export type { SafetyAssessment, SensitiveCategory } from "./nova-cli/safety";
 export { CheckpointStore } from "./nova-cli/checkpoints";
 export { CostLedger } from "./nova-cli/cost";
 export { listSessions, loadSession, saveSession } from "./nova-cli/session";
@@ -43,3 +45,30 @@ export type { ProviderId, ProviderSpec, ProviderStatus } from "./providers/agent
 
 export { convertTo, formatMoney, fromUnits, priceUsage, tokenPrices } from "./money";
 export type { Currency, FxRate, Money, TokenPrices } from "./money";
+
+export { cancel, claim, consumeApproval, detach, emptyStore, enqueue, finish, heartbeat, isTerminal, recoverStale, requestApproval, resolveApproval, summarize, MAX_ATTEMPTS } from "./nova-cli/jobs";
+export type { ApprovalRequest, Job, JobLease, JobStatus, JobStore, JobSummary } from "./nova-cli/jobs";
+
+export {
+  appendJobLog,
+  cancelJob,
+  claimJob,
+  consumeJobApproval,
+  detachJob,
+  enqueueJob,
+  finishJob,
+  getJob,
+  heartbeatJob,
+  jobLogPath,
+  jobStoreFile,
+  listJobs,
+  newJobId,
+  readJobLog,
+  requestJobApproval,
+  resolveJobApproval,
+  withJobs,
+} from "./nova-cli/job-store";
+
+export { definePrices, selectPrice, tokenPricesAt, tokenPricesFor, validatePriceRecord } from "./pricing";
+export type { BillingUnit, PriceModality, PriceQuery, PriceRecord } from "./pricing";
+export { PRICE_CATALOG } from "./providers/price-catalog";

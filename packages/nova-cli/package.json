@@ -1,7 +1,7 @@
 {
   "name": "@circuit-nova/nova-cli",
-  "version": "0.1.2",
-  "description": "Nova \u2014 a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with per-call approval, git checkpoints, and real cost accounting.",
+  "version": "0.3.0",
+  "description": "Nova \u2014 a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with guarded approvals, git checkpoints, and real cost accounting.",
   "keywords": [
     "cli",
     "coding-agent",
@@ -26,5 +26,9 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "build": "bun run ../../scripts/build-packages.ts",
+    "prepublishOnly": "bun run ../../scripts/build-packages.ts"
   }
 }

@@ -1,16 +1,16 @@
 import type { AgentTurnProvider } from "../agent-runtime";
 import { tokenPrices, type Currency, type TokenPrices } from "../money";
+import { selectPrice, tokenPricesFor } from "../pricing";
 import { AnthropicAgentTurnProvider } from "./anthropic-agent";
 import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import { OpenAIAgentTurnProvider } from "./openai-agent";
+import { PRICE_CATALOG } from "./price-catalog";
 
 /**
  * Which model providers Nova can drive, and what their tokens cost.
  *
- * Prices are recorded in the currency the provider actually publishes — USD for the frontier
- * labs — and converted for display, rather than being pre-converted into RWF at some forgotten
- * rate. A price table denominated in a currency nobody quotes is a table nobody can check against
- * an invoice.
+ * Rates themselves live in `price-catalog.ts`, scoped to a model and dated. This file only resolves
+ * which provider and model a session runs on, then asks the catalog what that pair costs today.
  *
  * The catalog is a default, not an authority: a model absent from it still runs, and the CLI says
  * plainly that it cannot price it rather than inventing a number.
@@ -32,27 +32,14 @@ export type ProviderSpec = {
   /** Environment variables that must be set for this provider to be usable. */
   requires: readonly string[];
   defaultModel: string;
-  /** Published prices per model id, in the provider's own currency. */
-  prices: Record<string, TokenPrices>;
   create(environment: ProviderEnvironment, model: string): AgentTurnProvider;
 };
 
-const USD: Currency = "USD";
-
-/**
- * Anthropic list prices, per million tokens (2026-06 catalog).
- *
- * Cached input is priced at a tenth of the input rate — the published cache-read multiplier — which
- * is what makes a long agent session affordable and what the cost report needs in order to show the
- * saving rather than a flat overstatement.
- */
-const ANTHROPIC_PRICES: Record<string, TokenPrices> = {
-  "claude-opus-5": tokenPrices(USD, 5, 25, 0.5),
-  "claude-opus-4-8": tokenPrices(USD, 5, 25, 0.5),
-  "claude-sonnet-5": tokenPrices(USD, 3, 15, 0.3),
-  "claude-sonnet-4-6": tokenPrices(USD, 3, 15, 0.3),
-  "claude-haiku-4-5": tokenPrices(USD, 1, 5, 0.1),
-};
+/** What the dated catalog says this provider's model costs on a given day. */
+export function catalogPrices(provider: ProviderId, model: string, asOf?: string): TokenPrices | undefined {
+  const record = selectPrice(PRICE_CATALOG, { provider, model, asOf });
+  return record && record.billingUnit === "tokens" ? tokenPricesFor(record) : undefined;
+}
 
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
   anthropic: {
@@ -60,7 +47,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     label: "Anthropic",
     requires: ["ANTHROPIC_API_KEY"],
     defaultModel: "claude-opus-5",
-    prices: ANTHROPIC_PRICES,
     create: (environment, model) =>
       new AnthropicAgentTurnProvider({
         apiKey: environment.ANTHROPIC_API_KEY!.trim(),
@@ -73,9 +59,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     label: "OpenAI",
     requires: ["OPENAI_API_KEY"],
     defaultModel: "gpt-5.6-terra",
-    // Deliberately empty: these rates are not verified here, and a wrong price is worse than an
-    // honest "unpriced" — set them through the price-override environment variables instead.
-    prices: {},
     create: (environment, model) =>
       new OpenAIAgentTurnProvider({
         apiKey: environment.OPENAI_API_KEY!.trim(),
@@ -88,7 +71,6 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     label: "CircuitNotion",
     requires: ["CIRCUITNOTION_API_KEY"],
     defaultModel: "gpt-5.6-luna",
-    prices: {},
     create: (environment, model) =>
       new CircuitNotionAgentTurnProvider({
         apiKey: environment.CIRCUITNOTION_API_KEY!.trim(),
@@ -138,20 +120,37 @@ export function resolveProvider(
 }
 
 /**
- * The price for one model: an explicit override first, then the published catalog.
+ * Which model a configured override is a price *for*.
+ *
+ * An override without a model is the bug this exists to close. `MODEL_INPUT_PER_MILLION` used to
+ * apply to whatever model was current, so switching mid-session with `/model` carried a rate quoted
+ * for one model onto another — still producing a confident number, just for the wrong rate card.
+ *
+ * `MODEL_PRICE_MODEL` names the model explicitly. Without it the override binds to the model the
+ * environment itself configures, which is what the person setting those variables was looking at
+ * when they set them; switching away from that model correctly drops back to the catalog.
+ */
+function overrideApplies(spec: ProviderSpec, model: string, environment: ProviderEnvironment): boolean {
+  const named = environment.MODEL_PRICE_MODEL?.trim();
+  if (named) return named === model;
+  return (environment[`${spec.id.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel) === model;
+}
+
+/**
+ * The price for one model: an explicit override first, then the dated catalog.
  *
  * Overrides exist because a negotiated rate is real and a list price is only a default — and
  * because a provider whose catalog is not verified here still deserves accurate accounting.
  */
-export function resolvePrices(spec: ProviderSpec, model: string, environment: ProviderEnvironment): TokenPrices | undefined {
+export function resolvePrices(spec: ProviderSpec, model: string, environment: ProviderEnvironment, asOf?: string): TokenPrices | undefined {
   const currency = (environment.MODEL_PRICE_CURRENCY?.trim() as Currency | undefined) ?? "USD";
   const input = Number(environment.MODEL_INPUT_PER_MILLION);
   const output = Number(environment.MODEL_OUTPUT_PER_MILLION);
-  if (Number.isFinite(input) && Number.isFinite(output) && input > 0 && output > 0) {
+  if (Number.isFinite(input) && Number.isFinite(output) && input > 0 && output > 0 && overrideApplies(spec, model, environment)) {
     const cached = Number(environment.MODEL_CACHED_INPUT_PER_MILLION);
     return tokenPrices(currency, input, output, Number.isFinite(cached) && cached >= 0 ? cached : undefined);
   }
-  return spec.prices[model];
+  return catalogPrices(spec.id, model, asOf);
 }
 
 export type ProviderStatus = {
@@ -177,17 +176,19 @@ export function describeProviders(environment: ProviderEnvironment): ProviderSta
     const spec = PROVIDERS[id];
     const missing = spec.requires.filter((name) => !environment[name]?.trim());
     const model = environment[`${id.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel;
-    const overridden = Number(environment.MODEL_INPUT_PER_MILLION) > 0 && Number(environment.MODEL_OUTPUT_PER_MILLION) > 0;
+    const overridden = Number(environment.MODEL_INPUT_PER_MILLION) > 0
+      && Number(environment.MODEL_OUTPUT_PER_MILLION) > 0
+      && overrideApplies(spec, model, environment);
     return {
       id,
       label: spec.label,
       configured: missing.length === 0,
       missing,
       model,
-      pricing: overridden ? "configured" : spec.prices[model] ? "catalog" : "unknown",
+      pricing: overridden ? "configured" : catalogPrices(id, model) ? "catalog" : "unknown",
     };
   });
 }
 
 /** The variables that set a price for a model this build has no published rate for. */
-export const PRICE_ENVIRONMENT_HINT = "MODEL_INPUT_PER_MILLION, MODEL_OUTPUT_PER_MILLION (and optionally MODEL_CACHED_INPUT_PER_MILLION, MODEL_PRICE_CURRENCY)";
+export const PRICE_ENVIRONMENT_HINT = "MODEL_INPUT_PER_MILLION, MODEL_OUTPUT_PER_MILLION (and optionally MODEL_CACHED_INPUT_PER_MILLION, MODEL_PRICE_CURRENCY, MODEL_PRICE_MODEL)";

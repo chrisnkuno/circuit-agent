@@ -1,5 +1,6 @@
 import type { AgentTool } from "../agent-runtime";
 import type { ExaSearchClient } from "../providers/exa";
+import type { Expense } from "./cost";
 import type { NovaWorkspace } from "./backends";
 export { runShellCommand } from "./command";
 export type { CommandRunner } from "./command";
@@ -75,6 +76,14 @@ export type NovaToolOptions = {
   workspace: NovaWorkspace;
   todos: TodoList;
   search?: ExaSearchClient;
+  /**
+   * Where metered spending outside the model is reported.
+   *
+   * The tool is the only place that knows a search happened and how many results it billed for, so
+   * it is the only place that can report it. Without this the searches simply never reach the
+   * ledger, and the session total reads lower than the invoice.
+   */
+  onExpense?: (expense: Expense) => void;
   fetchImpl?: typeof fetch;
   /** Ceiling for a single `run_command` call. */
   commandTimeoutMs?: number;
@@ -343,11 +352,20 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
       requiresApproval: false,
       parallelSafe: true,
       async execute(args) {
+        const query = requiredString(args.query, "query");
         const response = await search.search({
-          query: requiredString(args.query, "query"),
+          query,
           numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 5, 10),
           type: "auto",
           highlightMaxCharacters: 1_000,
+        });
+        // Both meters, and after the call rather than before it: contents are billed per page
+        // actually returned, which a request that finds three results does not know in advance.
+        options.onExpense?.({
+          provider: "exa",
+          meter: "search",
+          quantities: { request: 1, contents: response.results.length },
+          label: `web search: ${query.length > 48 ? `${query.slice(0, 47)}…` : query}`,
         });
         if (response.results.length === 0) return { content: "No results." };
         return {

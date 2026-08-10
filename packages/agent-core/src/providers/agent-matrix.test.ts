@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agent-runtime";
 import { priceUsage, toUnits } from "../money";
-import { availableProviders, isProviderId, PROVIDERS, resolveProvider, resolvePrices } from "./agent-matrix";
+import { availableProviders, catalogPrices, isProviderId, PROVIDERS, resolveProvider, resolvePrices } from "./agent-matrix";
 import { AnthropicAgentTurnProvider, toAnthropicMessages } from "./anthropic-agent";
 
 describe("provider matrix", () => {
@@ -58,6 +58,29 @@ describe("provider matrix", () => {
     });
     expect(prices?.currency).toBe("RWF");
     expect(prices?.inputPerMillion).toBe(2_000_000_000);
+  });
+
+  it("does not carry a configured rate onto a model it was not quoted for", () => {
+    // The `/model` hazard: a rate set for the configured model used to follow the session onto
+    // whatever it switched to, still producing a confident number against the wrong rate card.
+    const environment = { MODEL_PRICE_CURRENCY: "RWF", MODEL_INPUT_PER_MILLION: "2000", MODEL_OUTPUT_PER_MILLION: "8000" };
+    expect(resolvePrices(PROVIDERS.anthropic, "claude-opus-5", environment)?.currency).toBe("RWF");
+    const switched = resolvePrices(PROVIDERS.anthropic, "claude-haiku-4-5", environment);
+    expect(switched?.currency).toBe("USD");
+    expect(switched?.inputPerMillion).toBe(1_000_000);
+  });
+
+  it("lets an override name the model it prices", () => {
+    const environment = { MODEL_PRICE_MODEL: "claude-haiku-4-5", MODEL_INPUT_PER_MILLION: "2", MODEL_OUTPUT_PER_MILLION: "8" };
+    expect(resolvePrices(PROVIDERS.anthropic, "claude-haiku-4-5", environment)?.inputPerMillion).toBe(2_000_000);
+    // ...and only that model: the default model falls back to the catalog's $5/M.
+    expect(resolvePrices(PROVIDERS.anthropic, "claude-opus-5", environment)?.inputPerMillion).toBe(5_000_000);
+  });
+
+  it("prices a dated model at the rate in force on the day asked about", () => {
+    // Sonnet 5's introductory rate ends 2026-08-31; both sides of that boundary are in the catalog.
+    expect(catalogPrices("anthropic", "claude-sonnet-5", "2026-08-10")?.inputPerMillion).toBe(2_000_000);
+    expect(catalogPrices("anthropic", "claude-sonnet-5", "2026-09-01")?.inputPerMillion).toBe(3_000_000);
   });
 
   it("reports no price rather than inventing one for an uncatalogued model", () => {
@@ -200,7 +223,7 @@ describe("Anthropic adapter", () => {
   });
 
   it("prices a real Anthropic turn through the catalog", () => {
-    const prices = PROVIDERS.anthropic.prices["claude-opus-5"];
+    const prices = catalogPrices("anthropic", "claude-opus-5")!;
     const cost = { inputTokens: 100_000, outputTokens: 2_000, cachedInputTokens: 90_000 };
     // 10k uncached at $5/M + 90k cached at $0.50/M + 2k output at $25/M.
     const total = (10_000 * 5 + 90_000 * 0.5 + 2_000 * 25) / 1_000_000;

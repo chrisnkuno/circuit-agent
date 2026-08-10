@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentTool, AgentToolCall } from "../agent-runtime";
+import { assessToolSafety, type SafetyAssessment } from "./safety";
 
 /**
  * Who decides whether a tool call runs.
@@ -48,6 +49,8 @@ export type ApprovalRequest = {
   /** Versioned authorization key persisted by `allow_always` / `deny_always`. */
   scopeKey: string;
   policyVersion: typeof APPROVAL_POLICY_VERSION;
+  /** Why auto mode did not silently approve this otherwise-workspace-local action. */
+  safety: SafetyAssessment;
 };
 
 export type ApprovalPrompt = (request: ApprovalRequest) => Promise<PermissionDecision>;
@@ -122,9 +125,11 @@ export class PermissionLedger {
   async decide(call: AgentToolCall, tool: AgentTool): Promise<ToolApprovalOutcome> {
     // A tool that changes nothing needs no gate; the runtime only asks about the ones that do.
     if (tool.effect === "none") return "approved";
-    // `auto` pre-approves workspace changes but never external ones — sending an email or opening
-    // a pull request is not undoable by a checkpoint, so it stays a human decision in every mode.
-    if (this.mode === "auto" && tool.effect === "workspace") return "approved";
+    // Auto mode is an ergonomics feature, not a blanket trust grant. Inspect the exact command,
+    // path and content before taking its fast path; credentials, production configuration and
+    // high-impact commands remain explicit human decisions.
+    const safety = assessToolSafety(call, tool);
+    if (this.mode === "auto" && tool.effect === "workspace" && !safety.sensitive) return "approved";
 
     if (this.legacyDeniedTools.has(tool.name)) return "denied";
     const action = actionDigest(call, tool);
@@ -139,6 +144,7 @@ export class PermissionLedger {
       actionDigest: action,
       scopeKey,
       policyVersion: APPROVAL_POLICY_VERSION,
+      safety,
     });
     if (decision === "allow_always") this.standing.set(scopeKey, "allow");
     if (decision === "deny_always") this.standing.set(scopeKey, "deny");

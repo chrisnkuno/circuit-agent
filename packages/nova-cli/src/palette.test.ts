@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+import { advancePalette, paletteEntries, rankPaletteEntries, renderPalette, runCommandPalette, type PaletteEntry, type PaletteKey } from "./palette";
+
+const entries: PaletteEntry[] = [
+  { command: "/mode", args: "[plan|build|auto]", description: "Show or switch the permission mode" },
+  { command: "/undo", description: "Revert the last turn's changes" },
+  { command: "/diff", description: "What changed since the last checkpoint" },
+  { command: "/cost", description: "Token and cost breakdown for this session", chord: "F7" },
+];
+
+const press = (name: string, extra: Partial<PaletteKey["key"]> = {}, str?: string): PaletteKey => ({ str, key: { name, ...extra } });
+const type = (text: string): PaletteKey[] => [...text].map((char) => ({ str: char, key: { name: char } }));
+
+describe("ranking", () => {
+  it("puts a name match above a description match", () => {
+    // "/undo" describes itself as reverting changes, so a naive substring search over everything
+    // would rank it above "/diff" for the query "diff". Names have to win.
+    expect(rankPaletteEntries(entries, "diff").map((entry) => entry.command)).toEqual(["/diff"]);
+    expect(rankPaletteEntries(entries, "checkpoint").map((entry) => entry.command)).toEqual(["/diff"]);
+  });
+
+  it("finds a command by what it does, not only by its name", () => {
+    // The case the palette exists for: nobody guesses "/undo" from the word "revert".
+    expect(rankPaletteEntries(entries, "revert").map((entry) => entry.command)).toEqual(["/undo"]);
+    expect(rankPaletteEntries(entries, "permission").map((entry) => entry.command)).toEqual(["/mode"]);
+  });
+
+  it("ignores a leading slash and surrounding space", () => {
+    expect(rankPaletteEntries(entries, "  /co ").map((entry) => entry.command)).toEqual(["/cost"]);
+  });
+
+  it("returns everything for an empty query and nothing for a miss", () => {
+    expect(rankPaletteEntries(entries, "")).toHaveLength(4);
+    expect(rankPaletteEntries(entries, "kubernetes")).toEqual([]);
+  });
+
+  it("keeps equally good matches in catalog order", () => {
+    // Reshuffling ties between keystrokes makes the highlighted row jump under the user's fingers.
+    const ranked = rankPaletteEntries([...entries].reverse(), "o");
+    expect(ranked.map((entry) => entry.command)).toEqual(["/cost", "/undo", "/mode", "/diff"]);
+  });
+
+  it("builds entries from the real command table", () => {
+    const built = paletteEntries({ "/diff": "F8" });
+    expect(built.find((entry) => entry.command === "/help")).toBeDefined();
+    expect(built.find((entry) => entry.command === "/diff")?.chord).toBe("F8");
+  });
+});
+
+describe("keystrokes", () => {
+  it("filters as characters arrive and resets the selection", () => {
+    let state = { query: "", selected: 2 };
+    for (const key of type("und")) state = advancePalette(state, entries, key).state;
+    expect(state).toEqual({ query: "und", selected: 0 });
+  });
+
+  it("moves the selection without running off either end", () => {
+    let state = { query: "", selected: 0 };
+    state = advancePalette(state, entries, press("up")).state;
+    expect(state.selected).toBe(0);
+    for (let index = 0; index < 10; index += 1) state = advancePalette(state, entries, press("down")).state;
+    expect(state.selected).toBe(3);
+  });
+
+  it("returns the selected command on Enter", () => {
+    const step = advancePalette({ query: "diff", selected: 0 }, entries, press("return"));
+    expect(step.done).toEqual({ command: "/diff" });
+  });
+
+  it("leaves a trailing space on a command that takes arguments", () => {
+    // Choosing "/mode" should leave the cursor ready to type "plan", not submit a bare "/mode".
+    expect(advancePalette({ query: "mode", selected: 0 }, entries, press("return")).done).toEqual({ command: "/mode " });
+  });
+
+  it("dismisses on Escape and on the key that opened it", () => {
+    expect(advancePalette({ query: "", selected: 0 }, entries, press("escape")).done).toEqual({});
+    expect(advancePalette({ query: "", selected: 0 }, entries, press("g", { ctrl: true })).done).toEqual({});
+    expect(advancePalette({ query: "", selected: 0 }, entries, press("c", { ctrl: true })).done).toEqual({});
+  });
+
+  it("chooses nothing when Enter lands on an empty result list", () => {
+    expect(advancePalette({ query: "kubernetes", selected: 0 }, entries, press("return")).done).toEqual({});
+  });
+
+  it("edits the query with Backspace and Ctrl+U", () => {
+    expect(advancePalette({ query: "diff", selected: 0 }, entries, press("backspace")).state.query).toBe("dif");
+    expect(advancePalette({ query: "diff", selected: 3 }, entries, press("u", { ctrl: true })).state).toEqual({ query: "", selected: 0 });
+  });
+
+  it("does not let control keys and escape sequences leak into the query", () => {
+    const before = { query: "di", selected: 0 };
+    expect(advancePalette(before, entries, press("left")).state.query).toBe("di");
+    expect(advancePalette(before, entries, press("a", { ctrl: true }, "")).state.query).toBe("di");
+    expect(advancePalette(before, entries, press("f1", {}, "OP")).state.query).toBe("di");
+  });
+});
+
+describe("rendering", () => {
+  it("marks the selected row and shows the key that also runs it", () => {
+    const rendered = renderPalette({ query: "co", matches: rankPaletteEntries(entries, "co"), selected: 0 });
+    expect(rendered).toContain("❯ /cost");
+    expect(rendered).toContain("[F7]");
+  });
+
+  it("keeps the selection inside the visible window on a long list", () => {
+    const many = Array.from({ length: 30 }, (_unused, index) => ({ command: `/c${index}`, description: `command ${index}` }));
+    const rendered = renderPalette({ query: "", matches: many, selected: 27 }, { rows: 5 });
+    expect(rendered).toContain("❯ /c27");
+  });
+
+  it("says so plainly when nothing matches", () => {
+    expect(renderPalette({ query: "zzz", matches: [], selected: 0 })).toContain("(no match)");
+  });
+});
+
+describe("the interaction end to end", () => {
+  async function* keys(sequence: PaletteKey[]) {
+    for (const key of sequence) yield key;
+  }
+
+  it("types, filters and chooses", async () => {
+    const frames: string[] = [];
+    const chosen = await runCommandPalette(keys([...type("revert"), press("return")]), entries, (frame) => frames.push(frame));
+
+    expect(chosen).toBe("/undo");
+    // One frame before any key, then one per keystroke: the list is repainted as the query narrows.
+    expect(frames).toHaveLength(7);
+    expect(frames.at(-1)).toContain("❯ /undo");
+  });
+
+  it("returns nothing when dismissed, so the caller runs no command", async () => {
+    expect(await runCommandPalette(keys([...type("di"), press("escape")]), entries, () => {})).toBeUndefined();
+  });
+
+  it("returns nothing when the key stream ends without a choice", async () => {
+    // Stdin closing mid-palette must not resolve to a command nobody picked.
+    expect(await runCommandPalette(keys(type("di")), entries, () => {})).toBeUndefined();
+  });
+});

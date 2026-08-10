@@ -11,7 +11,7 @@ The web workspace can automatically infer a coarse country from deployment metad
 - Responsive task quote interface with RWF estimate, confidence, assumptions, and hard cap.
 - Hermes-inspired narrow capability registry with core, skill, and connector layers.
 - Distinct capability-scoped workflows for coding, research, writing, and operations.
-- Pure typed v1 task-cost estimator with tests.
+- Typed token-based task-cost estimator with input/output forecasts, uncertainty ranges, infrastructure allowances, and tests.
 - Convex schema for tasks, quotes, payment holds, and immutable task events.
 - Idempotent `createQuotedTask` mutation, ready to be called after client authentication is wired.
 - Explicit provider contracts for Circuit Pay and E2B.

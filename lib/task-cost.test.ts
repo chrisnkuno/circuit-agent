@@ -14,6 +14,16 @@ describe("estimateTaskCost", () => {
     expect(quote.estimateLowRwf).toBeLessThan(quote.estimateHighRwf);
     expect(quote.maxRwf).toBeGreaterThanOrEqual(quote.estimateHighRwf);
     expect(quote.confidence).toBe("medium");
+    expect(quote.estimatedInputTokens).toBeGreaterThan(quote.estimatedOutputTokens);
+    expect(quote.tokenRangeHigh).toBeGreaterThan(quote.tokenRangeLow);
+    expect(quote.assumptions.join(" ")).toContain("input");
+  });
+
+  it("uses the task text and attachment count to estimate more tokens and cost", () => {
+    const small = estimateTaskCost({ kind: "coding", quality: "balanced", attachmentCount: 0, requiresBrowser: false, requiresSandbox: true, taskText: "rename one field" });
+    const broad = estimateTaskCost({ kind: "coding", quality: "balanced", attachmentCount: 8, requiresBrowser: true, requiresSandbox: true, taskText: "migrate the entire cross-platform application and verify every integration" });
+    expect(broad.estimatedInputTokens).toBeGreaterThan(small.estimatedInputTokens);
+    expect(broad.estimateHighRwf).toBeGreaterThan(small.estimateHighRwf);
   });
 
   it("rejects invalid attachment counts before pricing", () => {

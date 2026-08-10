@@ -72,8 +72,11 @@ export class ExaSearchClient {
           type: request.type,
           numResults: request.numResults,
           ...(request.category ? { category: request.category } : {}),
-          // Highlights only — full text and AI summaries are deliberately omitted to keep
-          // Wander evidence cheap (~$0.007/search with ≤10 bundled results).
+          // Highlights only — full text and AI summaries are deliberately omitted to keep Wander
+          // evidence cheap. Note that "cheap" is not $0.007: the $7-per-1,000 request price is
+          // only one of two meters, and contents are billed at $1 per 1,000 pages per content
+          // type, so ten results cost ~$0.017 — the contents half being the larger one. The
+          // ledger charges both; see `price-catalog.ts`.
           contents: {
             highlights: {
               maxCharacters: request.highlightMaxCharacters,
@@ -114,8 +117,8 @@ export class ExaSearchClient {
   }
 }
 
-export function createExaClient(environment: { EXA_API_KEY?: string }, fetchImpl?: typeof fetch): ExaSearchClient | undefined {
+export function createExaClient(environment: { EXA_API_KEY?: string; EXA_BASE_URL?: string }, fetchImpl?: typeof fetch): ExaSearchClient | undefined {
   const apiKey = environment.EXA_API_KEY?.trim();
   if (!apiKey) return undefined;
-  return new ExaSearchClient({ apiKey, fetchImpl });
+  return new ExaSearchClient({ apiKey, baseUrl: environment.EXA_BASE_URL?.trim() || undefined, fetchImpl });
 }

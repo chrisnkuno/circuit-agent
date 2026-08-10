@@ -1,3 +1,5 @@
+import { commandDescription, keyboardDescription, type ControlLanguage } from "./i18n";
+
 /**
  * The slash-command registry.
  *
@@ -20,30 +22,39 @@ export function defineCommands<T extends Record<string, Omit<Command, "name">>>(
 }
 
 export const COMMANDS = defineCommands({
+  "/mode": { args: "[plan|build|auto]", description: "Show or switch the permission mode" },
   "/plan": { description: "Switch to plan mode — read and reason, no writes" },
   "/build": { description: "Switch to build mode — edits need approval" },
-  "/auto": { description: "Switch to auto mode — edits apply without approval" },
+  "/auto": { description: "Auto-apply ordinary edits; sensitive actions still ask" },
   "/model": { args: "[provider] [model]", description: "Switch model mid-session, keeping the transcript" },
   "/undo": { description: "Revert the last turn's changes" },
   "/diff": { description: "What changed since the last checkpoint" },
   "/todos": { description: "The agent's current plan" },
   "/clear": { description: "Start a fresh thread" },
+  "/tab": { args: "[new|next|prev|close|rename|N]", description: "Work on several things at once, one in front at a time" },
   "/pull": { args: "[dir]", description: "Copy sandbox files here" },
   "/where": { description: "Show the current workspace" },
   "/providers": { description: "Which model providers are configured" },
+  "/settings": { description: "Configure API keys, URLs, models and voice input" },
+  "/voice": { args: "[audio-file]", description: "Record or transcribe an editable voice prompt" },
+  "/wander": { args: "[topic|random|daily|weekly]", description: "Run a bounded research lab and grade what it finds" },
+  "/jobs": { args: "[run|cancel|approve]", description: "Durable background work: list, start, cancel, or answer" },
+  "/attach": { args: "<id>", description: "Watch a background job's log live" },
+  "/detach": { args: "<task>", description: "Start work in the background; press Alt+B to send a running turn there" },
   "/cost": { description: "Token and cost breakdown for this session" },
   "/sessions": { description: "List sessions in this project" },
+  "/palette": { description: "Search every command by name or by what it does" },
   "/keys": { description: "Keyboard shortcuts" },
   "/help": { description: "This list" },
   "/exit": { description: "Leave" },
 });
 
 /** Renders `/help` from the same table `completer` reads, so they cannot disagree. */
-export function renderCommandHelp(): string {
+export function renderCommandHelp(language: ControlLanguage = "en"): string {
   const width = Math.max(...COMMANDS.map((command) => command.name.length + (command.args ? command.args.length + 1 : 0)));
   return COMMANDS.map((command) => {
     const head = command.args ? `${command.name} ${command.args}` : command.name;
-    return `  ${head.padEnd(width + 2)}${command.description}`;
+    return `  ${head.padEnd(width + 2)}${commandDescription(language, command.name, command.description)}`;
   }).join("\n");
 }
 
@@ -88,6 +99,17 @@ export function isKnownCommand(name: string): boolean {
   return COMMANDS.some((command) => command.name === name);
 }
 
+export type ModeCommand = { type: "show" } | { type: "switch"; mode: "plan" | "build" | "auto" } | { type: "invalid" };
+
+/** Stable mode command grammar shared by the TUI and its tests. */
+export function parseModeCommand(input: string): ModeCommand | null {
+  if (input === "/plan" || input === "/build" || input === "/auto") return { type: "switch", mode: input.slice(1) as "plan" | "build" | "auto" };
+  const match = /^\/mode(?:\s+(\S+))?$/.exec(input);
+  if (!match) return null;
+  if (!match[1]) return { type: "show" };
+  return match[1] === "plan" || match[1] === "build" || match[1] === "auto" ? { type: "switch", mode: match[1] } : { type: "invalid" };
+}
+
 function editDistance(left: string, right: string): number {
   const previous = Array.from({ length: right.length + 1 }, (_unused, index) => index);
   for (let row = 1; row <= left.length; row += 1) {
@@ -123,11 +145,16 @@ export function suggestCommand(name: string): string | undefined {
 
 export const KEYBOARD_SHORTCUTS = [
   ["Tab", "Complete a slash command"],
+  ["@ + path", "Complete a project file mention"],
+  ["Up / Down", "Search persistent prompt history"],
+  ["Ctrl-A / Ctrl-E", "Move to the start / end of the input"],
+  ["Ctrl-W / Ctrl-U", "Delete the previous word / whole input"],
+  ["Ctrl-L", "Clear and redraw the terminal"],
   ["Ctrl-C", "Interrupt the current turn"],
-  ["Up / Down", "Previous / next input"],
+  ["/voice", "Record a prompt from the microphone"],
 ] as const;
 
-export function renderKeyboardShortcuts(): string {
+export function renderKeyboardShortcuts(language: ControlLanguage = "en"): string {
   const width = Math.max(...KEYBOARD_SHORTCUTS.map(([key]) => key.length));
-  return KEYBOARD_SHORTCUTS.map(([key, description]) => `  ${key.padEnd(width + 2)}${description}`).join("\n");
+  return KEYBOARD_SHORTCUTS.map(([key, description], index) => `  ${key.padEnd(width + 2)}${keyboardDescription(language, index, description)}`).join("\n");
 }

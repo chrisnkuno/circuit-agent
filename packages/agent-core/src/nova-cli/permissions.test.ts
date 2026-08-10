@@ -84,6 +84,28 @@ describe("permission ledger", () => {
     expect(asked).toEqual(["open_pull_request"]);
   });
 
+  it("does not auto-approve sensitive workspace paths or high-impact commands", async () => {
+    const asked: string[] = [];
+    const ledger = new PermissionLedger("auto", async (request) => {
+      asked.push(`${request.tool.name}:${request.safety.reasons.join(",")}`);
+      return "allow";
+    });
+
+    await expect(ledger.isApproved(call("write_file", { path: ".env", content: "SAFE=value" }), tool({ name: "write_file" }))).resolves.toBe(true);
+    await expect(ledger.isApproved(call("run_command", { command: "git push origin main" }), tool({ name: "run_command", capabilityId: NOVA_CAPABILITIES.terminal }))).resolves.toBe(true);
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toContain("credential");
+    expect(asked[1]).toContain("publication");
+  });
+
+  it("keeps ordinary auto-mode edits on the no-prompt fast path", async () => {
+    let asked = 0;
+    const ledger = new PermissionLedger("auto", async () => { asked += 1; return "deny"; });
+    await expect(ledger.isApproved(call("write_file", { path: "src/app.ts", content: "export const ok = true;" }), tool({ name: "write_file" }))).resolves.toBe(true);
+    await expect(ledger.isApproved(call("run_command", { command: "npm test" }), tool({ name: "run_command", capabilityId: NOVA_CAPABILITIES.terminal }))).resolves.toBe(true);
+    expect(asked).toBe(0);
+  });
+
   it("restores standing decisions when a session resumes", async () => {
     let asked = 0;
     const ledger = new PermissionLedger("build", async () => { asked += 1; return "allow"; });

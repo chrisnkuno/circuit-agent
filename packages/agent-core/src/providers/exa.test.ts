@@ -37,6 +37,16 @@ describe("ExaSearchClient", () => {
     expect(client).toBeInstanceOf(ExaSearchClient);
   });
 
+  it("uses a configured Exa-compatible base URL", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe("https://search.example.com/search");
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    });
+    const client = createExaClient({ EXA_API_KEY: "key", EXA_BASE_URL: "https://search.example.com/" }, fetchImpl)!;
+    await client.search({ query: "test", numResults: 1, type: "fast", highlightMaxCharacters: 200 });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("refuses to construct without a real key", () => {
     expect(() => new ExaSearchClient({ apiKey: "   " })).toThrow("EXA_API_KEY");
   });

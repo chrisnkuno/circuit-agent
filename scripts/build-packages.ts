@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CORE = path.join(ROOT, "packages/agent-core");
 const CLI = path.join(ROOT, "packages/nova-cli");
-const TSC = path.join(ROOT, "node_modules/.bin/tsc");
+const TSC = path.join(ROOT, "node_modules", "typescript", "bin", "tsc");
 
 declare const Bun: {
   build(options: Record<string, unknown>): Promise<{ success: boolean; logs: unknown[] }>;
@@ -61,7 +61,9 @@ await fs.rm(path.join(CORE, "dist"), { recursive: true, force: true });
 await fs.rm(path.join(CLI, "dist"), { recursive: true, force: true });
 
 // 1. Core: JavaScript and declarations, mirroring the source layout.
-await run([TSC, "-p", "tsconfig.build.json"], CORE);
+// Invoking the JavaScript entry through the current Bun executable works on Windows too; the
+// `.bin/tsc` POSIX shim used previously does not.
+await run([process.execPath, TSC, "-p", "tsconfig.build.json"], CORE);
 const rewritten = await addExtensions(path.join(CORE, "dist"));
 console.log(`agent-core: emitted modules and types, rewrote ${rewritten} import specifiers`);
 

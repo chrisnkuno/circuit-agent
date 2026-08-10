@@ -1,4 +1,4 @@
-import { STAR_GLYPHS, type ColorDepth } from "./banner";
+import type { ColorDepth } from "./banner";
 import { newMarkdownState, renderMarkdownLine, visibleWidth, type MarkdownState } from "./markdown";
 
 /**
@@ -19,8 +19,19 @@ function paint(text: string, code: string, depth: ColorDepth): string {
   return depth === "none" ? text : `${code}${text}${RESET}`;
 }
 
-/** Braille-free, theme-matched: the same star glyphs the banner lights up, cycling in place. */
-const SPINNER_FRAMES = [STAR_GLYPHS[2], STAR_GLYPHS[3], STAR_GLYPHS[4], STAR_GLYPHS[3]];
+/**
+ * A tiny supernova rather than a generic wheel.
+ *
+ * Every frame is five columns wide, so the activity text never jitters left and right while the
+ * core brightens and the two outer sparks collapse back in. The glyphs come from the opening
+ * starfield, making this feel like a living piece of Nova instead of a borrowed loader.
+ */
+const SPINNER_FRAMES = ["·   ·", "· ✧ ·", "· ✦ ·", "✧ ✶ ✧", "· ✦ ·", "· ✧ ·"] as const;
+
+export function novaSpinnerFrame(index: number): string {
+  const normalized = Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0;
+  return SPINNER_FRAMES[normalized % SPINNER_FRAMES.length];
+}
 
 export class Spinner {
   private frame = 0;
@@ -30,6 +41,9 @@ export class Spinner {
 
   start(): void {
     if (this.timer) return;
+    // Render immediately. Waiting one interval makes short operations look as though the CLI
+    // froze and then recovered, which is precisely the uncertainty a spinner is meant to remove.
+    this.onTick();
     this.timer = setInterval(() => {
       this.frame = (this.frame + 1) % SPINNER_FRAMES.length;
       this.onTick();
@@ -43,9 +57,11 @@ export class Spinner {
   }
 
   get glyph(): string {
-    return SPINNER_FRAMES[this.frame];
+    return novaSpinnerFrame(this.frame);
   }
 }
+
+export type ActivityPhase = "thinking" | "operation";
 
 export type StatusFields = {
   mode: string;
@@ -55,6 +71,9 @@ export type StatusFields = {
   /** Tokens spent so far this turn, summed across the model's iterations. */
   tokens: number;
   cost: string;
+  phase?: ActivityPhase;
+  /** Exact tool name while an operation is active; omitted during model reasoning. */
+  operation?: string;
 };
 
 function formatElapsed(ms: number): string {
@@ -73,10 +92,27 @@ export function formatTokens(tokens: number): string {
  * A word that never changes reads as a frozen program; one that changes every frame reads as
  * noise. Every few seconds is the rate at which it registers as alive without demanding attention.
  */
-const VERBS = ["Thinking", "Working", "Reasoning", "Digging", "Tracing", "Composing", "Considering", "Checking"];
+const VERBS = ["Thinking", "Reasoning", "Tracing", "Considering"];
 
 export function thinkingVerb(elapsedMs: number): string {
-  return VERBS[Math.floor(Math.max(0, elapsedMs) / 4_000) % VERBS.length];
+  return VERBS[Math.floor(Math.max(0, elapsedMs) / 6_000) % VERBS.length];
+}
+
+/** Concise, human operation names for the animated status line. */
+export function activityLabel(phase: ActivityPhase, operation: string | undefined, elapsedMs: number): string {
+  if (phase === "thinking") return thinkingVerb(elapsedMs);
+  switch (operation) {
+    case "read_file": return "Reading file";
+    case "list_files":
+    case "glob_files":
+    case "grep_files": return "Searching workspace";
+    case "write_file":
+    case "edit_file": return "Editing workspace";
+    case "run_command": return "Running command";
+    case "web_search": return "Searching the web";
+    case "todo_write": return "Updating plan";
+    default: return "Running operation";
+  }
 }
 
 /**
@@ -86,9 +122,9 @@ export function thinkingVerb(elapsedMs: number): string {
  * "is this still going", which is the question a status line exists for.
  */
 export function formatStatusLine(fields: StatusFields, width: number, depth: ColorDepth): string {
-  const verb = thinkingVerb(fields.elapsedMs);
-  const left = `${fields.spinnerGlyph} ${verb}…`;
-  const paintedLeft = `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint(`${verb}…`, DIM, depth)}`;
+  const label = activityLabel(fields.phase ?? "thinking", fields.operation, fields.elapsedMs);
+  const left = `${fields.spinnerGlyph} ${label}…`;
+  const paintedLeft = `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint(`${label}…`, DIM, depth)}`;
 
   // Ordered least to most important; the front of the list is given up first.
   const optional = [
@@ -103,7 +139,12 @@ export function formatStatusLine(fields: StatusFields, width: number, depth: Col
     const right = [...kept, formatElapsed(fields.elapsedMs)].join(" · ");
     const total = visibleWidth(left) + 1 + right.length;
     if (total <= width || kept.length === 0) {
-      if (total > width) return visibleWidth(left) <= width ? paintedLeft : "";
+      if (total > width) {
+        if (visibleWidth(left) <= width) return paintedLeft;
+        const compact = `${fields.spinnerGlyph} …`;
+        if (visibleWidth(compact) <= width) return `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint("…", DIM, depth)}`;
+        return width > 0 ? paint("✦", CYAN, depth) : "";
+      }
       const gap = Math.max(1, width - visibleWidth(left) - right.length);
       return `${paintedLeft}${" ".repeat(gap)}${paint(right, DIM, depth)}`;
     }
@@ -256,6 +297,10 @@ export class MarkdownStream {
       return;
     }
     if (this.pending !== "") this.finalizeLine();
+    if (this.state.inFence) {
+      const rendered = renderMarkdownLine("```", this.state, { width: this.columns(), depth: this.depth });
+      this.stream.write(`${rendered.join("\n")}\n`);
+    }
   }
 
   /** Forgets fence state between turns, so an unclosed block cannot colour the next answer. */

@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import path from "node:path";
 
 /**
@@ -17,8 +17,19 @@ export default defineConfig({
     ],
   },
   test: {
+    // A worktree an isolated agent spawned into is a full, separate checkout of this same repo —
+    // left in place, its tests double-run under a different name than vitest's defaults exclude,
+    // and an in-progress worktree's half-finished code shouldn't gate this checkout's own suite
+    // anyway. Extends vitest's own defaults rather than replacing them — `exclude` is not merged.
+    exclude: [...configDefaults.exclude, ".claude/worktrees/**"],
     coverage: {
       provider: "v8",
+      thresholds: {
+        statements: 85,
+        branches: 80,
+        functions: 85,
+        lines: 85,
+      },
       // Scoped to hand-written package source. `dist/` is Bun.build's bundled output (one file,
       // tens of thousands of lines, already a copy of code counted elsewhere) and `index.ts` is a
       // pure re-export barrel — both would either double-count or silently drag the number down

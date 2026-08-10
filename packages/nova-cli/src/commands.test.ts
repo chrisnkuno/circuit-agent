@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, completeCommand, completeFileMention, completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { COMMANDS, completeCommand, completeFileMention, completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
 
 describe("command registry", () => {
   it("lists every command exactly once, each starting with a slash", () => {
@@ -14,6 +14,27 @@ describe("command registry", () => {
       expect(help).toContain(command.name);
       expect(help).toContain(command.description);
     }
+  });
+
+  it("documents the explicit mode switch alongside its quick shortcuts", () => {
+    const help = renderCommandHelp();
+    expect(help).toContain("/mode [plan|build|auto]");
+    expect(completeCommand("/mo")[0]).toContain("/mode");
+  });
+});
+
+describe("mode commands", () => {
+  it("supports explicit mode inspection and every switch shortcut", () => {
+    expect(parseModeCommand("/mode")).toEqual({ type: "show" });
+    expect(parseModeCommand("/mode auto")).toEqual({ type: "switch", mode: "auto" });
+    expect(parseModeCommand("/plan")).toEqual({ type: "switch", mode: "plan" });
+    expect(parseModeCommand("/build")).toEqual({ type: "switch", mode: "build" });
+    expect(parseModeCommand("/auto")).toEqual({ type: "switch", mode: "auto" });
+  });
+
+  it("distinguishes an invalid mode from ordinary prompt text", () => {
+    expect(parseModeCommand("/mode fast")).toEqual({ type: "invalid" });
+    expect(parseModeCommand("please plan this")).toBeNull();
   });
 });
 

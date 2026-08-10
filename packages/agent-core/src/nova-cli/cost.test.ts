@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatMoney, fromUnits, tokenPrices, toUnits, type FxRate } from "../money";
-import { CostLedger } from "./cost";
+import { definePrices } from "../pricing";
+import { CostLedger, predictAgentUsage, type Expense } from "./cost";
 
 /** Anthropic's published Opus rates: $5 / $25 per million, cached input at a tenth. */
 const opus = tokenPrices("USD", 5, 25, 0.5);
@@ -15,6 +16,13 @@ const usage = (input: number, output: number, cached = 0) => ({
 });
 
 describe("cost ledger", () => {
+  it("predicts cumulative agent tokens rather than pricing only the opening prompt", () => {
+    const prediction = predictAgentUsage({ initialInputTokens: 2_000, objective: "refactor the entire CLI", mode: "build" });
+    expect(prediction.expectedIterations).toBeGreaterThan(6);
+    expect(prediction.inputTokensExpected).toBeGreaterThan(2_000 * prediction.expectedIterations);
+    const ledger = new CostLedger({ prices: opus, display: "USD" });
+    expect(ledger.formatPrediction(prediction)).toMatch(/input \+ .* output tokens .*\$.*model turns/);
+  });
   it("prices each turn from its usage, in the provider's currency", () => {
     const ledger = new CostLedger({ prices: opus, display: "USD" });
     const turn = ledger.record({ usage: usage(100_000, 2_000), iterations: 3, toolCalls: 4, elapsedMs: 12_000 });
@@ -143,5 +151,75 @@ describe("cost ledger", () => {
     ledger.setPrices(undefined);
     const unpriced = ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
     expect(unpriced.cost).toBeUndefined();
+  });
+});
+
+describe("spending beyond the model", () => {
+  const catalog = definePrices([
+    {
+      provider: "exa", model: "search", modality: "search", currency: "USD", billingUnit: "requests",
+      per: 1_000, rates: { request: 7, contents: 1 }, source: "test", effectiveFrom: "2026-01-01",
+    },
+    {
+      provider: "e2b", model: "sandbox", modality: "compute", currency: "USD", billingUnit: "seconds",
+      per: 3_600, rates: { runtime: 0.18 }, source: "test", effectiveFrom: "2026-01-01",
+    },
+  ]);
+
+  const search = (results: number): Expense => ({ provider: "exa", meter: "search", quantities: { request: 1, contents: results }, label: "web search: rust async" });
+
+  it("charges every meter a call touches, not just the headline one", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    // A ten-result search is $0.007 of request plus $0.010 of contents. Pricing only the request
+    // — which the old "~$0.007 per search" figure did — understates it by more than half.
+    expect(toUnits(ledger.recordExpense(search(10)).cost!)).toBeCloseTo(0.017, 6);
+  });
+
+  it("adds non-model spending to the session total the budget is checked against", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog, budget: fromUnits(1, "USD") });
+    ledger.record({ usage: usage(100_000, 2_000), iterations: 3, toolCalls: 4, elapsedMs: 12_000 }); // $0.55
+    for (let index = 0; index < 20; index += 1) ledger.recordExpense(search(10)); // $0.34
+
+    expect(toUnits(ledger.total!)).toBeCloseTo(0.55, 6);
+    expect(toUnits(ledger.expenseTotal!)).toBeCloseTo(0.34, 6);
+    expect(toUnits(ledger.displayTotal!)).toBeCloseTo(0.89, 6);
+    // On tokens alone this session reads as 55% spent, which is the number that lets a run sail
+    // past its cap: the searches are the difference between 55% and 89%.
+    expect(Math.round(ledger.budgetFraction! * 100)).toBe(89);
+    expect(ledger.budgetWarning()).toMatch(/89% of the \$1\.00 budget/);
+  });
+
+  it("converts each meter into the display currency at its own rate", () => {
+    const ledger = new CostLedger({ prices: opus, display: "RWF", catalog, rates: [rwfPerUsd] });
+    ledger.recordExpense({ provider: "e2b", meter: "sandbox", quantities: { runtime: 1_800 }, label: "sandbox: 30m" });
+    // Half an hour at $0.18/hour is $0.09, or 118.8 RWF.
+    expect(formatMoney(ledger.expenseTotal!)).toBe("RWF 119");
+  });
+
+  it("records what it cannot price rather than dropping it from the total", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    ledger.record({ usage: usage(100_000, 2_000), iterations: 1, toolCalls: 1, elapsedMs: 900 });
+    const unpriced = ledger.recordExpense({ provider: "deepgram", meter: "transcription", quantities: { seconds: 90 }, label: "voice prompt" });
+
+    expect(unpriced.cost).toBeUndefined();
+    expect(ledger.hasUnpricedSpend).toBe(true);
+    const report = ledger.formatReport();
+    // The total is real but incomplete, and says so — an unqualified figure here reads as final.
+    expect(report).toContain("Session cost: at least $0.55");
+    expect(report).toContain("unpriced (no deepgram/transcription rate)");
+    expect(report).toContain("voice prompt");
+  });
+
+  it("rejects a meter the rate card does not define, instead of charging zero for it", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    expect(() => ledger.recordExpense({ provider: "exa", meter: "search", quantities: { summaries: 4 }, label: "bad meter" }))
+      .toThrow('no rate for meter "summaries"');
+  });
+
+  it("leaves the report unchanged when nothing outside the model was spent", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    ledger.record({ usage: usage(100_000, 2_000), iterations: 1, toolCalls: 1, elapsedMs: 900 });
+    expect(ledger.formatReport()).not.toContain("Beyond the model");
+    expect(ledger.expenseTotal).toBeUndefined();
   });
 });

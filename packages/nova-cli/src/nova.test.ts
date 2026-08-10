@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Interface } from "node:readline/promises";
-import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders } from "./nova";
+import { configureRendering, confirmSensitiveTask, confirmSpendingCap, createApprovalPrompt, isReadlineExit, parseArgs, readFxRates, renderEvent, renderProviders } from "./nova";
 
 const plain = (value: string) => value.replace(/\[[0-9;]*m/g, "");
 
@@ -101,6 +101,13 @@ describe("argument parsing", () => {
     expect(parseArgs(["update", "--check"])).toMatchObject({ update: true, checkUpdate: true, prompt: null });
     expect(parseArgs(["--check-update"])).toMatchObject({ update: true, checkUpdate: true, prompt: null });
   });
+
+  it("recognises settings, localized controls and cost-only estimation", () => {
+    expect(parseArgs(["settings"])).toMatchObject({ settings: true, prompt: null });
+    expect(parseArgs(["--estimate", "fix", "tests"])).toMatchObject({ estimateOnly: true, prompt: "fix tests" });
+    expect(parseArgs(["--language", "ar", "help"])).toMatchObject({ language: "ar", prompt: "help" });
+    expect(parseArgs(["--auto", "--allow-sensitive", "deploy to production"])).toMatchObject({ mode: "auto", allowSensitive: true, prompt: "deploy to production" });
+  });
 });
 
 describe("exchange rates", () => {
@@ -145,10 +152,17 @@ describe("provider status view", () => {
   });
 
   it("explains an unpriced-but-working provider, which is otherwise baffling", () => {
-    const rendered = plain(renderProviders({ CIRCUITNOTION_API_KEY: "k", CIRCUITNOTION_MODEL: "gpt-5.6-luna" }, "none"));
+    // OpenAI's catalog is deliberately unverified here — unlike CircuitNotion, which ships a real
+    // RWF rate card from the operator, a scraped OpenAI list price risks being confidently wrong.
+    const rendered = plain(renderProviders({ OPENAI_API_KEY: "k", OPENAI_MODEL: "gpt-5.6-terra" }, "none"));
     expect(rendered).toContain("pricing: unknown");
     expect(rendered).toContain("costs show as unknown");
     expect(rendered).toContain("MODEL_INPUT_PER_MILLION");
+  });
+
+  it("prices CircuitNotion from its own RWF catalog, not just a working credential", () => {
+    const rendered = plain(renderProviders({ CIRCUITNOTION_API_KEY: "k", CIRCUITNOTION_MODEL: "gpt-5.6-luna" }, "none"));
+    expect(rendered).toContain("gpt-5.6-luna · pricing: catalog");
   });
 
   it("stops nagging about the exchange rate once one is configured", () => {
@@ -159,6 +173,20 @@ describe("provider status view", () => {
   it("emits no escape codes when colour is unwanted", () => {
     const rendered = renderProviders({ ANTHROPIC_API_KEY: "k" }, "none");
     expect(rendered).not.toMatch(/\[/);
+  });
+
+  it("shows whether Exa-backed web search is available", () => {
+    expect(plain(renderProviders({}, "none"))).toContain("set EXA_API_KEY");
+    expect(plain(renderProviders({ EXA_API_KEY: "exa-test" }, "none"))).toContain("web_search enabled");
+  });
+});
+
+describe("clean terminal exit", () => {
+  it("classifies Ctrl-D and a closed readline as normal exits", () => {
+    const ctrlD = new Error("Aborted with Ctrl+D"); ctrlD.name = "AbortError";
+    expect(isReadlineExit(ctrlD)).toBe(true);
+    expect(isReadlineExit(new Error("readline was closed"))).toBe(true);
+    expect(isReadlineExit(new Error("provider failed"))).toBe(false);
   });
 });
 
@@ -261,7 +289,7 @@ describe("createApprovalPrompt", () => {
 
   it("denies without asking when stdin is not a terminal, and says why", async () => {
     const { writes, restore } = captureStdout();
-    const approve = createApprovalPrompt(fakeReadline("y"), false);
+    const approve = createApprovalPrompt(fakeReadline("y"), false, () => undefined);
     const decision = await approve({ summary: "delete the database" });
     restore();
     expect(decision).toBe("deny_always");
@@ -276,7 +304,7 @@ describe("createApprovalPrompt", () => {
     ["gibberish", "deny"],
   ] as const)("reads %j as %s", async (answer, expected) => {
     const { restore } = captureStdout();
-    const approve = createApprovalPrompt(fakeReadline(answer), true);
+    const approve = createApprovalPrompt(fakeReadline(answer), true, () => undefined);
     const decision = await approve({ summary: "write a file" });
     restore();
     expect(decision).toBe(expected);
@@ -284,10 +312,37 @@ describe("createApprovalPrompt", () => {
 
   it("is case-insensitive and trims whitespace", async () => {
     const { restore } = captureStdout();
-    const approve = createApprovalPrompt(fakeReadline("  YES  "), true);
+    const approve = createApprovalPrompt(fakeReadline("  YES  "), true, () => undefined);
     const decision = await approve({ summary: "write a file" });
     restore();
     expect(decision).toBe("allow");
+  });
+
+  it("denies instead of hanging when the turn is cancelled while the question is pending", async () => {
+    // The bug this guards against: `agent.cancel()` alone only flips a flag `BoundedAgentRuntime`
+    // checks between steps, and a blocked `readline.question()` here is not a step it loops over —
+    // so without wiring an abort signal through, Ctrl+C during an approval prompt printed
+    // "interrupted" but left the process stuck on a question nobody could still answer.
+    const controller = new AbortController();
+    const readline = {
+      question: (_query: string, options?: { signal?: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+        const abort = () => {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        };
+        if (options?.signal?.aborted) abort();
+        else options?.signal?.addEventListener("abort", abort, { once: true });
+      }),
+    } as unknown as Interface;
+    const { writes, restore } = captureStdout();
+    const approve = createApprovalPrompt(readline, true, () => controller.signal);
+    const pending = approve({ summary: "run rm -rf /tmp/scratch" });
+    controller.abort();
+    const decision = await pending;
+    restore();
+    expect(decision).toBe("deny");
+    expect(writes.join("")).toContain("interrupted");
   });
 });
 
@@ -304,6 +359,34 @@ describe("spending approval", () => {
 
   it("treats an explicit --budget in a non-interactive command as the approval", async () => {
     await expect(confirmSpendingCap(fakeReadline("n"), false, "$5.00")).resolves.toBe(true);
+  });
+});
+
+describe("sensitive task preflight", () => {
+  const assessment = { sensitive: true, categories: ["production" as const], reasons: ["production deployment or release"] };
+  function fakeReadline(answer: string): Interface {
+    return { question: async () => answer } as unknown as Interface;
+  }
+
+  it.each([["y", true], ["yes", true], ["", false], ["n", false]] as const)("treats %j as approved=%s", async (answer, expected) => {
+    const { restore } = captureStdout();
+    await expect(confirmSensitiveTask(fakeReadline(answer), true, assessment)).resolves.toBe(expected);
+    restore();
+  });
+
+  it("fails closed unattended unless the operator passed the explicit flag", async () => {
+    const { writes, restore } = captureStdout();
+    await expect(confirmSensitiveTask(fakeReadline("y"), false, assessment)).resolves.toBe(false);
+    await expect(confirmSensitiveTask(fakeReadline("n"), false, assessment, true)).resolves.toBe(true);
+    restore();
+    expect(writes.join(" ")).toContain("--allow-sensitive");
+  });
+
+  it("does not prompt for an ordinary task", async () => {
+    let asked = 0;
+    const readline = { question: async () => { asked += 1; return "n"; } } as unknown as Interface;
+    await expect(confirmSensitiveTask(readline, true, { sensitive: false, categories: [], reasons: [] })).resolves.toBe(true);
+    expect(asked).toBe(0);
   });
 });
 

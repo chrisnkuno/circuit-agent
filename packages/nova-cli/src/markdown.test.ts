@@ -37,6 +37,21 @@ describe("parseInline", () => {
     expect(parseInline("__strong__ and _soft_").map((token) => token.text)).toEqual(["strong", " and ", "soft"]);
   });
 
+  it("formats links, images, autolinks and strikethrough without raw markdown punctuation", () => {
+    const text = parseInline("See [docs](https://example.com), ![chart](https://example.com/chart.png), <https://openai.com> and ~~old~~.")
+      .map((token) => token.text).join("");
+    expect(text).toContain("docs (https://example.com)");
+    expect(text).toContain("image: chart (https://example.com/chart.png)");
+    expect(text).toContain("https://openai.com");
+    expect(text).toContain("old");
+    expect(text).not.toContain("~~");
+  });
+
+  it("keeps escaped markdown markers literal", () => {
+    expect(parseInline(String.raw`\*not italic\* and \[not a link\]`).map((token) => token.text).join(""))
+      .toBe("*not italic* and [not a link]");
+  });
+
   it("leaves an unclosed marker alone rather than swallowing the rest of the line", () => {
     expect(parseInline("a ** dangling").map((token) => token.text)).toEqual(["a ** dangling"]);
   });
@@ -112,6 +127,18 @@ describe("renderMarkdownLine", () => {
     expect(render("  * nested item")).toEqual(["  • nested item"]);
   });
 
+  it("renders task-list controls distinctly", () => {
+    expect(render("- [ ] pending")).toEqual(["☐ pending"]);
+    expect(render("- [x] complete")).toEqual(["☑ complete"]);
+  });
+
+  it("renders pipe tables as aligned terminal rows and separators", () => {
+    const rows = [render("| Name | Status |"), render("| --- | :---: |"), render("| API | ready |")].flat();
+    expect(rows[0]).toMatch(/^│.*Name.*│.*Status.*│$/);
+    expect(rows[1]).toMatch(/^├─+┼─+┤$/);
+    expect(new Set(rows.map(visibleWidth)).size).toBe(1);
+  });
+
   it("keeps a numbered list's own numbering", () => {
     expect(render("1. first")).toEqual(["1. first"]);
     expect(render("2) second")).toEqual(["2) second"]);
@@ -168,6 +195,12 @@ describe("renderMarkdown", () => {
     expect(rendered).toContain("Changed port to 8080.");
     expect(rendered).toContain("│ const port = 8080;"); // gutter, and the code kept verbatim
     expect(rendered).toContain("• verified with npm test");
+  });
+
+  it("visually closes an incomplete code fence at the end of an answer", () => {
+    const rendered = renderMarkdown("```ts\nconst x = 1;", { width: 60, depth: "none" });
+    expect(rendered).toContain("╭─ ts");
+    expect(rendered).toContain("╰────");
   });
 
   it("emits colour when asked, and none when not", () => {

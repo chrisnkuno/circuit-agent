@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { BoundedAgentRuntime, type AgentMessage, type AgentRuntimeEvent, type AgentRuntimeResult, type AgentTurnProvider } from "../agent-runtime";
-import { affordableOutputTokens, priceActualModelUsage, type ModelPriceCatalog } from "../model-cost";
+import { affordableOutputTokens, approximateInputTokens, priceActualModelUsage, type ModelPriceCatalog } from "../model-cost";
 import type { ModelUsage } from "../providers/model";
 import type { ExaSearchClient } from "../providers/exa";
 import { CheckpointStore, type Checkpoint, type GitRunner } from "./checkpoints";
@@ -18,6 +18,8 @@ import {
   type SessionRecord,
 } from "./session";
 import { createNovaTools, TodoList, type TodoItem } from "./tools";
+import type { Expense } from "./cost";
+import { predictAgentUsage, type AgentCostPrediction } from "./cost";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
 import type { WorkspaceLimits } from "./workspace";
 
@@ -48,6 +50,8 @@ export type NovaAgentOptions = {
   limits?: WorkspaceLimits;
   /** Reported as the session unfolds: tool calls, model turns, checkpoints. */
   onEvent?: (event: NovaEvent) => void;
+  /** Reported when a tool spends money outside the model, so the ledger sees the whole bill. */
+  onExpense?: (expense: Expense) => void;
   budgets?: Partial<NovaBudgets>;
 };
 
@@ -177,12 +181,37 @@ export class NovaAgent {
 
   /** Releases the backend. For E2B that stops the sandbox; locally it does nothing. */
   async dispose(): Promise<void> {
-    await this.journal.close();
+    await this.relinquish();
     await this.workspace.dispose();
+  }
+
+  /**
+   * Closes this front end's journal before a mode/model/settings handoff without destroying the
+   * shared workspace. This prevents abandoned file handles while keeping an E2B sandbox alive.
+   */
+  async relinquish(): Promise<void> {
+    await this.journal.close();
   }
 
   listCheckpoints(): Checkpoint[] {
     return this.checkpoints.list();
+  }
+
+  /** Token-based preflight using the actual system prompt, history and tool schemas for this mode. */
+  async estimateNextTurn(objective: string): Promise<AgentCostPrediction> {
+    const context = await collectProjectContext(this.options.root);
+    const tools = createNovaTools({ workspace: this.workspace, todos: this.todoList, search: this.options.search, onExpense: this.options.onExpense });
+    const capabilities = capabilitiesForMode(this.options.mode);
+    const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
+    const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, scoped.map((tool) => tool.name), this.workspace);
+    const toolSchemas = JSON.stringify(scoped.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })));
+    const initialInputTokens = approximateInputTokens([
+      systemPrompt,
+      ...this.messages.filter((message) => message.role !== "system").map((message) => message.content),
+      objective,
+      toolSchemas,
+    ]).expectedInputTokens;
+    return predictAgentUsage({ initialInputTokens, objective, mode: this.options.mode });
   }
 
   /** Restores the workspace to the checkpoint taken before the last turn. */
@@ -220,7 +249,7 @@ export class NovaAgent {
       // A long-lived session must not keep following an AGENTS.md that changed three turns ago.
       this.context = await collectProjectContext(this.options.root);
 
-      const tools = createNovaTools({ workspace: this.workspace, todos: this.todoList, search: this.options.search });
+      const tools = createNovaTools({ workspace: this.workspace, todos: this.todoList, search: this.options.search, onExpense: this.options.onExpense });
       const capabilities = capabilitiesForMode(this.options.mode);
       const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
       const systemPrompt = buildNovaSystemPrompt(

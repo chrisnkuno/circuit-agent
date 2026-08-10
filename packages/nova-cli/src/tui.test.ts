@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./markdown";
-import { box, formatStatusLine, formatTokens, MarkdownStream, ReplaceableBlock, rowsOccupied, Spinner, StatusBar, thinkingVerb } from "./tui";
+import { activityLabel, box, formatStatusLine, formatTokens, MarkdownStream, novaSpinnerFrame, ReplaceableBlock, rowsOccupied, Spinner, StatusBar, thinkingVerb } from "./tui";
 
 const ESCAPE = /\x1b\[[0-9;]*m/g;
 const plain = (value: string) => value.replace(ESCAPE, "");
@@ -80,13 +80,40 @@ describe("formatTokens", () => {
 
 describe("thinkingVerb", () => {
   it("holds a word for several seconds rather than flickering every frame", () => {
-    expect(thinkingVerb(0)).toBe(thinkingVerb(3_999));
-    expect(thinkingVerb(0)).not.toBe(thinkingVerb(4_000));
+    expect(thinkingVerb(0)).toBe(thinkingVerb(5_999));
+    expect(thinkingVerb(0)).not.toBe(thinkingVerb(6_000));
   });
 
   it("cycles rather than running out, however long the turn takes", () => {
     expect(thinkingVerb(10 * 60_000)).toBeTruthy();
     expect(thinkingVerb(-1)).toBe(thinkingVerb(0));
+  });
+});
+
+describe("Nova activity", () => {
+  it("pulses within a fixed width so its label never jitters", () => {
+    const frames = Array.from({ length: 12 }, (_unused, index) => novaSpinnerFrame(index));
+    expect(new Set(frames).size).toBeGreaterThan(3);
+    expect(new Set(frames.map((frame) => visibleWidth(frame)))).toEqual(new Set([5]));
+    expect(frames.join("")).toContain("✶");
+  });
+
+  it("falls back safely for invalid frame indexes", () => {
+    expect(novaSpinnerFrame(Number.NaN)).toBe(novaSpinnerFrame(0));
+    expect(novaSpinnerFrame(-4)).toBe(novaSpinnerFrame(0));
+  });
+
+  it("names common operations without exposing their arguments", () => {
+    expect(activityLabel("operation", "run_command", 0)).toBe("Running command");
+    expect(activityLabel("operation", "web_search", 0)).toBe("Searching the web");
+    expect(activityLabel("operation", "unknown_tool", 0)).toBe("Running operation");
+    expect(activityLabel("thinking", undefined, 0)).toBe("Thinking");
+  });
+
+  it("shows the operation phase in the status line", () => {
+    const line = formatStatusLine({ mode: "build", spinnerGlyph: novaSpinnerFrame(3), elapsedMs: 4_200, toolCalls: 1, tokens: 1_200, cost: "$0.0120", phase: "operation", operation: "edit_file" }, 80, "none");
+    expect(line).toContain("Editing workspace…");
+    expect(line).not.toContain("Thinking");
   });
 });
 
@@ -262,6 +289,15 @@ describe("MarkdownStream", () => {
     expect(writes.at(-1)).toBe("ordinary prose\n"); // styled as prose, not gutter-marked as code
   });
 
+  it("closes an unclosed code fence when the streamed answer ends", () => {
+    const { stream, writes } = fakeStream();
+    const markdown = new MarkdownStream(stream, "none", () => 80);
+    markdown.push("```ts\nconst x = 1;");
+    markdown.end();
+    expect(writes.join("")).toContain("╰────\n");
+    expect(markdown.active).toBe(false);
+  });
+
   it("emits colour when the terminal has it", () => {
     const { stream, output } = fakeStream();
     const markdown = new MarkdownStream(stream, "truecolor", () => 80);
@@ -290,7 +326,7 @@ describe("Spinner", () => {
     const spinner = new Spinner(() => { ticks += 1; }, 50);
     spinner.start();
     vi.advanceTimersByTime(220);
-    expect(ticks).toBe(4);
+    expect(ticks).toBe(5); // immediate paint, then four interval ticks
   });
 
   it("does not tick after being stopped", () => {
@@ -310,7 +346,7 @@ describe("Spinner", () => {
     spinner.start();
     spinner.start();
     vi.advanceTimersByTime(100);
-    expect(ticks).toBe(2);
+    expect(ticks).toBe(3); // one immediate paint and two interval ticks, still only one timer
   });
 
   it("stopping before ever starting is a safe no-op", () => {

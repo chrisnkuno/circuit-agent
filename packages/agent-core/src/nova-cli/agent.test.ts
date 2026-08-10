@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -259,6 +259,16 @@ describe("NovaAgent", () => {
     expect(agent.listCheckpoints().map((checkpoint) => checkpoint.tree)).toEqual(["tree_0", "tree_1"]);
 
     await expect(agent.dispose()).resolves.toBeUndefined(); // LocalWorkspace.dispose() is a no-op.
+  });
+
+  it("relinquishes a replaced front end without destroying its shared workspace", async () => {
+    const workspace = new LocalWorkspace(root);
+    const dispose = vi.spyOn(workspace, "dispose");
+    const agent = new NovaAgent({ root, model: scriptedModel([]), prices, mode: "build", approve: async () => "allow", workspace });
+    await agent.relinquish();
+    expect(dispose).not.toHaveBeenCalled();
+    await agent.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("reports no diff before any checkpoint exists", async () => {
