@@ -20,6 +20,7 @@ export type {
   AgentToolCall,
   AgentToolResult,
   AgentTurnProvider,
+  ToolProvenance,
 } from "./agent-runtime";
 
 export { NovaAgent, DEFAULT_NOVA_BUDGETS } from "./nova-cli/agent";
@@ -30,6 +31,22 @@ export type { NovaWorkspace } from "./nova-cli/backends";
 
 export { createNovaTools, TodoList } from "./nova-cli/tools";
 export type { TodoItem } from "./nova-cli/tools";
+
+// Tools Nova did not ship with: skills, hooks, plugins and MCP servers. Exported because
+// implementing a `ToolProvider` is the supported way for a consumer of this package to add its own
+// tool source — without these an embedder can only use the built-in set.
+export { collectExternalTools, toolsFromProvider } from "./nova-cli/tool-providers";
+export type { ExternalTool, ToolProvider, ToolProviderKind } from "./nova-cli/tool-providers";
+export { discoverSkillManifests, discoverSkillManifestsIn, parseSkillManifest, substitutePlaceholders, SkillToolProvider, SKILLS_DIRECTORY } from "./nova-cli/skills";
+export type { SkillManifest } from "./nova-cli/skills";
+export { HookRegistry, HOOKS_DIRECTORY } from "./nova-cli/hooks";
+export type { HookEvent, HookSource, PreToolUseOutcome } from "./nova-cli/hooks";
+export { discoverMcpServers, parseMcpServerConfig, McpConnection, McpToolProvider } from "./nova-cli/mcp-provider";
+export type { McpServerConfig } from "./nova-cli/mcp-provider";
+export { discoverPlugins, parsePluginManifest, PLUGINS_DIRECTORY } from "./nova-cli/plugins";
+export type { PluginManifest } from "./nova-cli/plugins";
+export { loadLocalExternalTooling } from "./nova-cli/external-tools";
+export type { LocalExternalTooling } from "./nova-cli/external-tools";
 export { PermissionLedger, actionDigest, approvalScopeKey, capabilitiesForMode } from "./nova-cli/permissions";
 export type { NovaMode, PermissionDecision, ToolApprovalOutcome } from "./nova-cli/permissions";
 export { assessTaskSafety, assessToolSafety } from "./nova-cli/safety";
@@ -39,6 +56,14 @@ export { CostLedger } from "./nova-cli/cost";
 export { listSessions, loadSession, saveSession } from "./nova-cli/session";
 export { assertTurnTransition, EventJournal, readEventJournal, runtimeEventForJournal, NOVA_PROTOCOL_VERSION } from "./nova-cli/protocol";
 export type { NovaEventEnvelope, NovaProtocolPayload, TurnStatus } from "./nova-cli/protocol";
+export { NovaDaemonClient, NovaSessionDaemon, NOVA_DAEMON_PROTOCOL_VERSION } from "./nova-cli/daemon";
+export type {
+  DaemonAgentFactory,
+  DaemonAgentFactoryContext,
+  DaemonApprovalRequest,
+  DaemonNotification,
+  DaemonSessionInfo,
+} from "./nova-cli/daemon";
 
 export { resolveProvider, describeProviders, availableProviders, PROVIDERS, PROVIDER_IDS } from "./providers/agent-matrix";
 export type { ProviderId, ProviderSpec, ProviderStatus } from "./providers/agent-matrix";

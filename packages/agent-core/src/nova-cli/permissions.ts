@@ -27,9 +27,14 @@ export const NOVA_CAPABILITIES = {
   terminal: "workspace.terminal",
   research: "web.research",
   planning: "reasoning.plan",
+  /** Skill, MCP and plugin tools — code Nova did not ship, running with the user's approval. */
+  external: "workspace.external",
 } as const;
 
 const MODE_CAPABILITIES: Record<NovaMode, string[]> = {
+  // No externally-sourced tool runs in plan mode: plan already permits nothing that changes
+  // anything, and a skill/MCP/plugin tool is by definition not one of the effects plan already
+  // reasoned about (it could shell out, write files, or call a network service under the hood).
   plan: [NOVA_CAPABILITIES.read, NOVA_CAPABILITIES.research, NOVA_CAPABILITIES.planning],
   build: Object.values(NOVA_CAPABILITIES),
   auto: Object.values(NOVA_CAPABILITIES),
@@ -64,7 +69,7 @@ export type ApprovalPrompt = (request: ApprovalRequest) => Promise<PermissionDec
  * again. This is intentionally narrower than Cline-style UI categories: categories are useful for
  * presentation, but too broad to be authorization keys.
  */
-export const APPROVAL_POLICY_VERSION = "nova-approval-v1" as const;
+export const APPROVAL_POLICY_VERSION = "nova-approval-v2" as const;
 
 function canonicalize(value: unknown): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -82,13 +87,23 @@ function canonicalize(value: unknown): unknown {
   throw new Error(`Approval arguments contain unsupported ${typeof value} value`);
 }
 
-/** Stable across object key order, but deliberately changes when any meaningful argument changes. */
+/**
+ * Stable across object key order, but deliberately changes when any meaningful argument changes —
+ * including, since `APPROVAL_POLICY_VERSION` bumped to v2, a tool's provenance. A standing
+ * `allow_always` for `write_file` was granted to Nova's own built-in tool; if a same-named tool
+ * later arrives from an MCP server or a skill file, that is a different actor making the same-shaped
+ * request, and the old approval must not silently cover it. The version bump means every decision
+ * made under v1 is void regardless of provenance — the honest way to close the gap for tools that
+ * were already approved before this field existed, rather than guessing which of them would still
+ * have been approved knowingly.
+ */
 export function actionDigest(call: AgentToolCall, tool: AgentTool): string {
   const action = JSON.stringify(canonicalize({
     policyVersion: APPROVAL_POLICY_VERSION,
     tool: tool.name,
     capabilityId: tool.capabilityId,
     effect: tool.effect,
+    provenance: tool.provenance ?? { kind: "built-in" },
     arguments: call.arguments ?? {},
   }));
   return createHash("sha256").update(action).digest("hex");

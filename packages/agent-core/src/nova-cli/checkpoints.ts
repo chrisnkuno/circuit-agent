@@ -30,6 +30,17 @@ export type Checkpoint = {
   tree: string;
   label: string;
   createdAt: number;
+  /** The turn this checkpoint was captured before, so it can be cross-referenced against the journal. */
+  turnId: string;
+  /**
+   * How many messages the conversation held at capture time.
+   *
+   * The number, not a copy of the messages themselves — `NovaAgent` already holds the transcript
+   * and is the only thing that can safely truncate it back to this point, in step with its own
+   * session file and journal. A checkpoint's job is to remember *where* to cut, not to carry a
+   * second copy of what gets cut.
+   */
+  messageCount: number;
 };
 
 export type GitRunner = (args: string[], options: { cwd: string; env?: Record<string, string> }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
@@ -75,7 +86,7 @@ export class CheckpointStore {
    * missing): losing undo is a reduction in comfort, and failing the user's task over it would be
    * a reduction in function.
    */
-  async capture(label: string): Promise<Checkpoint | undefined> {
+  async capture(label: string, turnId: string, messageCount: number): Promise<Checkpoint | undefined> {
     // git cannot create its index inside a directory that does not exist, so on a brand-new
     // project the very first capture failed and the first turn silently had no undo — the one
     // turn where a user is most likely to want it.
@@ -85,7 +96,7 @@ export class CheckpointStore {
     if (added.exitCode !== 0) return undefined;
     const tree = await this.git(["write-tree"], { cwd: this.root, env });
     if (tree.exitCode !== 0) return undefined;
-    const checkpoint = { tree: tree.stdout.trim(), label, createdAt: Date.now() };
+    const checkpoint = { tree: tree.stdout.trim(), label, createdAt: Date.now(), turnId, messageCount };
     if (!checkpoint.tree) return undefined;
     this.checkpoints.push(checkpoint);
     return checkpoint;

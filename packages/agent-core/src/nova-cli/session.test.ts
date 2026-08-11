@@ -164,7 +164,7 @@ describe("checkpoints", () => {
     const { git, calls } = fakeGit({ "write-tree": { exitCode: 0, stdout: "abc123\n" } });
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
 
-    const checkpoint = await store.capture("add a flag");
+    const checkpoint = await store.capture("add a flag", "turn_1", 0);
     expect(checkpoint?.tree).toBe("abc123");
     // Nova's own directory is excluded: staging it corrupts the very index git is writing.
     expect(calls[0]).toEqual(["add", "--all", "--", ".", ":(exclude).nova"]);
@@ -175,7 +175,7 @@ describe("checkpoints", () => {
   it("stages before restoring, so files created after the snapshot are removed by the undo", async () => {
     const { git, calls } = fakeGit({ "write-tree": { exitCode: 0, stdout: "tree1\n" } });
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
-    await store.capture("before");
+    await store.capture("before", "turn_1", 0);
 
     expect(await store.restore("tree1")).toBe(true);
     // Without the staging call, `--reset` leaves newly created files behind and the workspace
@@ -187,14 +187,14 @@ describe("checkpoints", () => {
   it("degrades to no undo rather than failing the task when git is unavailable", async () => {
     const { git } = fakeGit({ add: { exitCode: 127, stdout: "" } });
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
-    expect(await store.capture("anything")).toBeUndefined();
+    expect(await store.capture("anything", "turn_1", 0)).toBeUndefined();
     expect(store.latest()).toBeUndefined();
   });
 
   it("records no checkpoint when write-tree itself fails", async () => {
     const { git } = fakeGit({ "write-tree": { exitCode: 128, stdout: "" } });
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
-    expect(await store.capture("anything")).toBeUndefined();
+    expect(await store.capture("anything", "turn_1", 0)).toBeUndefined();
     expect(store.list()).toHaveLength(0);
   });
 
@@ -202,7 +202,7 @@ describe("checkpoints", () => {
     // An empty tree id is not a smaller checkpoint; it is not a checkpoint at all.
     const { git } = fakeGit({ "write-tree": { exitCode: 0, stdout: "\n" } });
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
-    expect(await store.capture("anything")).toBeUndefined();
+    expect(await store.capture("anything", "turn_1", 0)).toBeUndefined();
   });
 
   it("refuses to restore when staging the current tree fails", async () => {
@@ -214,7 +214,7 @@ describe("checkpoints", () => {
   it("reports no diff when git itself fails, the same as when there is nothing to compare", async () => {
     const { git } = fakeGit({ "write-tree": { exitCode: 0, stdout: "tree1\n" }, diff: { exitCode: 128, stdout: "" } });
     const store = new CheckpointStore(root, path.join(root, ".nova", "index"), git);
-    await store.capture("before");
+    await store.capture("before", "turn_1", 0);
     expect(await store.diffStat()).toBe("");
   });
 });
@@ -246,7 +246,7 @@ describe("checkpoints against a real repository", () => {
       await runGit(["commit", "-qm", "init"], { cwd: repo });
 
       const store = new CheckpointStore(repo, path.join(repo, ".nova", "checkpoint-index"));
-      const checkpoint = await store.capture("before");
+      const checkpoint = await store.capture("before", "turn_1", 0);
       expect(checkpoint?.tree).toMatch(/^[0-9a-f]{40}$/);
 
       await fs.writeFile(path.join(repo, "app.ts"), "// destroyed\n");
@@ -259,6 +259,24 @@ describe("checkpoints against a real repository", () => {
       expect(await fs.readFile(path.join(repo, "app.ts"), "utf8")).toBe("export const port = 3000;\n");
       expect(await fs.stat(path.join(repo, "stray.ts")).catch(() => null)).toBeNull();
       expect(await fs.readFile(path.join(repo, ".nova", "session.json"), "utf8")).toBe("{}");
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("carries the turn it was captured for and the conversation length at that moment", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "nova-git-"));
+    try {
+      await runGit(["init", "-q"], { cwd: repo });
+      await runGit(["config", "user.email", "nova@test"], { cwd: repo });
+      await runGit(["config", "user.name", "Nova"], { cwd: repo });
+      await fs.writeFile(path.join(repo, "app.ts"), "x");
+      await runGit(["add", "-A"], { cwd: repo });
+      await runGit(["commit", "-qm", "init"], { cwd: repo });
+
+      const store = new CheckpointStore(repo, path.join(repo, ".nova", "checkpoint-index"));
+      const checkpoint = await store.capture("before", "turn_42", 6);
+      expect(checkpoint).toMatchObject({ turnId: "turn_42", messageCount: 6 });
     } finally {
       await fs.rm(repo, { recursive: true, force: true });
     }

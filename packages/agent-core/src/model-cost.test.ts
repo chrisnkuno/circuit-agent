@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { affordableOutputTokens, approximateInputTokens, estimateModelCost, estimateTextTokens, priceActualModelUsage, priceUsageWithCache } from "./model-cost";
+import { addPart, affordableOutputTokens, affordableOutputTokensFor, approximateInputTokens, estimateModelCost, estimateTextTokens, newPartTotals, priceActualModelUsage, priceUsageWithCache, tokenEstimateFrom } from "./model-cost";
 
 const prices = { inputRwfPerMillionTokens: 2_000, outputRwfPerMillionTokens: 8_000 };
 
@@ -34,6 +34,36 @@ describe("model cost estimation", () => {
     expect(generous).toBe(2_000);
     const none = affordableOutputTokens(["small prompt"], 2_000, 1, prices);
     expect(none).toBe(0);
+  });
+
+  it("measures a growing prompt part by part without changing the answer", () => {
+    // The agent loop folds each new message in once rather than re-measuring the whole transcript
+    // every iteration. That is only safe while the incremental total stays exactly equal to the
+    // one-shot estimate — including the newlines the one-shot form joins its parts with, and
+    // regardless of the order the parts are folded in.
+    const parts = [
+      "system prompt with `code`, punctuation!!! and — dashes",
+      "const user_id = records.map((item) => item.user_id);\n\n\ttabbed",
+      "مرحبا بالعالم 👋🏽 日本語テキスト 𝕏",
+      "",
+    ];
+    const forward = newPartTotals();
+    for (const part of parts) addPart(forward, part);
+    const reversed = newPartTotals();
+    for (const part of [...parts].reverse()) addPart(reversed, part);
+
+    expect(tokenEstimateFrom(forward)).toEqual(approximateInputTokens(parts));
+    expect(tokenEstimateFrom(reversed)).toEqual(approximateInputTokens(parts));
+    expect(affordableOutputTokensFor(tokenEstimateFrom(forward), 2_000, 100, prices))
+      .toBe(affordableOutputTokens(parts, 2_000, 100, prices));
+  });
+
+  it("counts multibyte characters by their real UTF-8 length", () => {
+    // Byte length is computed arithmetically rather than by encoding each character; a surrogate
+    // pair must still count as the four bytes it encodes to, not as two characters.
+    const astral = approximateInputTokens(["𝕏"]);
+    const ascii = approximateInputTokens(["x"]);
+    expect(astral.maximumInputTokens - ascii.maximumInputTokens).toBe(3);
   });
 });
 

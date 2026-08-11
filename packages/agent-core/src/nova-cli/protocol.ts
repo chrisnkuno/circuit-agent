@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { AgentRuntimeEvent } from "../agent-runtime";
+import type { AgentRuntimeEvent, ToolEffect } from "../agent-runtime";
 import type { ApprovalRequest, PermissionDecision } from "./permissions";
 
 /**
@@ -63,13 +63,23 @@ function boundedJournalValue(value: unknown, key = ""): unknown {
 /** Keeps the audit useful without turning it into an unbounded secret-bearing transcript. */
 export function runtimeEventForJournal(event: DurableRuntimeEvent): DurableRuntimeEvent {
   if (event.type === "tool_call") return { ...event, arguments: boundedJournalValue(event.arguments) as Record<string, unknown> };
-  if (event.type === "tool_result") return { ...event, content: boundedJournalValue(event.content) as string };
+  // `data` goes through the same redaction and bounding as `content` — it holds the same facts,
+  // so a secret that must not reach the journal in prose must not reach it as a value either.
+  if (event.type === "tool_result") {
+    return {
+      ...event,
+      content: boundedJournalValue(event.content) as string,
+      ...(event.data ? { data: boundedJournalValue(event.data) as Record<string, unknown> } : {}),
+    };
+  }
   return event;
 }
 
 export type NovaProtocolPayload =
   | { type: "turn_status"; turnId: string; from: TurnStatus; to: TurnStatus }
-  | { type: "approval_requested"; turnId: string; request: Pick<ApprovalRequest, "summary" | "actionDigest" | "scopeKey" | "policyVersion"> & { toolCallId: string; toolName: string } }
+  // `effect` and `capabilityId` ride along so the audit records what the human was actually
+  // authorizing, not merely which tool asked. A digest alone cannot be read back by a person.
+  | { type: "approval_requested"; turnId: string; request: Pick<ApprovalRequest, "summary" | "actionDigest" | "scopeKey" | "policyVersion"> & { toolCallId: string; toolName: string; effect: ToolEffect; capabilityId: string } }
   | { type: "approval_decided"; turnId: string; actionDigest: string; decision: PermissionDecision }
   | { type: "runtime"; turnId: string; event: DurableRuntimeEvent }
   | { type: "compaction"; turnId: string; messagesBefore: number; messagesAfter: number; actualRwf: number };

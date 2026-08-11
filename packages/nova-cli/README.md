@@ -119,6 +119,6 @@ The sandbox executes commands as argv against an allowlist rather than through a
 
 ## Requirements
 
-Node 20 or newer on Windows, macOS, or Linux. `git` enables checkpoints (Nova degrades to no-undo without it). `ffmpeg` is optional and needed only for direct microphone recording; existing audio files can still be transcribed without it.
+Node 22.5 or newer on Windows, macOS, or Linux. `git` enables checkpoints (Nova degrades to no-undo without it). `ffmpeg` is optional and needed only for direct microphone recording; existing audio files can still be transcribed without it.
 
 MIT licensed.

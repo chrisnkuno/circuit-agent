@@ -46,7 +46,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: "anthropic",
     label: "Anthropic",
     requires: ["ANTHROPIC_API_KEY"],
-    defaultModel: "claude-opus-5",
+    defaultModel: "claude-sonnet-5",
     create: (environment, model) =>
       new AnthropicAgentTurnProvider({
         apiKey: environment.ANTHROPIC_API_KEY!.trim(),

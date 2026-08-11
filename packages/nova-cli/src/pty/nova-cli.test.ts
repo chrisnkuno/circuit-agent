@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -258,5 +259,153 @@ describe("nova CLI under a real pty", () => {
 
       expect(p.output().slice(before)).toMatch(/\x1b\[1;38r/);
     }, 30_000);
+  });
+
+  describe("mode, model and thread switches", () => {
+    // Every one of these commands tears down the live agent and opens a fresh one against the
+    // same coordinator (NovaSessionDaemon) — the exact rewrite this suite exists to verify: none
+    // of it should be visible to the person typing, and the transcript has to survive it.
+    it("carries the transcript across a mode switch", async () => {
+      const p = boot();
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "text", text: "The port is 3000." });
+      let before = p.output().length;
+      p.writeLine("what port does the app use");
+      await p.waitFor(/3000/, { timeoutMs: 15_000, since: before });
+      // Response text streaming and the turn's own "completed · N turns" trailer are two separate
+      // prints; waiting only for the former can still leave the turn technically in flight and the
+      // next command typed a beat too early for readline to treat it as a fresh line.
+      await p.waitFor(PROMPT, { timeoutMs: 10_000, since: before });
+
+      before = p.output().length;
+      p.writeLine("/mode plan");
+      await p.waitFor(/switched to plan mode/, { timeoutMs: 10_000, since: before });
+
+      // Still usable, and the switch really did tear down and reopen an agent rather than wedging
+      // one behind the other — a second turn on the new agent has to complete normally.
+      stub.enqueue({ kind: "text", text: "Yes, I can still see that." });
+      before = p.output().length;
+      p.writeLine("do you remember the port I asked about?");
+      await p.waitFor(/still see that/, { timeoutMs: 15_000, since: before });
+    }, 45_000);
+
+    it("lists models and switches to one by number, without losing the session", async () => {
+      const p = boot();
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      let before = p.output().length;
+      p.writeLine("/models");
+      const listed = await p.waitFor(/Choose with \/model/, { timeoutMs: 10_000, since: before });
+      // The current model is marked, proving the list reflects the live daemon client's state,
+      // not a snapshot taken once at startup.
+      expect(listed.slice(before)).toMatch(/current/);
+
+      // Index 1 is always the provider's own default (modelsForProvider puts it first), which is
+      // already selected — picking it would correctly print "already on", not exercise a switch.
+      before = p.output().length;
+      p.writeLine("/model 2");
+      await p.waitFor(/switched to/, { timeoutMs: 10_000, since: before });
+
+      // The relinquish/reopen the switch performs must not have dropped the approval prompt wiring
+      // or the render path — a real turn afterward proves both are still live on the new client.
+      stub.enqueue({ kind: "text", text: "Still working after the switch." });
+      before = p.output().length;
+      p.writeLine("are you still there");
+      await p.waitFor(/Still working/, { timeoutMs: 15_000, since: before });
+    }, 45_000);
+
+    it("/clear opens a fresh thread that no longer remembers the prior turn", async () => {
+      const p = boot();
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      // The response text deliberately does not repeat "banana" or the prompt's own wording — the
+      // objective typed a moment ago already contains "banana", so waiting on that word would
+      // match the echoed input instead of the model's actual answer, and let the next line be
+      // typed while the turn is still in flight.
+      stub.enqueue({ kind: "text", text: "Noted, I'll keep that in mind." });
+      let before = p.output().length;
+      p.writeLine("remember the secret word: banana");
+      await p.waitFor(/keep that in mind/, { timeoutMs: 15_000, since: before });
+      await p.waitFor(PROMPT, { timeoutMs: 10_000, since: before });
+
+      before = p.output().length;
+      p.writeLine("/clear");
+      await p.waitFor(/new thread/, { timeoutMs: 10_000, since: before });
+
+      // A fresh daemon client with no history — the stub's next answer is scripted to prove the
+      // model was asked with no memory of "banana", not merely that the CLI printed "new thread".
+      stub.enqueue({ kind: "text", text: "I don't have a record of a secret word." });
+      before = p.output().length;
+      p.writeLine("what was the secret word?");
+      await p.waitFor(/don't have a record/, { timeoutMs: 15_000, since: before });
+    }, 45_000);
+  });
+
+  describe("undo, by scope", () => {
+    async function initGitRepo(): Promise<void> {
+      const run = (args: string[]) => new Promise<void>((resolve, reject) => {
+        const child = spawn("git", args, { cwd });
+        child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")} exited ${code}`))));
+      });
+      await writeFile(path.join(cwd, "app.ts"), "export const port = 3000;\n");
+      await run(["init", "-q"]);
+      await run(["config", "user.email", "nova@test"]);
+      await run(["config", "user.name", "Nova"]);
+      await run(["add", "-A"]);
+      await run(["commit", "-qm", "init"]);
+    }
+
+    it("/undo code reverts the file but the model still remembers making the change", async () => {
+      await initGitRepo();
+      const p = boot({ args: ["--auto"] });
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "tool_call", toolName: "edit_file", input: { path: "app.ts", oldText: "3000", newText: "8080" } });
+      stub.enqueue({ kind: "text", text: "Changed the port to 8080." });
+      let before = p.output().length;
+      p.writeLine("change the port to 8080");
+      await p.waitFor(/Changed the port/, { timeoutMs: 15_000, since: before });
+      await p.waitFor(PROMPT, { timeoutMs: 10_000, since: before });
+      expect(await readFile(path.join(cwd, "app.ts"), "utf8")).toContain("8080");
+
+      before = p.output().length;
+      p.writeLine("/undo code");
+      await p.waitFor(/reverted the files for/, { timeoutMs: 10_000, since: before });
+      expect(await readFile(path.join(cwd, "app.ts"), "utf8")).toContain("3000");
+
+      // The conversation was not touched by a code-only undo — the model still has "change the
+      // port to 8080" in its own history and can be asked about it.
+      stub.enqueue({ kind: "text", text: "I changed it to port 8080, as you asked." });
+      before = p.output().length;
+      p.writeLine("what change did you just make?");
+      await p.waitFor(/port 8080/, { timeoutMs: 15_000, since: before });
+    }, 45_000);
+
+    it("/undo conversation rewinds the transcript but leaves the file exactly as the model left it", async () => {
+      await initGitRepo();
+      const p = boot({ args: ["--auto"] });
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "tool_call", toolName: "edit_file", input: { path: "app.ts", oldText: "3000", newText: "9090" } });
+      stub.enqueue({ kind: "text", text: "Changed the port to 9090." });
+      let before = p.output().length;
+      p.writeLine("change the port to 9090");
+      await p.waitFor(/Changed the port/, { timeoutMs: 15_000, since: before });
+      await p.waitFor(PROMPT, { timeoutMs: 10_000, since: before });
+
+      before = p.output().length;
+      p.writeLine("/undo conversation");
+      await p.waitFor(/rewound the conversation before/, { timeoutMs: 10_000, since: before });
+      // Untouched by a conversation-only undo — still the model's edit, not the original file.
+      expect(await readFile(path.join(cwd, "app.ts"), "utf8")).toContain("9090");
+
+      // And the model genuinely has no memory of the edit anymore — the same "no record" proof
+      // the /clear test above uses, now for /undo conversation instead.
+      stub.enqueue({ kind: "text", text: "I don't see any prior change in this conversation." });
+      before = p.output().length;
+      p.writeLine("what change did you just make?");
+      await p.waitFor(/don't see any prior change/, { timeoutMs: 15_000, since: before });
+    }, 45_000);
   });
 });

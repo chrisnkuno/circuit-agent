@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolCall } from "../agent-runtime";
+import { isFindDelete, isRecursiveForceRemoval } from "./command";
 
 export type SensitiveCategory =
   | "credentials"
@@ -19,7 +20,13 @@ type Rule = { category: SensitiveCategory; reason: string; pattern: RegExp };
 
 const TASK_RULES: Rule[] = [
   { category: "credentials", reason: "credentials or secrets", pattern: /\b(?:set|add|store|save|copy|export|expose|reveal|rotate|revoke|replace|use)\b.{0,45}\b(?:api[ _-]?key|access[ _-]?token|auth[ _-]?token|password|private[ _-]?key|secret|credential)s?\b/i },
-  { category: "destructive", reason: "destructive data or repository operation", pattern: /(?:\brm\s+-[^\n]*[rf]|\b(?:delete|drop|erase|purge|truncate|wipe|destroy|reset)\b.{0,45}\b(?:all|database|table|records?|history|account|branch|repository|production|live)\b)/i },
+  // The `rm` branch covers short-flag (`-rf`) and long-flag (`--recursive`, `--force`) spellings
+  // separately, in either order, since an objective naming the command at all is worth a preflight
+  // confirmation regardless of which GNU flag style it used to say "recursive" or "force". The
+  // negative lookbehind excludes `git rm` specifically — an everyday, safe operation (it removes a
+  // *tracked* file, recoverable from history) that a bare substring match on "rm -rf" would
+  // otherwise flag as if it were the destructive filesystem command.
+  { category: "destructive", reason: "destructive data or repository operation", pattern: /(?:(?<!git\s)\brm\s+[^\n]*(?:-[^\n]*[rf]\b|--recursive|--force)|\bfind\s+[^\n]*-delete\b|\b(?:delete|drop|erase|purge|truncate|wipe|destroy|reset)\b.{0,45}\b(?:all|database|table|records?|history|account|branch|repository|production|live)\b)/i },
   { category: "production", reason: "production deployment or release", pattern: /\b(?:deploy|publish|release|promote|roll\s*out|push)\b.{0,45}\b(?:production|prod|live|registry|npm|pypi|app store|play store)\b|\b(?:npm|pnpm|yarn)\s+publish\b/i },
   { category: "financial", reason: "financial transaction", pattern: /\b(?:charge|refund|transfer|withdraw|purchase|pay|payout)\b.{0,45}\b(?:money|funds?|card|customer|account|invoice|payment|subscription|\$|usd|eur|gbp)\b/i },
   { category: "external", reason: "external communication or publication", pattern: /\b(?:send|email|message|post|publish|submit|merge)\b.{0,45}\b(?:customer|user|client|public|email|message|notification|pull request|social|production)\b/i },
@@ -28,7 +35,10 @@ const TASK_RULES: Rule[] = [
 ];
 
 const COMMAND_RULES: Rule[] = [
-  { category: "destructive", reason: "destructive shell command", pattern: /\b(?:rm\s+-[^\n]*[rf]|git\s+(?:reset\s+--hard|clean\s+-[^\n]*f)|drop\s+(?:database|table)|truncate\s+table|kubectl\s+delete|terraform\s+destroy)\b/i },
+  // `rm` is deliberately absent here — see isRecursiveForceRemoval below, which checks the actual
+  // program being run rather than matching the substring "rm -rf" anywhere, including inside the
+  // ordinary and safe `git rm -rf <tracked-file>`.
+  { category: "destructive", reason: "destructive shell command", pattern: /\b(?:git\s+(?:reset\s+--hard|clean\s+-[^\n]*f)|drop\s+(?:database|table)|truncate\s+table|kubectl\s+delete|terraform\s+destroy)\b/i },
   { category: "credentials", reason: "command reads or changes credentials", pattern: /\b(?:printenv|env|cat|type|more)\b[^\n]*(?:\.env|credentials?|secrets?|\.pem|id_rsa)|\b(?:secret|secrets)\s+(?:set|put|create|delete)|\b(?:set|export)\s+[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)=/i },
   { category: "production", reason: "deployment or package publication command", pattern: /\b(?:npm|pnpm|yarn|bun|uv|poetry|twine|cargo)\s+(?:publish|release)\b|\b(?:vercel(?:\s+deploy)?\s+--prod|(?:fly|railway|render|netlify|firebase)\s+(?:deploy|up|release))|\bkubectl\s+(?:apply|replace|patch|rollout)|\bterraform\s+apply\b|\bgit\s+push\b/i },
   { category: "external", reason: "network mutation or external publication", pattern: /\bcurl\b[^\n]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b|\bgh\s+pr\s+(?:create|merge|close)|\bgh\s+release\s+create\b/i },
@@ -66,6 +76,12 @@ export function assessToolSafety(call: AgentToolCall, tool: AgentTool): SafetyAs
     const rule = COMMAND_RULES.find((candidate) => candidate.reason === reason)!;
     add(rule.category, reason);
   }
+  // The regex above only recognizes `rm -rf` in that literal short-flag spelling. Reordered
+  // (`-fr`), long-form (`--recursive --force`) and `find ... -delete` all bypassed it in a live
+  // probe — meaning auto mode would have run any of them with no confirmation at all. Checked by
+  // token, not pattern, so flag order and spelling cannot matter to it the way they mattered here.
+  if (isRecursiveForceRemoval(command)) add("destructive", "recursive, forced file removal");
+  if (isFindDelete(command)) add("destructive", "find with -delete, as thorough a wipe as rm -rf");
 
   const path = typeof args.path === "string" ? args.path : "";
   if (SENSITIVE_PATH.test(path)) add("credentials", "sensitive credential or environment file");

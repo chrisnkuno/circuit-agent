@@ -24,10 +24,10 @@ describe("provider matrix", () => {
     if ("error" in resolved) return;
 
     expect(resolved.spec.id).toBe("anthropic");
-    expect(resolved.model).toBe("claude-opus-5");
+    expect(resolved.model).toBe("claude-sonnet-5");
     expect(resolved.prices?.currency).toBe("USD");
-    // $5 per million input tokens, held in micros.
-    expect(resolved.prices?.inputPerMillion).toBe(5_000_000);
+    // $2 per million input tokens (introductory rate), held in micros.
+    expect(resolved.prices?.inputPerMillion).toBe(2_000_000);
   });
 
   it("actually constructs OpenAI and CircuitNotion's own turn provider, not just Anthropic's", () => {
@@ -51,7 +51,7 @@ describe("provider matrix", () => {
 
   it("prefers a configured rate over the published catalog", () => {
     // A negotiated rate is real; a list price is only a default.
-    const prices = resolvePrices(PROVIDERS.anthropic, "claude-opus-5", {
+    const prices = resolvePrices(PROVIDERS.anthropic, "claude-sonnet-5", {
       MODEL_PRICE_CURRENCY: "RWF",
       MODEL_INPUT_PER_MILLION: "2000",
       MODEL_OUTPUT_PER_MILLION: "8000",
@@ -64,7 +64,7 @@ describe("provider matrix", () => {
     // The `/model` hazard: a rate set for the configured model used to follow the session onto
     // whatever it switched to, still producing a confident number against the wrong rate card.
     const environment = { MODEL_PRICE_CURRENCY: "RWF", MODEL_INPUT_PER_MILLION: "2000", MODEL_OUTPUT_PER_MILLION: "8000" };
-    expect(resolvePrices(PROVIDERS.anthropic, "claude-opus-5", environment)?.currency).toBe("RWF");
+    expect(resolvePrices(PROVIDERS.anthropic, "claude-sonnet-5", environment)?.currency).toBe("RWF");
     const switched = resolvePrices(PROVIDERS.anthropic, "claude-haiku-4-5", environment);
     expect(switched?.currency).toBe("USD");
     expect(switched?.inputPerMillion).toBe(1_000_000);
@@ -73,8 +73,8 @@ describe("provider matrix", () => {
   it("lets an override name the model it prices", () => {
     const environment = { MODEL_PRICE_MODEL: "claude-haiku-4-5", MODEL_INPUT_PER_MILLION: "2", MODEL_OUTPUT_PER_MILLION: "8" };
     expect(resolvePrices(PROVIDERS.anthropic, "claude-haiku-4-5", environment)?.inputPerMillion).toBe(2_000_000);
-    // ...and only that model: the default model falls back to the catalog's $5/M.
-    expect(resolvePrices(PROVIDERS.anthropic, "claude-opus-5", environment)?.inputPerMillion).toBe(5_000_000);
+    // ...and only that model: the default model falls back to the catalog's introductory $2/M.
+    expect(resolvePrices(PROVIDERS.anthropic, "claude-sonnet-5", environment)?.inputPerMillion).toBe(2_000_000);
   });
 
   it("prices a dated model at the rate in force on the day asked about", () => {

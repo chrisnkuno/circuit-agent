@@ -4,7 +4,13 @@ import type { Expense } from "./cost";
 import type { NovaWorkspace } from "./backends";
 export { runShellCommand } from "./command";
 export type { CommandRunner } from "./command";
+import { isFindDelete, isRecursiveForceRemoval } from "./command";
+import type { HookRegistry } from "./hooks";
+import { NestedInstructionTracker } from "./nested-instructions";
 import { NOVA_CAPABILITIES } from "./permissions";
+import { assertSupportedSchema, validateToolArguments, type ToolInputSchema } from "./tool-schema";
+import type { ToolProvider } from "./tool-providers";
+import { collectExternalTools } from "./tool-providers";
 
 /**
  * Nova CLI's tool set.
@@ -87,6 +93,12 @@ export type NovaToolOptions = {
   fetchImpl?: typeof fetch;
   /** Ceiling for a single `run_command` call. */
   commandTimeoutMs?: number;
+  /** Surfaces a directory's own instructions the first time a tool reaches it. See nested-instructions.ts. */
+  instructions?: NestedInstructionTracker;
+  /** Skills, MCP servers and plugins — anything offering tools Nova did not ship with. See tool-providers.ts. */
+  externalToolProviders?: ToolProvider[];
+  /** Pre/post tool-call interception. See hooks.ts. Applied to every tool, built-in and external alike. */
+  hooks?: HookRegistry;
 };
 
 function requiredString(value: unknown, name: string): string {
@@ -100,20 +112,29 @@ function optionalInteger(value: unknown, name: string): number | undefined {
   return value as number;
 }
 
-/** Commands that end a session's worth of work in one keystroke. Refused rather than approved. */
+/**
+ * Commands that end a session's worth of work in one keystroke. Refused rather than approved.
+ *
+ * `rm` and `find -delete` are deliberately not regex here — they were, and a substring match on
+ * `rm\s+-[^\n]*[rf]` refused `git rm -rf old-directory`, an ordinary, safe, everyday operation that
+ * removes a *tracked* file (fully recoverable from history), because the text "rm -rf" appears
+ * inside it. `isRecursiveForceRemoval`/`isFindDelete` check what program is actually being run —
+ * `rm` as git's subcommand and `rm` as the filesystem command are not the same operation, and only
+ * a check that knows the difference can refuse one without refusing the other.
+ */
 const REFUSED_COMMAND_PATTERNS = [
-  /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf]/,
   /\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f|checkout\s+--\s+\.)/,
   /\bmkfs\b|\bdd\s+if=/,
   />\s*\/dev\/sd[a-z]/,
   /:\(\)\s*\{.*\|.*&\s*\}\s*;/,
 ];
-
 export function isRefusedCommand(command: string): boolean {
-  return REFUSED_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
+  return REFUSED_COMMAND_PATTERNS.some((pattern) => pattern.test(command))
+    || isRecursiveForceRemoval(command)
+    || isFindDelete(command);
 }
 
-export function createNovaTools(options: NovaToolOptions): AgentTool[] {
+export async function createNovaTools(options: NovaToolOptions): Promise<AgentTool[]> {
   const { workspace, todos } = options;
   const commandTimeoutMs = options.commandTimeoutMs ?? 120_000;
 
@@ -141,7 +162,10 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
           limit: optionalInteger(args.limit, "limit"),
         });
         const header = result.truncated ? `${result.path} (lines ${result.startLine}-${result.startLine + result.content.split("\n").length - 1} of ${result.totalLines})\n` : "";
-        return { content: `${header}${result.content}` };
+        return {
+          content: `${header}${result.content}`,
+          data: { path: result.path, startLine: result.startLine, totalLines: result.totalLines, truncated: result.truncated },
+        };
       },
     },
     {
@@ -159,7 +183,7 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
       async execute(args) {
         const prefix = typeof args.path === "string" && args.path.trim() && args.path !== "." ? args.path.replace(/^\.\//, "").replace(/\/$/, "") : "";
         const entries = await workspace.list(prefix, optionalInteger(args.depth, "depth") ?? 2);
-        return { content: entries.length > 0 ? entries.join("\n") : "No entries." };
+        return { content: entries.length > 0 ? entries.join("\n") : "No entries.", data: { entries } };
       },
     },
     {
@@ -172,7 +196,7 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
       parallelSafe: true,
       async execute(args) {
         const matches = await workspace.glob(requiredString(args.pattern, "pattern"));
-        return { content: matches.length > 0 ? matches.join("\n") : "No files matched." };
+        return { content: matches.length > 0 ? matches.join("\n") : "No files matched.", data: { matches } };
       },
     },
     {
@@ -197,8 +221,11 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
           include: typeof args.include === "string" ? args.include : undefined,
           regex: args.regex === true,
         });
-        if (matches.length === 0) return { content: "No matches." };
-        return { content: matches.map((match) => `${match.path}:${match.line}: ${match.text}`).join("\n") };
+        if (matches.length === 0) return { content: "No matches.", data: { matches: [] } };
+        return {
+          content: matches.map((match) => `${match.path}:${match.line}: ${match.text}`).join("\n"),
+          data: { matches: matches.map((match) => ({ path: match.path, line: match.line, text: match.text })) },
+        };
       },
     },
     {
@@ -216,7 +243,7 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
       parallelSafe: false,
       async execute(args) {
         const result = await workspace.writeFile(requiredString(args.path, "path"), args.content as string);
-        return { content: `Wrote ${result.path} (${result.bytesWritten} bytes).` };
+        return { content: `Wrote ${result.path} (${result.bytesWritten} bytes).`, data: { path: result.path, bytesWritten: result.bytesWritten } };
       },
     },
     {
@@ -241,7 +268,10 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
         const result = await workspace.editFile(requiredString(args.path, "path"), args.oldText as string, args.newText as string, {
           replaceAll: args.replaceAll === true,
         });
-        return { content: `Edited ${result.path} (${result.replacements} replacement${result.replacements === 1 ? "" : "s"}).` };
+        return {
+          content: `Edited ${result.path} (${result.replacements} replacement${result.replacements === 1 ? "" : "s"}).`,
+          data: { path: result.path, replacements: result.replacements },
+        };
       },
     },
     {
@@ -267,13 +297,16 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
         const timeoutMs = Math.min(optionalInteger(args.timeoutMs, "timeoutMs") ?? commandTimeoutMs, commandTimeoutMs);
         const result = await workspace.runCommand(command, timeoutMs);
         const body = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || "(no output)";
+        const kind = classifyVerification(command);
         return {
           content: `exit ${result.exitCode}\n${body}`,
           isError: result.exitCode !== 0,
+          data: { command, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, ...(kind ? { verificationKind: kind } : {}) },
           // A passing test command is the evidence the runtime needs before it will call a
-          // workspace-changing run complete.
-          verification: looksLikeVerification(command) && result.exitCode === 0
-            ? { passed: true, scope: "targeted" as const, summary: `${command} exited 0` }
+          // workspace-changing run complete. The kind travels with it, so the runtime can tell a
+          // behavioural result apart from a build that only proves the code compiles.
+          verification: kind && result.exitCode === 0
+            ? { passed: true, kind, scope: "targeted" as const, summary: `${command} exited 0` }
             : undefined,
         };
       },
@@ -398,8 +431,66 @@ export function createNovaTools(options: NovaToolOptions): AgentTool[] {
     });
   }
 
-  return tools;
+  // External tools (skills, MCP, plugins) are merged in before the final wrap below, so schema
+  // validation, path-instruction surfacing and hook interception all apply to them exactly as they
+  // do to every built-in tool — one wrapping point a tool cannot reach around, regardless of where
+  // it came from.
+  if (options.externalToolProviders && options.externalToolProviders.length > 0) {
+    const builtInNames = new Set(tools.map((tool) => tool.name));
+    for (const externalTool of await collectExternalTools(options.externalToolProviders)) {
+      if (builtInNames.has(externalTool.name)) throw new Error(`Tool name '${externalTool.name}' collides with a built-in Nova tool`);
+      tools.push(externalTool);
+    }
+  }
+
+  // Schema validation is applied here, once, rather than inside each `execute`. Wrapping every
+  // tool on the way out is what makes it impossible for a tool — including one added later — to be
+  // reachable without it, which is the property that stops the schema and the code drifting apart
+  // again. `assertSupportedSchema` runs now so an unvalidatable schema fails at construction
+  // rather than passing everything through at run time.
+  const instructions = options.instructions;
+  const hooks = options.hooks;
+  return tools.map((tool) => {
+    assertSupportedSchema(tool.name, tool.inputSchema);
+    const schema = tool.inputSchema as ToolInputSchema;
+    const execute = tool.execute.bind(tool);
+    // `async` so a rejected argument surfaces as a rejected promise rather than a synchronous
+    // throw. `execute` is declared to return a promise, and a caller that only guards `await`
+    // would otherwise be bypassed by the one failure mode it most needs to catch.
+    const withValidatedArguments = async (argumentsValue: Record<string, unknown>, context: Parameters<AgentTool["execute"]>[1]) =>
+      execute(validateToolArguments(tool.name, schema, argumentsValue), context);
+    const withInstructions =
+      !instructions || !PATH_TOOLS.has(tool.name)
+        ? withValidatedArguments
+        : // The one place every path-taking tool passes through, which is what makes "surface a
+          // directory's instructions the first time any tool reaches it" true regardless of which of
+          // the three tools got there first.
+          async (argumentsValue: Record<string, unknown>, context: Parameters<AgentTool["execute"]>[1]) => {
+            const result = await withValidatedArguments(argumentsValue, context);
+            const touchedPath = typeof argumentsValue.path === "string" ? argumentsValue.path : undefined;
+            if (!touchedPath || result.isError) return result;
+            const note = NestedInstructionTracker.render(await instructions.discover(touchedPath));
+            return note ? { ...result, content: `${result.content}${note}` } : result;
+          };
+    if (!hooks) return { ...tool, execute: withInstructions };
+    return {
+      ...tool,
+      // Outermost: hooks see the same validated arguments and final content (including any
+      // nested-instruction note) that everything else in the pipeline already agreed on.
+      async execute(argumentsValue, context) {
+        const preOutcome = await hooks.runPreToolUse(tool.name, argumentsValue);
+        if (preOutcome.blocked) return { content: `Blocked by hook: ${preOutcome.reason}`, isError: true };
+        const result = await withInstructions(argumentsValue, context);
+        const warnings = await hooks.runPostToolUse(tool.name, argumentsValue, { content: result.content, isError: result.isError ?? false });
+        if (warnings.length === 0) return result;
+        return { ...result, content: `${result.content}\n\n--- post-tool-use hook warnings ---\n${warnings.join("\n")}` };
+      },
+    };
+  });
 }
+
+/** Tools whose `path` argument names the file or directory whose instructions matter. */
+const PATH_TOOLS = new Set(["read_file", "write_file", "edit_file"]);
 
 /** Accepts an array of ids or a bare id, because both are things a model will send. */
 function idList(value: unknown, name: string): number[] {
@@ -418,18 +509,39 @@ function renderTodos(items: TodoItem[]): string {
 }
 
 /**
- * Whether a command's *success* is evidence the workspace change it followed actually works.
+ * How strong a command's success is as evidence that a workspace change actually works.
  *
- * Observed missing in practice: `python3 -m py_compile file.py` after writing a script is exactly
- * this kind of evidence — it is a real syntax check — but matched none of the original keywords,
- * so the runtime reported `needs_verification` on a turn that had, in fact, been verified. `lint`
- * as a bare word also never matched an invocation like `eslint .`, since "eslint" has no word
- * boundary before "lint". The list below is deliberately generous: a false "counts as verification"
- * only matters if the command also exits non-zero and gets ignored, which `run_command` cannot do
- * silently — its exit code is always shown.
+ * The two are not interchangeable, and collapsing them was hiding a real failure mode: a passing
+ * `tsc` says the code *parses and type-checks*, not that it does what was asked. An agent that
+ * edits logic and then runs only a build has verified nothing about behaviour, but the gate could
+ * not tell that apart from a full test run.
+ *
+ * - `tests` — executed behaviour. The only evidence that a change does what it claims.
+ * - `check` — types, syntax, lint, build. Real evidence, strictly weaker: necessary, never
+ *   sufficient for a change to logic.
+ *
+ * The patterns are deliberately generous. Observed missing in practice: `python3 -m py_compile
+ * file.py` after writing a script is a real syntax check but matched none of the original
+ * keywords, so a verified turn reported `needs_verification`. `lint` as a bare word never matched
+ * `eslint .`, since "eslint" has no word boundary before "lint". A false positive only matters if
+ * the command also exits non-zero and gets ignored, which `run_command` cannot do silently — its
+ * exit code is always shown.
  */
+export type VerificationKind = "tests" | "check";
+
+/** Runners whose names embed a word boundary the bare word "test" cannot match (e.g. `vitest`). */
+const TEST_COMMAND = /\b(tests?|pytest|jest|vitest|mocha|jasmine|karma|ava|rspec|minitest|phpunit|pest|junit|gotestsum|nose2|unittest|testthat|ctest|gradlew?\s+test|xctest)\b/i;
+const CHECK_COMMAND = /\b(typecheck|tsc|lint|eslint|pylint|ruff|flake8|mypy|pyright|check|build|compile|py_compile|vet|clippy|rubocop|audit|fmt|format)\b/i;
+
+/** The strongest kind of evidence a command provides, or null when it verifies nothing. */
+export function classifyVerification(command: string): VerificationKind | null {
+  if (TEST_COMMAND.test(command)) return "tests";
+  if (CHECK_COMMAND.test(command)) return "check";
+  return null;
+}
+
 export function looksLikeVerification(command: string): boolean {
-  return /\b(test|tests|pytest|jest|vitest|mocha|typecheck|tsc|lint|eslint|pylint|ruff|flake8|mypy|pyright|check|build|compile|py_compile|vet|clippy|rubocop|audit)\b/.test(command);
+  return classifyVerification(command) !== null;
 }
 
 function stripMarkup(html: string): string {

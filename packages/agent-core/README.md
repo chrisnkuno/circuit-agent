@@ -38,6 +38,6 @@ Both are lazy-loaded — importing this package doesn't require either unless yo
 
 ## Requirements
 
-Node 20 or newer.
+Node 22.5 or newer.
 
 MIT licensed.

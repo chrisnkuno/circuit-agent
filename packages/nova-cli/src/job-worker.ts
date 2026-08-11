@@ -64,12 +64,29 @@ export function detachedApprovalPrompt(options: {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   return async (request) => {
-    await requestJobApproval(options.root, options.jobId, options.ownerId, { summary: request.summary, toolName: request.tool.name });
+    // The whole request crosses the process boundary, not a summary of it. The digest is what the
+    // decision is bound to at every later step, so a human's answer authorizes this exact call and
+    // nothing that replaces it.
+    const parked = await requestJobApproval(options.root, options.jobId, options.ownerId, {
+      summary: request.summary,
+      toolName: request.tool.name,
+      toolCallId: request.call.id,
+      actionDigest: request.actionDigest,
+      scopeKey: request.scopeKey,
+      policyVersion: request.policyVersion,
+      effect: request.tool.effect,
+      capabilityId: request.tool.capabilityId,
+    });
+    // Refused parking means this digest was already executed under an earlier decision. Re-running
+    // it would be a second execution of a single authorization.
+    if (!parked) return "deny";
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       await sleep(pollMs);
-      const decision = await consumeJobApproval(options.root, options.jobId, options.ownerId);
-      if (decision) return decision;
+      const collected = await consumeJobApproval(options.root, options.jobId, options.ownerId);
+      // The final check on this side of the boundary: a decision that names a different action is
+      // not an answer to this request, whatever it says.
+      if (collected) return collected.actionDigest === request.actionDigest ? collected.decision : "deny";
       if (Date.now() >= deadline) return "deny";
     }
   };

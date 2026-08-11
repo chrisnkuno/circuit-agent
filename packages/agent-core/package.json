@@ -31,7 +31,7 @@
     "!dist/**/*.tsbuildinfo"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5"
   },
   "dependencies": {
     "openai": "^6.49.0",

@@ -34,7 +34,7 @@ export { hasShellSyntax, tokenizeCommand } from "./command";
  * twice.
  */
 export interface NovaWorkspace {
-  readonly kind: "local" | "e2b";
+  readonly kind: "local" | "e2b" | "docker";
   /** Shown in the prompt and the CLI header, so nobody is unsure where files are landing. */
   readonly label: string;
   /** Backend-specific truth appended to run_command's description. */
@@ -94,7 +94,12 @@ export class LocalWorkspace implements NovaWorkspace {
   }
 
   runCommand(command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return this.runner(command, { cwd: this.root, timeoutMs });
+    return this.runner(command, {
+      cwd: this.root,
+      timeoutMs,
+      strictEnvironment: this.limits.strictCommandEnvironment,
+      containProcessTree: this.limits.containProcessTree,
+    });
   }
 
   async dispose(): Promise<void> {}
@@ -119,27 +124,35 @@ export type E2BWorkspaceOptions = {
 };
 
 /**
- * A remote E2B sandbox, for when the work should not touch the developer's machine.
+ * A remote sandbox, for when the work should not touch the developer's machine.
+ *
+ * Not exported directly — `E2BWorkspace` and `DockerWorkspace` are it, each fixing which sandbox
+ * `kind` they report and what their label is prefixed with. Everything else about a sandboxed
+ * workspace is provider-neutral already, because `InteractiveCodingSandboxProvider` (the boundary
+ * this reads and writes through) is: whichever provider `options.sandbox` actually is, this class
+ * cannot tell and does not need to. Two subclasses that were otherwise-identical copies of one
+ * another is exactly the drift "unified execution semantics" means to rule out — a fix applied
+ * here reaches both backends by construction, not by remembering to make it twice.
  *
  * Search is the interesting part: `grep` is not on the sandbox allowlist, so content search runs
  * through `rg`, and file discovery runs through `find` with the matching done locally by the same
  * tested glob matcher the local backend uses. Reusing that matcher is what keeps `**\/*.ts` mean
- * the same thing in both backends rather than "whatever the remote tool happened to support".
+ * the same thing in every backend rather than "whatever the remote tool happened to support".
  */
-export class E2BWorkspace implements NovaWorkspace {
-  readonly kind = "e2b" as const;
+abstract class SandboxWorkspace implements NovaWorkspace {
+  abstract readonly kind: "e2b" | "docker";
   readonly commandGuidance =
     "Runs in an isolated remote sandbox as argv, not through a shell: pipes, redirection and command chaining are unavailable, and only allowlisted programs (node, python3, npm, git, rg, ls, find, pytest, cargo, go, bun, uv) may run.";
 
   private readonly limits: WorkspaceLimits;
 
   constructor(private readonly options: E2BWorkspaceOptions) {
-    if (!options.workspaceRoot.startsWith("/workspace")) throw new WorkspaceViolation("E2B workspace root must be inside /workspace");
+    if (!options.workspaceRoot.startsWith("/workspace")) throw new WorkspaceViolation("Sandbox workspace root must be inside /workspace");
     this.limits = options.limits ?? DEFAULT_WORKSPACE_LIMITS;
   }
 
   get label(): string {
-    return `e2b:${this.options.sandboxId}:${this.options.workspaceRoot}`;
+    return `${this.kind}:${this.options.sandboxId}:${this.options.workspaceRoot}`;
   }
 
   /** Same confinement rule as local, against the sandbox root instead of the project root. */
@@ -270,6 +283,25 @@ export class E2BWorkspace implements NovaWorkspace {
 
   async dispose(): Promise<void> {
     await this.options.onDispose?.(this.options.sandboxId);
+  }
+}
+
+/** A remote E2B sandbox. All behaviour lives in `SandboxWorkspace`; this fixes `kind` and `label`. */
+export class E2BWorkspace extends SandboxWorkspace {
+  readonly kind = "e2b" as const;
+  constructor(options: E2BWorkspaceOptions) {
+    super(options);
+  }
+}
+
+/** Options are identical to E2B's — both wrap the same `InteractiveCodingSandboxProvider`. */
+export type DockerWorkspaceOptions = E2BWorkspaceOptions;
+
+/** A local Docker container as the sandbox, via `DockerSandboxProvider`. Otherwise identical to E2B. */
+export class DockerWorkspace extends SandboxWorkspace {
+  readonly kind = "docker" as const;
+  constructor(options: DockerWorkspaceOptions) {
+    super(options);
   }
 }
 

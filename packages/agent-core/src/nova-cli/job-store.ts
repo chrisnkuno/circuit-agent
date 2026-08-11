@@ -13,6 +13,8 @@ import {
   requestApproval,
   resolveApproval,
   summarize,
+  type ApprovalDecision,
+  type ApprovalRequest,
   type CompletionOptions,
   type EnqueueOptions,
   type Job,
@@ -146,24 +148,28 @@ export async function cancelJob(root: string, id: string): Promise<{ ok: boolean
   });
 }
 
-export async function requestJobApproval(root: string, id: string, workerId: string, request: { summary: string; toolName: string }): Promise<boolean> {
+export async function requestJobApproval(root: string, id: string, workerId: string, request: ApprovalRequest): Promise<boolean> {
   return withJobs(root, (store, now) => {
     const outcome = requestApproval(store, id, workerId, request, now);
     return { store: outcome.store, result: outcome.ok };
   });
 }
 
-export async function resolveJobApproval(root: string, id: string, decision: NonNullable<Job["approvalDecision"]>): Promise<boolean> {
+/** The digest names the action being answered; a decision for anything else is refused. */
+export async function resolveJobApproval(root: string, id: string, decision: ApprovalDecision, actionDigest: string): Promise<boolean> {
   return withJobs(root, (store, now) => {
-    const outcome = resolveApproval(store, id, decision, now);
+    const outcome = resolveApproval(store, id, decision, actionDigest, now);
     return { store: outcome.store, result: outcome.ok };
   });
 }
 
-export async function consumeJobApproval(root: string, id: string, workerId: string): Promise<Job["approvalDecision"] | undefined> {
+export async function consumeJobApproval(root: string, id: string, workerId: string): Promise<{ decision: ApprovalDecision; actionDigest: string } | undefined> {
   return withJobs(root, (store, now) => {
     const outcome = consumeApproval(store, id, workerId, now);
-    return { store: outcome.store, result: outcome.decision };
+    return {
+      store: outcome.store,
+      result: outcome.decision && outcome.actionDigest ? { decision: outcome.decision, actionDigest: outcome.actionDigest } : undefined,
+    };
   });
 }
 

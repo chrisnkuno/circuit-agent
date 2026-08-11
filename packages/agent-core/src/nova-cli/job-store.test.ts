@@ -103,12 +103,21 @@ describe("the whole lease lifecycle through the file", () => {
   it("carries an approval through requestJobApproval / resolveJobApproval / consumeJobApproval", async () => {
     const job = await enqueueJob(root, { id: newJobId(), objective: "deploy", logPath: "l" });
     await claimJob(root, "worker-1", 60_000);
-    expect(await requestJobApproval(root, job.id, "worker-1", { summary: "run terraform apply", toolName: "run_command" })).toBe(true);
+    const request = {
+      summary: "run terraform apply", toolName: "run_command", toolCallId: "c1",
+      actionDigest: "digest-apply", scopeKey: "nova-approval-v1:digest-apply", policyVersion: "nova-approval-v1",
+      effect: "workspace" as const, capabilityId: "workspace.terminal",
+    };
+    expect(await requestJobApproval(root, job.id, "worker-1", request)).toBe(true);
     expect((await getJob(root, job.id))?.status).toBe("paused");
 
-    expect(await resolveJobApproval(root, job.id, "allow")).toBe(true);
-    expect(await consumeJobApproval(root, job.id, "worker-1")).toBe("allow");
+    // A decision aimed at a different action does not survive the round trip through the file.
+    expect(await resolveJobApproval(root, job.id, "allow", "digest-something-else")).toBe(false);
+    expect(await resolveJobApproval(root, job.id, "allow", "digest-apply")).toBe(true);
+    expect(await consumeJobApproval(root, job.id, "worker-1")).toEqual({ decision: "allow", actionDigest: "digest-apply" });
     expect((await getJob(root, job.id))?.status).toBe("running");
+    // Spent: the same action cannot be parked, approved and run a second time.
+    expect(await requestJobApproval(root, job.id, "worker-1", request)).toBe(false);
   });
 
   it("detaches and cancels through the file", async () => {

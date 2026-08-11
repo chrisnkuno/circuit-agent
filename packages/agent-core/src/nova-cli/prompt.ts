@@ -26,7 +26,7 @@ export type ProjectContext = {
   gitBranch: string | null;
 };
 
-const INSTRUCTION_FILES = ["AGENTS.override.md", "NOVA.md", "AGENTS.md", "CLAUDE.md", ".novarules"];
+export const INSTRUCTION_FILES = ["AGENTS.override.md", "NOVA.md", "AGENTS.md", "CLAUDE.md", ".novarules"];
 
 async function instructionBoundary(root: string): Promise<string> {
   const requestedRoot = path.resolve(root);
@@ -154,6 +154,14 @@ export function buildNovaSystemPrompt(context: ProjectContext, mode: NovaMode, t
       "- Prefer edit_file over write_file for existing files. Never reproduce a whole file to change part of it.",
       "- Match the surrounding code: its naming, its structure, its idioms, its comment density. Code that reads as foreign is code that gets reverted.",
       "- Verify your work by running the project's own tests or checks, and report the real result. Never describe an outcome you did not observe.",
+      [
+        "- Test by invariant, not by example. Every change that has behaviour gets tests, however small the program:",
+        "assert the properties that must hold for all valid inputs — round-trips (decode(encode(x)) == x), bounds and ordering,",
+        "conservation (totals that must balance), idempotence, and the error cases that must fail — rather than one happy-path value.",
+        "Cover the boundaries you can name: empty, single, maximum, duplicate, out-of-range, malformed, and unicode where text is involved.",
+        "A passing typecheck or build is not a test; it proves the code compiles, not that it is correct.",
+      ].join(" "),
+      "- When you change existing behaviour, first write or identify the test that fails for the old behaviour and passes for the new one. A test that passes before and after proves nothing about your change.",
       "- For anything with more than two steps, call todo_write once at the start. Update it in batches — pass arrays to complete and start — and never call it again just to restate an unchanged list; every call is a full round trip that costs the user time and money.",
       "- Batch independent reads and searches into one turn. Reading four files as four parallel calls is one round trip; four separate turns is four.",
       "- Read tool results carefully. An error is information about the problem, not a reason to try the same thing again.",

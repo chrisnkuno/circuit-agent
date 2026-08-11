@@ -2,8 +2,66 @@ import { spawn } from "node:child_process";
 
 export type CommandRunner = (
   command: string,
-  options: { cwd: string; timeoutMs: number },
+  options: { cwd: string; timeoutMs: number; strictEnvironment?: boolean; containProcessTree?: boolean },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+/**
+ * Nova's own provider credentials, read directly from the code that reads them — not a second,
+ * hand-maintained list. Every one of these is something Nova holds on the user's behalf and a
+ * spawned command has no legitimate reason to see: unlike a project's own `.env`-loaded secrets
+ * (the user's own choice, made before Nova ever ran), these are Nova's, and leaking them is a
+ * defect regardless of what the command was asked to do with them.
+ *
+ * Verified live before this existed: `runCommand({ command: "env" })` printed
+ * `ANTHROPIC_API_KEY=sk-ant-...` in full, because `child_process.spawn` inherits the entire
+ * parent environment by default and nothing here overrode that.
+ */
+export const NOVA_CREDENTIAL_ENV_NAMES = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "CIRCUITNOTION_API_KEY",
+  "CIRCUITNOTION_RELAY_SECRET",
+  "E2B_API_KEY",
+  "EXA_API_KEY",
+] as const;
+
+/**
+ * Credential-shaped variable names generically — `*_TOKEN`, `*_SECRET`, and so on — for a caller
+ * that wants more than "not Nova's own keys." Off by default: a project's own `GITHUB_TOKEN` or
+ * `DATABASE_PASSWORD`, exported into the shell before Nova ever started, is the user's own choice
+ * about their own environment, not a leak Nova is responsible for. Stripping it by default would
+ * silently break whatever legitimate local command the user actually wanted `run_command` to run.
+ */
+const SENSITIVE_SHAPED_ENV_PATTERN = /(API[_-]?KEY|ACCESS[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE[_-]?KEY)/i;
+
+export type SanitizeEnvironmentOptions = {
+  /** Also strips anything shaped like a credential, not only Nova's own known names. Default false. */
+  strict?: boolean;
+};
+
+/**
+ * The environment a locally spawned command actually receives: the parent's own environment, with
+ * Nova's credentials removed. `PATH`, `HOME`, `LANG` and everything else a command needs to run
+ * normally are untouched — none of them are shaped like a secret.
+ */
+// A plain string dict rather than `NodeJS.ProcessEnv` — this repo's Next.js types augment
+// `ProcessEnv` to require `NODE_ENV`, which every caller of a `NodeJS.ProcessEnv`-typed function
+// would then also have to satisfy for no reason connected to what this function actually does
+// (filter key/value pairs). The one place the distinction matters, handing the result to
+// `child_process.spawn`, casts at that boundary instead of infecting every caller.
+export type EnvironmentDict = Record<string, string | undefined>;
+
+export function sanitizeCommandEnvironment(
+  env: EnvironmentDict = process.env,
+  options: SanitizeEnvironmentOptions = {},
+): EnvironmentDict {
+  const sanitized: EnvironmentDict = { ...env };
+  const blocked = new Set<string>(NOVA_CREDENTIAL_ENV_NAMES);
+  for (const key of Object.keys(sanitized)) {
+    if (blocked.has(key) || (options.strict && SENSITIVE_SHAPED_ENV_PATTERN.test(key))) delete sanitized[key];
+  }
+  return sanitized;
+}
 
 /** Minimal shell-compatible tokenization for the direct-exec fast path. */
 export function tokenizeCommand(command: string, platform: NodeJS.Platform = process.platform): string[] {
@@ -36,6 +94,71 @@ export function tokenizeCommand(command: string, platform: NodeJS.Platform = pro
   if (hasToken) tokens.push(current);
   if (tokens.length === 0) throw new Error("Command is empty");
   return tokens;
+}
+
+/**
+ * Whether a token, appearing after the program name, sets a given flag — short form combined with
+ * others (`-rf`, `-fr`, `-Rf`) or long form (`--recursive`).
+ *
+ * A regex checking for `-rf` as a literal substring misses `-fr` (same flags, opposite order) and
+ * every long-form GNU spelling — three ways to ask for the same thing, and a denylist that only
+ * recognizes one of them protects against nothing but the laziest attempt. Tokenizing first and
+ * checking flag membership catches all of them the same way, because it is checking what the flag
+ * *means* rather than which of its several spellings appears in the string.
+ */
+function hasFlag(tokens: readonly string[], shortLetter: string, long: string): boolean {
+  return tokens.some((token) => {
+    if (token === long) return true;
+    if (token.startsWith("--") || !/^-[a-zA-Z]+$/.test(token)) return false;
+    return token.slice(1).includes(shortLetter);
+  });
+}
+
+/** Wrappers common enough to be worth seeing through: `sudo rm -rf /` is still `rm -rf /`. */
+const COMMAND_WRAPPERS = new Set(["sudo"]);
+
+/**
+ * The index of `program` as the actual command being run, or -1.
+ *
+ * Deliberately only position 0 (or position 1 behind a bare wrapper), never "anywhere in the
+ * token list" — the first version of this scanned every token for a match, which flagged
+ * `git rm -rf some-directory` as the destructive filesystem `rm`. It is not: `rm` there is a git
+ * subcommand for removing a *tracked* file, fully recoverable from history, and refusing it
+ * outright would be refusing an ordinary, safe operation because a substring happened to match.
+ * The command actually being executed is what its first token names, not any token that appears
+ * to resemble it.
+ */
+function programIndex(tokens: readonly string[], program: string): number {
+  if (tokens[0]?.toLowerCase() === program) return 0;
+  if (tokens[0] && COMMAND_WRAPPERS.has(tokens[0].toLowerCase()) && tokens[1]?.toLowerCase() === program) return 1;
+  return -1;
+}
+
+/**
+ * `rm` with both recursive and force in force, in any order and any spelling.
+ *
+ * Falls back to "not a match" on anything `tokenizeCommand` cannot parse (an unbalanced quote)
+ * rather than throwing — a malformed command is the caller's problem to report, not this check's
+ * to crash on, and a regex-based caller upstream of this one still gets a chance to catch it.
+ */
+export function isRecursiveForceRemoval(command: string): boolean {
+  let tokens: string[];
+  try { tokens = tokenizeCommand(command); } catch { return false; }
+  const rmIndex = programIndex(tokens, "rm");
+  if (rmIndex === -1) return false;
+  const flags = tokens.slice(rmIndex + 1);
+  const recursive = hasFlag(flags, "r", "--recursive") || hasFlag(flags, "R", "--recursive");
+  const force = hasFlag(flags, "f", "--force");
+  return recursive && force;
+}
+
+/** `find ... -delete` — as thorough a tree wipe as `rm -rf`, and unrelated to it by name alone. */
+export function isFindDelete(command: string): boolean {
+  let tokens: string[];
+  try { tokens = tokenizeCommand(command); } catch { return false; }
+  const findIndex = programIndex(tokens, "find");
+  if (findIndex === -1) return false;
+  return tokens.slice(findIndex + 1).includes("-delete");
 }
 
 const SHELL_METACHARACTERS = /[|&;><`$()]|\|\||&&/;
@@ -75,25 +198,103 @@ function terminateProcessTree(pid: number | undefined, signal: NodeJS.Signals): 
 }
 
 /**
+ * What OS-level containment for a locally spawned command does and does not cover.
+ *
+ * Covers: the process tree (this file — a PID namespace no process can escape by detaching) and
+ * the filesystem (`workspace.ts` — every path a command's arguments or a tool call can reference is
+ * resolved against the workspace root first, refusing anything that escapes it, including via `..`
+ * or an outward-pointing symlink).
+ *
+ * Does not cover network egress, and cannot from here. Blocking it requires either a privileged
+ * kernel feature this process does not have (a network namespace, iptables rules) or an unprivileged
+ * one that does not exist as a per-process knob on Linux — there is no equivalent of `unshare --pid`
+ * for "this process tree gets no sockets." When network containment actually matters, the existing
+ * E2B and Docker workspace backends are the correct place to enforce it: both already run the
+ * command in a real container, where `allowInternetAccess: false` / `--network=none` is the
+ * environment's own guarantee rather than something this process could fake from inside itself. A
+ * local command that needs network isolation should run through one of those backends, not through
+ * `LocalWorkspace` with an assurance this file cannot actually make good on.
+ */
+const CONTAINMENT_ARGS = ["--user", "--pid", "--mount-proc", "--fork", "--"] as const;
+
+let containmentAvailability: Promise<boolean> | null = null;
+
+/**
+ * Whether this machine can run a command inside a PID namespace Nova fully controls.
+ *
+ * `terminateProcessTree` kills a process *group* — every process that shares the group id it was
+ * spawned with. That misses a real case, found by actually spawning one and checking: a command
+ * that spawns its own detached grandchild (a dev server backgrounding a file watcher, or nothing
+ * more adversarial than a script calling `spawn(..., { detached: true })` the same way this
+ * codebase's own `runLocalCommand` does) puts that grandchild into a *new* process group, which a
+ * group-kill of the parent's group never reaches. It survives Nova's cancel or timeout indefinitely.
+ *
+ * `unshare --user --pid` costs nothing in privilege — no root, no capability, just an unprivileged
+ * Linux user+PID namespace — and the kernel's own PID-namespace teardown rule closes the gap
+ * completely: when a namespace's PID-1 process dies for any reason, every other process still in
+ * that namespace is killed with it, however many times it detached from whatever it started as.
+ * Confirmed against a real self-detaching grandchild before this was wired in: without this, it
+ * kept writing a heartbeat file 1.5 seconds after the parent was killed; with it, no heartbeat
+ * after the kill at all.
+ *
+ * Checked once per process and cached — the answer cannot change while Nova is running, and
+ * spawning `unshare` to find out is not free. Unavailable everywhere without a working `unshare`
+ * (non-Linux, or a kernel/policy that has disabled unprivileged user namespaces): the command still
+ * runs, with the same process-*group* containment this codebase already had.
+ */
+function isProcessContainmentAvailable(): Promise<boolean> {
+  containmentAvailability ??= new Promise((resolve) => {
+    let probe: ReturnType<typeof spawn>;
+    try {
+      probe = spawn("unshare", [...CONTAINMENT_ARGS, "true"], { stdio: "ignore" });
+    } catch {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => { probe.kill("SIGKILL"); resolve(false); }, 2_000);
+    probe.on("error", () => { clearTimeout(timer); resolve(false); });
+    probe.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
+  });
+  return containmentAvailability;
+}
+
+/** Exposed for tests only — a fresh process should re-probe rather than trust a stale answer. */
+export function resetProcessContainmentProbe(): void {
+  containmentAvailability = null;
+}
+
+/**
  * Direct argv execution is the common, faster path. Shell mode exists only when the exact approved
  * action contains shell syntax. Both paths have bounded output and process-tree cancellation.
  */
-export const runLocalCommand: CommandRunner = (command, options) =>
-  new Promise((resolve) => {
-    const throughShell = hasShellSyntax(command);
-    let program: string;
-    let argv: string[];
-    try {
-      [program, ...argv] = throughShell ? [command] : tokenizeCommand(command);
-    } catch (error) {
-      resolve({ exitCode: 2, stdout: "", stderr: error instanceof Error ? error.message : "Invalid command" });
-      return;
-    }
+export const runLocalCommand: CommandRunner = async (command, options) => {
+  let throughShell = hasShellSyntax(command);
+  let program: string;
+  let argv: string[];
+  try {
+    [program, ...argv] = throughShell ? [command] : tokenizeCommand(command);
+  } catch (error) {
+    return { exitCode: 2, stdout: "", stderr: error instanceof Error ? error.message : "Invalid command" };
+  }
 
+  if (options.containProcessTree !== false && await isProcessContainmentAvailable()) {
+    // unshare needs its own argv, not a shell string — a command that needed a shell still gets
+    // one, just as `sh -c` explicitly inside the namespace rather than via spawn's own shell mode.
+    const inner = throughShell ? ["sh", "-c", command] : [program, ...argv];
+    program = "unshare";
+    argv = [...CONTAINMENT_ARGS, ...inner];
+    throughShell = false;
+  }
+
+  return new Promise((resolve) => {
     const child = spawn(program, argv, {
       cwd: options.cwd,
       shell: throughShell,
       detached: process.platform !== "win32",
+      // Every locally spawned command gets Nova's own environment minus Nova's own credentials —
+      // node:child_process inherits the full parent environment by default, and nothing else in
+      // this function was ever going to stop that.
+      env: sanitizeCommandEnvironment(process.env, { strict: options.strictEnvironment }) as NodeJS.ProcessEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const maximumOutputBytes = 2 * 1024 * 1024;
@@ -160,6 +361,7 @@ export const runLocalCommand: CommandRunner = (command, options) =>
       terminate();
     }, options.timeoutMs);
   });
+};
 
 /** Backward-compatible name while callers move to the executor terminology. */
 export const runShellCommand = runLocalCommand;

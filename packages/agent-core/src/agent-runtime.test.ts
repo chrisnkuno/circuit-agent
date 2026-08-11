@@ -61,7 +61,7 @@ describe("bounded agent runtime", () => {
     const calls: string[] = [];
     const tools: AgentTool[] = [
       { name: "write_file", description: "Write a file", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { calls.push("write"); return { content: "written" }; } },
-      { name: "run_tests", description: "Run tests", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { calls.push("test"); return { content: "tests passed", verification: { passed: true, scope: "targeted", summary: "unit tests" } }; } },
+      { name: "run_tests", description: "Run tests", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { calls.push("test"); return { content: "tests passed", verification: { passed: true, kind: "tests", scope: "targeted", summary: "unit tests" } }; } },
     ];
     const harnessValue = harness([
       turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "call-1", name: "write_file", arguments: { path: "a.ts" } }] }),
@@ -80,11 +80,101 @@ describe("bounded agent runtime", () => {
     ]);
   });
 
-  it("does not claim completion when workspace changes lack verification", async () => {
+  it("nudges the model back to verify instead of ending the turn immediately", async () => {
+    const calls: string[] = [];
+    const tools: AgentTool[] = [
+      { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { calls.push("write"); return { content: "written" }; } },
+      { name: "run_tests", description: "Run tests", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { calls.push("test"); return { content: "tests passed", verification: { passed: true, kind: "tests", scope: "targeted", summary: "unit tests" } }; } },
+    ];
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "write-1", name: "write_file", arguments: {} }] }),
+      turn({ content: "Done" }), // stops without verifying — should be nudged, not accepted
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "test-1", name: "run_tests", arguments: {} }] }),
+      turn({ content: "Implemented and verified." }),
+    ], tools);
+    const result = await value.runtime.execute(baseRequest);
+    expect(result).toMatchObject({ status: "completed", toolCallsExecuted: 2 });
+    expect(calls).toEqual(["write", "test"]);
+    expect(value.requests.at(-1)?.messages.some((message) => message.role === "user" && message.content.includes("verifies it"))).toBe(true);
+  });
+
+  it("asks for executed tests when the only evidence is that the code compiles", async () => {
+    const calls: string[] = [];
+    const tools: AgentTool[] = [
+      { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { calls.push("write"); return { content: "written" }; } },
+      { name: "typecheck", description: "Typecheck", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { calls.push("check"); return { content: "0 errors", verification: { passed: true, kind: "check", scope: "targeted", summary: "tsc" } }; } },
+      { name: "run_tests", description: "Tests", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { calls.push("test"); return { content: "8 passed", verification: { passed: true, kind: "tests", scope: "targeted", summary: "vitest" } }; } },
+    ];
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "typecheck", arguments: {} }] }),
+      turn({ content: "It compiles, so it's done." }), // compile-only — must be pushed for tests
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "t1", name: "run_tests", arguments: {} }] }),
+      turn({ content: "Tested against its invariants." }),
+    ], tools);
+    const result = await value.runtime.execute(baseRequest);
+    expect(result.status).toBe("completed");
+    expect(calls).toEqual(["write", "check", "test"]);
+    expect(value.requests.at(-1)?.messages.some((message) => message.role === "user" && message.content.includes("invariants"))).toBe(true);
+  });
+
+  it("accepts compile-only evidence once the model explains there is no behaviour to assert", async () => {
+    // Formatting, documentation and configuration changes have nothing to execute. Asking is
+    // right; refusing to accept the answer would strand the turn.
+    const tools: AgentTool[] = [
+      { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { return { content: "written" }; } },
+      { name: "typecheck", description: "Typecheck", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "ok", verification: { passed: true, kind: "check", scope: "targeted", summary: "tsc" } }; } },
+    ];
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "typecheck", arguments: {} }] }),
+      turn({ content: "Comment-only change." }),
+      turn({ content: "This edits a comment; there is no behaviour to assert." }),
+    ], tools);
+    await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "completed" });
+    // Asked exactly once — a second ask would be nagging, not a gate.
+    expect(value.executed()).toBe(4);
+  });
+
+  it("treats unclassified verification as compile-only rather than as proof of behaviour", async () => {
+    // A tool that reports `verification` without a kind must not clear the stronger bar by
+    // omission; inferring the weaker claim is what keeps the gate honest for third-party tools.
+    const tools: AgentTool[] = [
+      { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { return { content: "written" }; } },
+      { name: "verify", description: "Verify", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "ok", verification: { passed: true, scope: "targeted", summary: "unspecified" } }; } },
+    ];
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "v1", name: "verify", arguments: {} }] }),
+      turn({ content: "Done." }),
+      turn({ content: "No behaviour to assert." }),
+    ], tools);
+    await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "completed" });
+    expect(value.requests.at(-1)?.messages.some((message) => message.role === "user" && message.content.includes("compiles"))).toBe(true);
+  });
+
+  it("does not ask for tests when tests already ran", async () => {
+    const tools: AgentTool[] = [
+      { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { return { content: "written" }; } },
+      { name: "run_tests", description: "Tests", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "8 passed", verification: { passed: true, kind: "tests", scope: "targeted", summary: "vitest" } }; } },
+    ];
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "t1", name: "run_tests", arguments: {} }] }),
+      turn({ content: "Implemented and tested." }),
+    ], tools);
+    const result = await value.runtime.execute(baseRequest);
+    expect(result).toMatchObject({ status: "completed", summary: "Implemented and tested." });
+    expect(value.executed()).toBe(3); // no extra round trip once real tests have run
+  });
+
+  it("still reports needs_verification if the model never verifies after being nudged", async () => {
     const tool: AgentTool = { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { return { content: "written" }; } };
     const value = harness([
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "write-1", name: "write_file", arguments: {} }] }),
       turn({ content: "Done" }),
+      turn({ content: "Still done" }),
+      turn({ content: "Really done" }),
     ], [tool]);
     // The gate leads, but the agent's own account of the work survives it: replacing the summary
     // outright left a reader with a status and no idea what had been done.
@@ -93,6 +183,7 @@ describe("bounded agent runtime", () => {
       toolCallsExecuted: 1,
       summary: expect.stringContaining("The agent reported:"),
     });
+    expect(value.executed()).toBe(4); // the tool-call turn, the first stop, then two nudged retries before the gate gives up
   });
 
   it("halts before an unapproved external action", async () => {

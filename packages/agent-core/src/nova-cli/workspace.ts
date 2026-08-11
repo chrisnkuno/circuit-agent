@@ -21,6 +21,21 @@ export type WorkspaceLimits = {
   maxWriteBytes: number;
   /** Files skipped by search and listing, by directory name. */
   ignoredDirectories: readonly string[];
+  /**
+   * Strips anything shaped like a credential (`*_TOKEN`, `*_SECRET`, ...) from a locally spawned
+   * command's environment, not only Nova's own known provider keys. Off by default — see
+   * `sanitizeCommandEnvironment` in command.ts for why a project's own env vars are the user's
+   * choice to expose, not Nova's to withhold, unless they opt into the stricter posture.
+   */
+  strictCommandEnvironment?: boolean;
+  /**
+   * Runs a locally spawned command inside an unprivileged PID namespace when the OS supports one,
+   * so a timeout or cancellation reaches every process it spawned — including ones it detached from
+   * itself — not only the ones still in its original process group. On by default wherever the OS
+   * supports it (checked once and cached; a no-op fallback everywhere else). Set to `false` only for
+   * a command that is known to need to see the host's real, unnamespaced PID/mount view.
+   */
+  containProcessTree?: boolean;
 };
 
 export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
@@ -107,7 +122,14 @@ export async function readTextFile(
 ): Promise<ReadResult> {
   const limits = options.limits ?? DEFAULT_WORKSPACE_LIMITS;
   const absolute = await realPathWithin(root, candidate);
-  const stat = await fs.stat(absolute);
+  // A missing file must fail the same shape every backend fails it: a project-relative path in a
+  // sentence, not a raw ENOENT carrying this machine's absolute filesystem layout. Node's default
+  // error for a missing `stat` is exactly that leak — one more path a model reading a "file not
+  // found" message across Local, E2B and Docker would otherwise see worded three different ways.
+  const stat = await fs.stat(absolute).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new WorkspaceViolation(`${displayPath(root, absolute)} does not exist`);
+    throw error;
+  });
   if (stat.isDirectory()) throw new WorkspaceViolation(`${displayPath(root, absolute)} is a directory, not a file`);
   if (stat.size > limits.maxReadBytes) {
     throw new WorkspaceViolation(`${displayPath(root, absolute)} is ${stat.size} bytes, above the ${limits.maxReadBytes}-byte read limit`);

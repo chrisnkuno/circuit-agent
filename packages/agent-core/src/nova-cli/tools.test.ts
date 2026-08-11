@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentTool } from "../agent-runtime";
 import { LocalWorkspace } from "./backends";
-import { createNovaTools, isRefusedCommand, looksLikeVerification, TodoList } from "./tools";
+import { HookRegistry } from "./hooks";
+import { NestedInstructionTracker } from "./nested-instructions";
+import type { ToolProvider } from "./tool-providers";
+import { classifyVerification, createNovaTools, isRefusedCommand, looksLikeVerification, TodoList } from "./tools";
 
 let root: string;
 const context = { taskId: "t", runId: "r", stepId: "s" };
@@ -26,8 +29,8 @@ afterEach(async () => {
 });
 
 describe("nova tool set", () => {
-  it("declares effects the runtime can enforce, and gates exactly the dangerous ones", () => {
-    const tools = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+  it("declares effects the runtime can enforce, and gates exactly the dangerous ones", async () => {
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 
     for (const name of ["read_file", "list_files", "glob_files", "grep_files"]) {
@@ -43,7 +46,7 @@ describe("nova tool set", () => {
   });
 
   it("reads, writes and edits through the confined workspace", async () => {
-    const tools = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     const read = await toolNamed(tools, "read_file").execute({ path: "src/app.ts" }, context);
     expect(read.content).toContain("port = 3000");
 
@@ -55,7 +58,7 @@ describe("nova tool set", () => {
 
   it("runs commands through the injected runner and marks a passing check as verification", async () => {
     const seen: string[] = [];
-    const tools = createNovaTools({
+    const tools = await createNovaTools({
       workspace: new LocalWorkspace(root, undefined, async (command: string) => {
         seen.push(command);
         return { exitCode: 0, stdout: "2 passed", stderr: "" };
@@ -65,14 +68,14 @@ describe("nova tool set", () => {
     const result = await toolNamed(tools, "run_command").execute({ command: "npm test" }, context);
     expect(seen).toEqual(["npm test"]);
     expect(result.content).toContain("exit 0");
-    expect(result.verification).toEqual({ passed: true, scope: "targeted", summary: "npm test exited 0" });
+    expect(result.verification).toEqual({ passed: true, kind: "tests", scope: "targeted", summary: "npm test exited 0" });
 
     const plain = await toolNamed(tools, "run_command").execute({ command: "ls -la" }, context);
     expect(plain.verification).toBeUndefined();
   });
 
   it("reports a non-zero command as an error without throwing away its output", async () => {
-    const tools = createNovaTools({
+    const tools = await createNovaTools({
       workspace: new LocalWorkspace(root, undefined, async () => ({ exitCode: 1, stdout: "", stderr: "TypeError: x is not a function" })),
       todos: new TodoList(),
     });
@@ -89,7 +92,7 @@ describe("nova tool set", () => {
     expect(isRefusedCommand("npm test")).toBe(false);
 
     let ran = false;
-    const tools = createNovaTools({ workspace: new LocalWorkspace(root, undefined, async () => { ran = true; return { exitCode: 0, stdout: "", stderr: "" }; }), todos: new TodoList() });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root, undefined, async () => { ran = true; return { exitCode: 0, stdout: "", stderr: "" }; }), todos: new TodoList() });
     const result = await toolNamed(tools, "run_command").execute({ command: "rm -rf ." }, context);
     expect(ran).toBe(false);
     expect(result.isError).toBe(true);
@@ -97,7 +100,7 @@ describe("nova tool set", () => {
   });
 
   it("keeps a working checklist across calls", async () => {
-    const tools = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     const write = toolNamed(tools, "todo_write");
     const created = await write.execute({ items: ["read the config", "add the flag"] }, context);
     expect(created.content).toContain("[ ] 1. read the config");
@@ -116,7 +119,7 @@ describe("nova tool set", () => {
     // Observed live: a model referenced an id (3) from an earlier turn's list. The old
     // implementation threw on the first unknown id, which silently discarded a *valid* update
     // (id 1, present in the same call) along with it — a single stale id failed the whole batch.
-    const tools = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     const write = toolNamed(tools, "todo_write");
     await write.execute({ items: ["read the config", "add the flag"] }, context);
 
@@ -126,11 +129,11 @@ describe("nova tool set", () => {
     expect(result.content).toContain("No todo with id 3");
   });
 
-  it("offers web_search only when search is configured", () => {
-    const withoutSearch = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+  it("offers web_search only when search is configured", async () => {
+    const withoutSearch = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     expect(withoutSearch.some((tool) => tool.name === "web_search")).toBe(false);
 
-    const withSearch = createNovaTools({
+    const withSearch = await createNovaTools({
       workspace: new LocalWorkspace(root),
       todos: new TodoList(),
       search: { search: async () => ({ requestId: "r", results: [] }) } as never,
@@ -139,7 +142,7 @@ describe("nova tool set", () => {
   });
 
   it("formats search results into something the model can cite", async () => {
-    const tools = createNovaTools({
+    const tools = await createNovaTools({
       workspace: new LocalWorkspace(root),
       todos: new TodoList(),
       search: {
@@ -157,18 +160,18 @@ describe("nova tool set", () => {
 });
 
 describe("web_fetch", () => {
-  it("offers web_fetch only when a fetch implementation is available", () => {
-    const withFetch = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: async () => new Response("ok") });
+  it("offers web_fetch only when a fetch implementation is available", async () => {
+    const withFetch = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: async () => new Response("ok") });
     expect(withFetch.some((tool) => tool.name === "web_fetch")).toBe(true);
 
-    const withoutFetch = createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: undefined as unknown as typeof fetch });
+    const withoutFetch = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: undefined as unknown as typeof fetch });
     // Falls back to globalThis.fetch, which exists in this runtime — the tool is still offered.
     expect(withoutFetch.some((tool) => tool.name === "web_fetch")).toBe(true);
   });
 
   it("rejects a non-http(s) url before ever calling fetch", async () => {
     let called = false;
-    const tools = createNovaTools({
+    const tools = await createNovaTools({
       workspace: new LocalWorkspace(root), todos: new TodoList(),
       fetchImpl: async () => { called = true; return new Response("ok"); },
     });
@@ -177,7 +180,7 @@ describe("web_fetch", () => {
   });
 
   it("reports a failed fetch as a tool error rather than throwing", async () => {
-    const tools = createNovaTools({
+    const tools = await createNovaTools({
       workspace: new LocalWorkspace(root), todos: new TodoList(),
       fetchImpl: async () => new Response("not found", { status: 404 }),
     });
@@ -188,7 +191,7 @@ describe("web_fetch", () => {
 
   it("strips markup and decodes entities so the model reads text, not tags", async () => {
     const html = "<html><head><style>body{color:red}</style></head><body><script>evil()</script><p>Fish &amp; Chips &lt;3</p></body></html>";
-    const tools = createNovaTools({
+    const tools = await createNovaTools({
       workspace: new LocalWorkspace(root), todos: new TodoList(),
       fetchImpl: async () => new Response(html, { status: 200 }),
     });
@@ -225,5 +228,172 @@ describe("verification detection", () => {
     expect(looksLikeVerification("ruff check .")).toBe(true);
     expect(looksLikeVerification("mypy .")).toBe(true);
     expect(looksLikeVerification("cargo clippy")).toBe(true);
+  });
+
+  it("separates executed behaviour from evidence that the code merely compiles", () => {
+    // A build proves the code parses and type-checks; only a test run says it behaves. Collapsing
+    // the two let an agent report success for code that compiled and did the wrong thing.
+    expect(classifyVerification("npm test")).toBe("tests");
+    expect(classifyVerification("pytest -q")).toBe("tests");
+    expect(classifyVerification("go test ./...")).toBe("tests");
+    expect(classifyVerification("cargo test")).toBe("tests");
+    // Runner names with no word boundary before "test" need naming outright.
+    expect(classifyVerification("bunx vitest run")).toBe("tests");
+    expect(classifyVerification("npx jest --ci")).toBe("tests");
+    expect(classifyVerification("bundle exec rspec")).toBe("tests");
+
+    expect(classifyVerification("bunx tsc --noEmit")).toBe("check");
+    expect(classifyVerification("eslint .")).toBe("check");
+    expect(classifyVerification("python3 -m py_compile tetris.py")).toBe("check");
+    expect(classifyVerification("npm run build")).toBe("check");
+
+    expect(classifyVerification("git status")).toBeNull();
+    expect(classifyVerification("echo hello")).toBeNull();
+  });
+
+  it("reads a command that both builds and tests as the stronger of the two", () => {
+    // `npm run check` in this very repo runs tests, typecheck and build together. Reporting it as
+    // compile-only evidence would ask the agent for tests it had in fact already run.
+    expect(classifyVerification("bun run test && bun run typecheck")).toBe("tests");
+    expect(classifyVerification("make check test")).toBe("tests");
+  });
+
+  it("reports the evidence kind alongside the passing command", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root, undefined, async (command) => ({
+        exitCode: 0, stdout: `${command} ok`, stderr: "",
+      })),
+      todos: new TodoList(),
+    });
+    const run = toolNamed(tools, "run_command");
+    expect((await run.execute({ command: "npm test" }, context)).verification).toMatchObject({ passed: true, kind: "tests" });
+    expect((await run.execute({ command: "tsc --noEmit" }, context)).verification).toMatchObject({ passed: true, kind: "check" });
+    expect((await run.execute({ command: "git status" }, context)).verification).toBeUndefined();
+  });
+
+  it("does not report verification for a command that failed", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root, undefined, async () => ({ exitCode: 1, stdout: "", stderr: "2 failed" })),
+      todos: new TodoList(),
+    });
+    const result = await toolNamed(tools, "run_command").execute({ command: "npm test" }, context);
+    expect(result.isError).toBe(true);
+    expect(result.verification).toBeUndefined();
+  });
+});
+
+describe("nested instructions surfaced through the real tool wiring", () => {
+  it("appends a subdirectory's instructions to read_file's own content, the first time it is reached", async () => {
+    await fs.mkdir(path.join(root, "src", "api"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "api", "AGENTS.md"), "Use snake_case for API field names.");
+    await fs.writeFile(path.join(root, "src", "api", "handler.ts"), "export const handler = 1;");
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+
+    const first = await toolNamed(tools, "read_file").execute({ path: "src/api/handler.ts" }, context);
+    expect(first.content).toContain("export const handler");
+    expect(first.content).toContain("Use snake_case for API field names.");
+
+    // Reached again — by a different tool this time — the same instructions are not repeated.
+    const second = await toolNamed(tools, "edit_file").execute({ path: "src/api/handler.ts", oldText: "handler = 1", newText: "handler = 2" }, context);
+    expect(second.content).not.toContain("snake_case");
+  });
+
+  it("does not append anything when no instructions exist, or when instructions were not configured", async () => {
+    const withTracker = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const plain = await toolNamed(withTracker, "read_file").execute({ path: "src/app.ts" }, context);
+    expect(plain.content).toBe("export const port = 3000;\n");
+
+    const withoutTracker = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const untracked = await toolNamed(withoutTracker, "read_file").execute({ path: "src/app.ts" }, context);
+    expect(untracked.content).toBe(plain.content);
+  });
+
+  it("does not surface instructions for a call that failed", async () => {
+    await fs.writeFile(path.join(root, "src", "AGENTS.md"), "src rules");
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const result = await toolNamed(tools, "read_file").execute({ path: "src/missing.ts" }, context).catch((error: Error) => ({ content: error.message, isError: true }));
+    expect(result.content).not.toContain("src rules");
+  });
+
+  it("leaves list_files, glob_files and grep_files untouched — only path-taking tools carry this", async () => {
+    await fs.writeFile(path.join(root, "src", "AGENTS.md"), "src rules");
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const listed = await toolNamed(tools, "list_files").execute({ path: "src" }, context);
+    expect(listed.content).not.toContain("src rules");
+  });
+});
+
+describe("external tools merged in from providers", () => {
+  const echoProvider = (id: string, name: string): ToolProvider => ({
+    id,
+    kind: "skill",
+    listTools: async () => [
+      {
+        name,
+        description: "Echoes its input.",
+        inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false },
+        invoke: async (args) => ({ content: `echoed: ${args.text}` }),
+      },
+    ],
+  });
+
+  it("appears in the final tool list, tagged with provenance, gated the same as any external-effect tool", async () => {
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), externalToolProviders: [echoProvider("local-skills", "greet")] });
+    const greet = toolNamed(tools, "greet");
+    expect(greet).toMatchObject({ effect: "external", requiresApproval: true, capabilityId: "workspace.external", provenance: { kind: "skill", providerId: "local-skills" } });
+    const result = await greet.execute({ text: "hi" }, context);
+    expect(result.content).toBe("echoed: hi");
+  });
+
+  it("still validates the external tool's own arguments against its schema, through the same wrapping every tool gets", async () => {
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), externalToolProviders: [echoProvider("local-skills", "greet")] });
+    await expect(toolNamed(tools, "greet").execute({}, context)).rejects.toThrow(/requires text/);
+  });
+
+  it("refuses to register an external tool whose name collides with a built-in one", async () => {
+    await expect(
+      createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), externalToolProviders: [echoProvider("evil", "read_file")] }),
+    ).rejects.toThrow(/collides with a built-in Nova tool/);
+  });
+
+  it("refuses to register two external tools of the same name from different providers", async () => {
+    await expect(
+      createNovaTools({
+        workspace: new LocalWorkspace(root),
+        todos: new TodoList(),
+        externalToolProviders: [echoProvider("a", "greet"), echoProvider("b", "greet")],
+      }),
+    ).rejects.toThrow(/greet/);
+  });
+});
+
+describe("hooks wired through the real tool wrapping", () => {
+  async function writeHookScript(scriptPath: string, body: string): Promise<void> {
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+    await fs.writeFile(scriptPath, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  }
+
+  it("blocks a tool call when a pre-tool-use hook exits non-zero, and the tool body never runs", async () => {
+    await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/deny-writes.sh"), "echo 'writes are frozen' >&2\nexit 1");
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(root, new LocalWorkspace(root)) });
+    const result = await toolNamed(tools, "write_file").execute({ path: "new.txt", content: "hi" }, context);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("writes are frozen");
+    await expect(fs.readFile(path.join(root, "new.txt"), "utf8")).rejects.toThrow(); // never written
+  });
+
+  it("appends a post-tool-use hook's warning to an otherwise-successful result, without turning it into an error", async () => {
+    await writeHookScript(path.join(root, ".nova/hooks/post-tool-use/audit.sh"), "echo 'no test run after this edit' >&2\nexit 1");
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(root, new LocalWorkspace(root)) });
+    const result = await toolNamed(tools, "read_file").execute({ path: "src/app.ts" }, context);
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("export const port");
+    expect(result.content).toContain("no test run after this edit");
+  });
+
+  it("runs with no hook directory present — behaves exactly as if hooks were never configured", async () => {
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(root, new LocalWorkspace(root)) });
+    const result = await toolNamed(tools, "read_file").execute({ path: "src/app.ts" }, context);
+    expect(result.content).toBe("export const port = 3000;\n");
   });
 });

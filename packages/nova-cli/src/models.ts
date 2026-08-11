@@ -1,0 +1,150 @@
+import { PROVIDER_IDS, PROVIDERS, catalogPrices, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
+import { formatMoney, fromUnits, type Currency, type TokenPrices } from "@circuit-nova/nova-core/money";
+
+/**
+ * The models a session can actually switch to, and what each costs.
+ *
+ * `/model anthropic claude-sonnet-5` only helps someone who already knows both halves of that
+ * answer. The list exists in the price catalog, so it can be shown — and once it can be shown it
+ * can be numbered, and choosing becomes typing `3` rather than recalling an exact model id.
+ *
+ * Two rules keep the list honest:
+ *
+ * - **Only text models.** The catalog also prices embeddings, images and audio; offering
+ *   `text-embedding-3-large` as something to hold a conversation with is offering a mistake.
+ * - **Only configured providers.** A model whose provider has no key cannot be selected, and
+ *   listing it produces a menu where some entries fail on choosing. Those are reported separately,
+ *   as something to configure rather than something to pick.
+ */
+
+export type ModelChoice = {
+  provider: ProviderId;
+  providerLabel: string;
+  model: string;
+  /** True for the model this provider uses when none is named. */
+  isProviderDefault: boolean;
+  /** Undefined when the catalog has no rate for it — the CLI says so rather than inventing one. */
+  prices: TokenPrices | undefined;
+};
+
+export type ModelCatalog = {
+  choices: ModelChoice[];
+  /** Providers with a model to offer but no credentials, so the list can explain the absence. */
+  unconfigured: Array<{ provider: ProviderId; label: string; missing: string[] }>;
+};
+
+/**
+ * Text models known to this build, per provider, in catalog order.
+ *
+ * The provider's own default comes first within its group: it is the one a user gets by doing
+ * nothing, so it is the one they are most likely to want back.
+ */
+export function modelsForProvider(provider: ProviderId, asOf?: string): string[] {
+  const seen = new Set<string>();
+  for (const record of PRICE_CATALOG) {
+    if (record.provider !== provider || record.modality !== "text" || record.billingUnit !== "tokens") continue;
+    seen.add(record.model);
+  }
+  const fallback = PROVIDERS[provider].defaultModel;
+  seen.add(fallback);
+  const models = [...seen].filter((model) => model !== fallback).sort();
+  void asOf;
+  return [fallback, ...models];
+}
+
+export function buildModelCatalog(environment: Record<string, string | undefined>, asOf?: string): ModelCatalog {
+  const choices: ModelChoice[] = [];
+  const unconfigured: ModelCatalog["unconfigured"] = [];
+
+  for (const provider of PROVIDER_IDS) {
+    const spec = PROVIDERS[provider];
+    const missing = spec.requires.filter((name) => !environment[name]?.trim());
+    if (missing.length > 0) {
+      unconfigured.push({ provider, label: spec.label, missing });
+      continue;
+    }
+    for (const model of modelsForProvider(provider, asOf)) {
+      choices.push({
+        provider,
+        providerLabel: spec.label,
+        model,
+        isProviderDefault: model === (environment[`${provider.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel),
+        prices: catalogPrices(provider, model, asOf),
+      });
+    }
+  }
+  return { choices, unconfigured };
+}
+
+/** Per-million input/output rates in the display currency, or a plain admission of not knowing. */
+export function describePrice(prices: TokenPrices | undefined, display: Currency, convert: (value: { currency: Currency; micros: number }) => { currency: Currency; micros: number } | undefined): string {
+  if (!prices) return "unpriced";
+  const input = convert({ currency: prices.currency, micros: prices.inputPerMillion });
+  const output = convert({ currency: prices.currency, micros: prices.outputPerMillion });
+  if (!input || !output) {
+    return `${formatMoney(fromUnits(prices.inputPerMillion, prices.currency))}/${formatMoney(fromUnits(prices.outputPerMillion, prices.currency))} per Mtok`;
+  }
+  void display;
+  return `${formatMoney(input)}/${formatMoney(output)} per Mtok`;
+}
+
+export type RenderModelsOptions = {
+  current: { provider: ProviderId; model: string };
+  /** Renders one model's price; injected so this module owns no currency policy. */
+  price: (choice: ModelChoice) => string;
+  paint: { dim(text: string): string; cyan(text: string): string; green(text: string): string; yellow(text: string): string };
+};
+
+/**
+ * The numbered menu.
+ *
+ * The number is the whole interface — `/model 3` — so it is printed first and padded to a common
+ * width, which keeps the model names left-aligned and scannable when the list runs past ten.
+ */
+export function renderModelList(catalog: ModelCatalog, options: RenderModelsOptions): string {
+  const { paint } = options;
+  const lines: string[] = [];
+  let lastProvider: ProviderId | null = null;
+
+  catalog.choices.forEach((choice, index) => {
+    if (choice.provider !== lastProvider) {
+      lines.push(`${lines.length > 0 ? "\n" : ""}  ${paint.cyan(choice.providerLabel)}`);
+      lastProvider = choice.provider;
+    }
+    const isCurrent = choice.provider === options.current.provider && choice.model === options.current.model;
+    // The marker sits where a reader's eye already is — beside the number they are about to type.
+    const marker = isCurrent ? paint.green("●") : " ";
+    const number = String(index + 1).padStart(2);
+    const tags = [choice.isProviderDefault ? "default" : "", isCurrent ? "current" : ""].filter(Boolean).join(", ");
+    lines.push(`  ${marker} ${paint.dim(number)}. ${choice.model.padEnd(22)} ${paint.dim(options.price(choice))}${tags ? paint.dim(`  (${tags})`) : ""}`);
+  });
+
+  for (const entry of catalog.unconfigured) {
+    lines.push(`\n  ${paint.dim(entry.label)} ${paint.yellow(`— nova settings, or set ${entry.missing.join(" and ")}`)}`);
+  }
+  if (catalog.choices.length > 0) lines.push(`\n  ${paint.dim("Choose with /model <number>, or /model <provider> <id>.")}`);
+  return lines.join("\n");
+}
+
+export type ModelCommand =
+  | { kind: "list" }
+  | { kind: "pick"; index: number }
+  | { kind: "explicit"; provider?: string; model?: string };
+
+/**
+ * Reads `/model`, `/models`, `/model 3`, `/model anthropic claude-sonnet-5`.
+ *
+ * A bare `/model` lists rather than doing nothing: with a numbered menu available, showing it is
+ * the most useful reading of an argumentless command, and it costs a keystroke to then choose.
+ */
+export function parseModelCommand(input: string): ModelCommand | null {
+  const trimmed = input.trim();
+  const match = /^\/models?(?:\s+(.*))?$/.exec(trimmed);
+  if (!match) return null;
+  const rest = (match[1] ?? "").trim();
+  if (!rest) return { kind: "list" };
+  if (/^\d+$/.test(rest)) return { kind: "pick", index: Number(rest) };
+  const [provider, model] = rest.split(/\s+/);
+  return { kind: "explicit", provider, model };
+}

@@ -1,4 +1,4 @@
-import { affordableOutputTokens, priceActualModelUsage, type ModelPriceCatalog } from "./model-cost";
+import { addPart, affordableOutputTokensFor, newPartTotals, priceActualModelUsage, tokenEstimateFrom, type ModelPriceCatalog } from "./model-cost";
 import type { ModelUsage } from "./providers/model";
 
 export type AgentMessage =
@@ -39,7 +39,12 @@ export interface AgentTurnProvider {
 }
 
 export type ToolEffect = "none" | "workspace" | "external";
-export type VerificationEvidence = { passed: boolean; scope: "targeted" | "full"; summary: string };
+/**
+ * `kind` separates executed behaviour (`tests`) from compile-time evidence (`check`). Optional so
+ * a caller that cannot classify its own command still reports verification, treated as `check` —
+ * the conservative reading, since claiming a build proved behaviour is the error worth avoiding.
+ */
+export type VerificationEvidence = { passed: boolean; kind?: "tests" | "check"; scope: "targeted" | "full"; summary: string };
 
 export type AgentToolDefinition = {
   name: string;
@@ -52,15 +57,40 @@ export type AgentToolResult = {
   isError?: boolean;
   verification?: VerificationEvidence;
   effect?: ToolEffect;
+  /**
+   * The facts behind `content`, structured.
+   *
+   * `content` is prose written for a model to read — "Wrote src/app.ts (412 bytes)." — and prose is
+   * a bad thing to compare or assert against: a reworded sentence breaks every test that mentioned
+   * it, while a changed number hides inside one. `data` carries the same result as values, so a
+   * caller (a golden-event suite, a UI, another program) can read what happened without parsing
+   * English, and `content` stays free to be rewritten for the model's benefit alone.
+   *
+   * Optional: a tool whose result has no structure worth naming — a fetched web page — omits it.
+   */
+  data?: Record<string, unknown>;
 };
 
 export type AgentToolContext = { taskId: string; runId: string; stepId: string };
+
+/**
+ * Where a tool came from: Nova's own fixed set, or something loaded at runtime.
+ *
+ * Optional and absent on every built-in tool literal — adding a required field to every entry in
+ * `createNovaTools` for a distinction only externally-sourced tools need would be exactly the kind
+ * of change-everywhere-to-say-nothing this codebase avoids. Absent is read as `{ kind: "built-in" }`
+ * everywhere provenance is consulted (see `actionDigest` in permissions.ts).
+ */
+export type ToolProvenance =
+  | { kind: "built-in" }
+  | { kind: "skill" | "mcp" | "plugin"; providerId: string };
 
 export type AgentTool = AgentToolDefinition & {
   capabilityId: string;
   effect: ToolEffect;
   requiresApproval: boolean;
   parallelSafe: boolean;
+  provenance?: ToolProvenance;
   execute(argumentsValue: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult>;
 };
 
@@ -73,7 +103,9 @@ export type AgentRuntimeEvent =
   // happens rather than only what happened. The result alone cannot carry this: by the time it
   // arrives the interesting part — which file, which command — is already over.
   | { type: "tool_call"; toolCallId: string; toolName: string; effect: ToolEffect; arguments: Record<string, unknown> }
-  | { type: "tool_result"; toolCallId: string; toolName: string; isError: boolean; effect: ToolEffect; content: string }
+  // `content` is truncated to fit the context budget and is written for the model; `data` is the
+  // same result as values, untruncated, for a consumer that needs to act on it rather than read it.
+  | { type: "tool_result"; toolCallId: string; toolName: string; isError: boolean; effect: ToolEffect; content: string; data?: Record<string, unknown> }
   | { type: "runtime_stop"; status: AgentRuntimeResult["status"]; summary: string };
 
 export type AgentRuntimeControl = {
@@ -114,6 +146,23 @@ export type AgentRuntimeResult = {
   iterations: number;
   toolCallsExecuted: number;
 };
+
+/** How many times a turn is sent back to the model to verify before the gate gives up and stops. */
+const MAX_VERIFICATION_NUDGES = 2;
+
+const VERIFICATION_NUDGE =
+  "You changed the workspace but ended the turn without running anything that verifies it. Write tests that assert the invariants your change must satisfy — the properties that hold for every valid input, not one happy-path example — then run them and report the real result. If this project genuinely has nothing to run, say so explicitly instead of stopping silently.";
+
+/**
+ * Sent when the only evidence was a build, typecheck or lint.
+ *
+ * A passing compile is real but says nothing about behaviour, and accepting it as proof is how an
+ * agent reports success for code that type-checks and does the wrong thing. This asks once for
+ * executed tests; it does not hard-fail, because a compile *is* evidence and some changes have no
+ * behaviour to assert.
+ */
+const TEST_EVIDENCE_NUDGE =
+  "That build/typecheck passing shows the code compiles, not that it behaves correctly. Add or run tests that execute the changed behaviour and assert its invariants — properties true for every valid input (round-trips, bounds, ordering, conservation, idempotence, error cases), not a single example. Run them and report the real result. If the change genuinely has no behaviour to assert (documentation, formatting, configuration), say so explicitly and stop.";
 
 const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 
@@ -213,6 +262,17 @@ export class BoundedAgentRuntime {
     let toolCallsExecuted = 0;
     let totalToolResultChars = 0;
     let workspaceNeedsVerification = false;
+    let verificationNudges = 0;
+    // Strongest evidence seen for the workspace changes in this run, and whether the model has
+    // already been asked to escalate a compile-only result to executed tests. Asked at most once:
+    // a model that answers "this change has no behaviour to assert" must be able to finish.
+    let strongestEvidence: "none" | "check" | "tests" = "none";
+    let askedForTestEvidence = false;
+    // Measured once per part, not once per iteration: `messages` only ever grows inside this loop,
+    // so a message already measured cannot change. The tool definitions are constant for the run
+    // and are folded in first, which is why `measured` starts at zero rather than tracking them.
+    const promptTotals = addPart(newPartTotals(), JSON.stringify(definitions));
+    let measured = 0;
 
     const stop = async (status: AgentRuntimeResult["status"], summary: string, iterations: number): Promise<AgentRuntimeResult> => {
       await this.dependencies.control.persistEvent({ type: "runtime_stop", status, summary });
@@ -224,8 +284,9 @@ export class BoundedAgentRuntime {
       if (await this.dependencies.control.isCancellationRequested()) return stop("cancelled", "Run cancelled at a safe checkpoint.", iteration - 1);
 
       const approvedRemaining = request.modelReservationRwf - actualModelRwf;
-      const maximumOutputTokens = affordableOutputTokens(
-        [...messages.map((message) => message.content), JSON.stringify(definitions)],
+      for (; measured < messages.length; measured += 1) addPart(promptTotals, messages[measured].content);
+      const maximumOutputTokens = affordableOutputTokensFor(
+        tokenEstimateFrom(promptTotals),
         request.maxOutputTokens,
         Math.max(0, approvedRemaining),
         this.dependencies.prices,
@@ -250,6 +311,21 @@ export class BoundedAgentRuntime {
       if (turn.finishReason === "stop") {
         const summary = turn.content.trim() || "Model completed without a summary.";
         messages.push({ role: "assistant", content: summary });
+        if (workspaceNeedsVerification && verificationNudges < MAX_VERIFICATION_NUDGES) {
+          // Drive the loop back to the model instead of handing the gap to the human: the agent
+          // still has budget and the tools to close it itself, so make it, rather than merely
+          // reporting that it didn't. The nudge cap keeps this bounded by the same iteration and
+          // tool-call budgets as everything else — a model that never verifies still terminates.
+          verificationNudges += 1;
+          messages.push({ role: "user", content: VERIFICATION_NUDGE });
+          continue;
+        }
+        // Compile-only evidence is accepted, but not before asking once for the behavioural kind.
+        if (strongestEvidence === "check" && !askedForTestEvidence) {
+          askedForTestEvidence = true;
+          messages.push({ role: "user", content: TEST_EVIDENCE_NUDGE });
+          continue;
+        }
         return workspaceNeedsVerification
           // The gate must lead — this is not a success, and a reader skimming the ledger has to see
           // that first. But replacing the summary outright threw away the only account of what the
@@ -305,8 +381,13 @@ export class BoundedAgentRuntime {
         messages.push({ role: "tool", content, toolCallId: call.id, name: call.name });
         const effect = tool.effect === "external" ? "external" : result.effect ?? tool.effect;
         if (!result.isError && effect === "workspace") workspaceNeedsVerification = true;
-        if (!result.isError && result.verification?.passed) workspaceNeedsVerification = false;
-        await this.dependencies.control.persistEvent({ type: "tool_result", toolCallId: call.id, toolName: call.name, isError: result.isError ?? false, effect, content });
+        if (!result.isError && result.verification?.passed) {
+          workspaceNeedsVerification = false;
+          // Unclassified evidence reads as `check`: the weaker claim is the safe one to infer.
+          if ((result.verification.kind ?? "check") === "tests") strongestEvidence = "tests";
+          else if (strongestEvidence === "none") strongestEvidence = "check";
+        }
+        await this.dependencies.control.persistEvent({ type: "tool_result", toolCallId: call.id, toolName: call.name, isError: result.isError ?? false, effect, content, ...(result.data ? { data: result.data } : {}) });
       }
       if (totalToolResultChars >= request.maxTotalToolResultChars) return stop("iteration_limit", "Run reached its total tool-result context budget.", iteration);
     }

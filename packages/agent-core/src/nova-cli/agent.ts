@@ -17,6 +17,8 @@ import {
   titleFromObjective,
   type SessionRecord,
 } from "./session";
+import { loadLocalExternalTooling, type LocalExternalTooling } from "./external-tools";
+import { NestedInstructionTracker } from "./nested-instructions";
 import { createNovaTools, TodoList, type TodoItem } from "./tools";
 import type { Expense } from "./cost";
 import { predictAgentUsage, type AgentCostPrediction } from "./cost";
@@ -85,8 +87,26 @@ export const DEFAULT_NOVA_BUDGETS: NovaBudgets = {
 
 export type NovaTurnResult = AgentRuntimeResult & { checkpoint?: Checkpoint };
 
+/** Which half of a checkpoint to restore. "both" is the historical, sole behaviour of `/undo`. */
+export type RestoreScope = "code" | "conversation" | "both";
+
 export class NovaAgent {
   private readonly todoList = new TodoList();
+  /**
+   * Local only. It reads through Node's real filesystem at `options.root`, which is the workspace
+   * itself for a local session but is unrelated to a remote sandbox's actual file tree — the root
+   * held here is just where sessions and checkpoints live for that case, not a mirror of what the
+   * sandbox contains. Extending this to E2B/Docker would mean reading through `this.workspace`
+   * instead of `fs` directly, which nested-instructions.ts does not do (yet).
+   */
+  private readonly nestedInstructions: NestedInstructionTracker | undefined;
+  /**
+   * Skills, hooks and MCP servers discovered from `.nova/`. Local only, for the same reason as
+   * `nestedInstructions` above. Lazily loaded and memoized on first turn rather than in the
+   * constructor — construction stays synchronous, and a session that never sends a turn never pays
+   * for discovery or spawns an MCP server it will never use.
+   */
+  private externalTooling: Promise<LocalExternalTooling | undefined> | null = null;
   private readonly workspace: NovaWorkspace;
   private readonly permissions: PermissionLedger;
   private readonly checkpoints: CheckpointStore;
@@ -102,6 +122,7 @@ export class NovaAgent {
   constructor(private readonly options: NovaAgentOptions) {
     this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...options.budgets };
     this.workspace = options.workspace ?? new LocalWorkspace(options.root, options.limits);
+    this.nestedInstructions = this.workspace.kind === "local" ? new NestedInstructionTracker(options.root) : undefined;
     this.checkpoints = new CheckpointStore(options.root, path.join(options.root, ".nova", "checkpoint-index"), options.git);
     this.session = {
       schemaVersion: 2,
@@ -129,6 +150,8 @@ export class NovaAgent {
           actionDigest: request.actionDigest,
           scopeKey: request.scopeKey,
           policyVersion: request.policyVersion,
+          effect: request.tool.effect,
+          capabilityId: request.tool.capabilityId,
         },
       }, { durable: true });
       const decision = await options.approve(request);
@@ -183,6 +206,14 @@ export class NovaAgent {
   async dispose(): Promise<void> {
     await this.relinquish();
     await this.workspace.dispose();
+    // Kills any MCP server process this session actually started. A tooling load that never
+    // happened (no turn was ever sent) is `null`, and disposing nothing is correct.
+    await (await this.externalTooling)?.dispose();
+  }
+
+  private loadExternalTooling(): Promise<LocalExternalTooling | undefined> {
+    this.externalTooling ??= this.workspace.kind === "local" ? loadLocalExternalTooling(this.options.root, this.workspace) : Promise.resolve(undefined);
+    return this.externalTooling;
   }
 
   /**
@@ -200,7 +231,16 @@ export class NovaAgent {
   /** Token-based preflight using the actual system prompt, history and tool schemas for this mode. */
   async estimateNextTurn(objective: string): Promise<AgentCostPrediction> {
     const context = await collectProjectContext(this.options.root);
-    const tools = createNovaTools({ workspace: this.workspace, todos: this.todoList, search: this.options.search, onExpense: this.options.onExpense });
+    const externalTooling = await this.loadExternalTooling();
+    const tools = await createNovaTools({
+      workspace: this.workspace,
+      todos: this.todoList,
+      search: this.options.search,
+      onExpense: this.options.onExpense,
+      instructions: this.nestedInstructions,
+      externalToolProviders: externalTooling?.providers,
+      hooks: externalTooling?.hooks,
+    });
     const capabilities = capabilitiesForMode(this.options.mode);
     const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
     const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, scoped.map((tool) => tool.name), this.workspace);
@@ -214,11 +254,30 @@ export class NovaAgent {
     return predictAgentUsage({ initialInputTokens, objective, mode: this.options.mode });
   }
 
-  /** Restores the workspace to the checkpoint taken before the last turn. */
-  async undo(): Promise<Checkpoint | undefined> {
+  /**
+   * Restores the last checkpoint — code, conversation, or both.
+   *
+   * The three scopes answer three different regrets: "the edit was wrong but the plan we discussed
+   * to get there was fine" (code), "the model went down a conversational dead end but the files
+   * are untouched or already fixed by hand" (conversation), and "start this turn over completely"
+   * (both, the default and the only thing `/undo` did before this).
+   *
+   * A conversation restore is written back to the session file immediately, not left to catch up
+   * on the next `send()` — someone who undoes and then closes Nova without sending another turn
+   * must not find the untruncated transcript still on disk.
+   */
+  async undo(scope: RestoreScope = "both"): Promise<Checkpoint | undefined> {
     const checkpoint = this.checkpoints.latest();
     if (!checkpoint) return undefined;
-    return (await this.checkpoints.restore(checkpoint.tree)) ? checkpoint : undefined;
+    if (scope === "code" || scope === "both") {
+      if (!(await this.checkpoints.restore(checkpoint.tree))) return undefined;
+    }
+    if (scope === "conversation" || scope === "both") {
+      this.messages = this.messages.slice(0, checkpoint.messageCount);
+      this.session = { ...this.session, messages: this.messages, updatedAt: Date.now() };
+      await saveSession(this.session);
+    }
+    return checkpoint;
   }
 
   /**
@@ -249,7 +308,16 @@ export class NovaAgent {
       // A long-lived session must not keep following an AGENTS.md that changed three turns ago.
       this.context = await collectProjectContext(this.options.root);
 
-      const tools = createNovaTools({ workspace: this.workspace, todos: this.todoList, search: this.options.search, onExpense: this.options.onExpense });
+      const externalTooling = await this.loadExternalTooling();
+      const tools = await createNovaTools({
+        workspace: this.workspace,
+        todos: this.todoList,
+        search: this.options.search,
+        onExpense: this.options.onExpense,
+        instructions: this.nestedInstructions,
+        externalToolProviders: externalTooling?.providers,
+        hooks: externalTooling?.hooks,
+      });
       const capabilities = capabilitiesForMode(this.options.mode);
       const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
       const systemPrompt = buildNovaSystemPrompt(
@@ -266,7 +334,10 @@ export class NovaAgent {
       // machine's files were never touched, and the sandbox is disposable by construction.
       let checkpoint: Checkpoint | undefined;
       if (this.options.mode !== "plan" && this.workspace.kind === "local") {
-        checkpoint = await this.checkpoints.capture(titleFromObjective(objective));
+        // `this.messages.length` here, before this turn's own exchange is appended below, is
+        // exactly the cut point a conversation-only or combined restore needs: "back to what the
+        // user saw when they typed this turn's objective."
+        checkpoint = await this.checkpoints.capture(titleFromObjective(objective), turnId, this.messages.length);
         if (checkpoint) this.options.onEvent?.({ type: "checkpoint", checkpoint });
       }
 

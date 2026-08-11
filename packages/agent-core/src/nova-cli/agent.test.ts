@@ -71,6 +71,78 @@ describe("NovaAgent", () => {
     expect(toolEvents).toHaveLength(3);
   });
 
+  it("surfaces a subdirectory's own instructions the moment a real turn reaches it", async () => {
+    // End to end, not just at the tool layer: the static system prompt built at the start of this
+    // turn only knows about NOVA.md at the root (seeded in beforeEach) — src/api/AGENTS.md is
+    // below the root collectProjectContext walks, so the only way its text reaches the model at
+    // all is through the dynamic path this test is checking.
+    await fs.mkdir(path.join(root, "src", "api"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "api", "AGENTS.md"), "Use snake_case for API field names.");
+    await fs.writeFile(path.join(root, "src", "api", "handler.ts"), "export const userId = 1;");
+
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "src/api/handler.ts" } }] },
+      { finishReason: "stop", content: "Read it." },
+    ]);
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+    await agent.send("what's in the api handler?");
+
+    // The tool result the model actually saw for that read_file call carries the nested
+    // instructions — this is the message the second model turn was generated against.
+    const toolResult = model.requests.at(-1)?.messages.find((message) => message.role === "tool" && message.name === "read_file");
+    expect(toolResult?.content).toContain("Use snake_case for API field names.");
+  });
+
+  it("discovers a project-declared skill and actually runs it when the model calls it, end to end", async () => {
+    // Not just at the tool layer: the skill must be discovered from .nova/skills, offered to the
+    // model as a real tool, and its command actually executed through the workspace when called —
+    // the same "the wiring, not the unit" bar `agent.ts`'s nested-instructions test above sets.
+    await fs.mkdir(path.join(root, ".nova/skills/greet"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, ".nova/skills/greet/skill.json"),
+      JSON.stringify({
+        name: "greet",
+        description: "Greets someone by name.",
+        command: "printf 'hello %s' {{name}}",
+        inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false },
+      }),
+    );
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "greet", arguments: { name: "world" } }] },
+      { finishReason: "stop", content: "Greeted them." },
+    ]);
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+    const result = await agent.send("greet the world");
+    expect(result.status).toBe("completed");
+    const toolResult = model.requests.at(-1)?.messages.find((message) => message.role === "tool" && message.name === "greet");
+    expect(toolResult?.content).toContain("hello world");
+  });
+
+  it("blocks a skill's own execution the same way it blocks a built-in tool when a pre-tool-use hook denies it", async () => {
+    await fs.mkdir(path.join(root, ".nova/hooks/pre-tool-use"), { recursive: true });
+    await fs.writeFile(path.join(root, ".nova/hooks/pre-tool-use/deny.sh"), "#!/bin/sh\necho 'not today' >&2\nexit 1\n", { mode: 0o755 });
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "app.ts" } }] },
+      { finishReason: "stop", content: "Could not read it." },
+    ]);
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+    await agent.send("read app.ts");
+    const toolResult = model.requests.at(-1)?.messages.find((message) => message.role === "tool" && message.name === "read_file");
+    expect(toolResult?.content).toContain("not today");
+  });
+
   it("refuses to call an unverified edit complete", async () => {
     // Inherited from the hosted runtime and worth keeping honest here: changing the workspace and
     // then declaring success without running anything is the single most common way an agent lies.
@@ -170,6 +242,88 @@ describe("NovaAgent", () => {
     const reverted = await agent.undo();
     expect(reverted?.tree).toBe("tree_abc");
     expect(gitCalls.at(-1)).toEqual(["read-tree", "-u", "--reset", "tree_abc"]);
+  });
+
+  describe("restore scope", () => {
+    // "make a change" is turn 1, run against an empty transcript (messages.length === 0 when the
+    // checkpoint was captured) — so a conversation restore should cut the transcript back to
+    // nothing, and a code restore should leave whatever "make a change" produced untouched.
+    function checkpointedAgent() {
+      const gitCalls: string[][] = [];
+      const model = scriptedModel([{ finishReason: "stop", content: "Changed it." }]);
+      const agent = new NovaAgent({
+        root, model, prices, mode: "build",
+        approve: async () => "allow",
+        git: async (args) => {
+          gitCalls.push(args);
+          return { exitCode: 0, stdout: args[0] === "write-tree" ? "tree_abc\n" : "", stderr: "" };
+        },
+      });
+      return { agent, model, gitCalls };
+    }
+
+    it("code scope reverts files and leaves the conversation exactly as it was", async () => {
+      const { agent, model, gitCalls } = checkpointedAgent();
+      await agent.send("make a change");
+      gitCalls.length = 0;
+
+      const reverted = await agent.undo("code");
+      expect(reverted?.tree).toBe("tree_abc");
+      expect(gitCalls).toEqual([["add", "--all", "--", ".", ":(exclude).nova"], ["read-tree", "-u", "--reset", "tree_abc"]]);
+
+      // The transcript is untouched: a second turn still carries "make a change" and its answer as
+      // history, proving this is a real property of the conversation the model receives, not just
+      // an internal field nobody reads back.
+      await agent.send("what did you just do?");
+      const secondRequest = model.requests.at(-1)!;
+      expect(secondRequest.messages.some((message) => message.content === "make a change")).toBe(true);
+    });
+
+    it("conversation scope truncates the transcript and never touches git at all", async () => {
+      const { agent, model, gitCalls } = checkpointedAgent();
+      await agent.send("make a change");
+      gitCalls.length = 0;
+
+      const reverted = await agent.undo("conversation");
+      expect(reverted?.tree).toBe("tree_abc"); // still names which checkpoint was undone
+      expect(gitCalls).toEqual([]); // no restore() call — code scope alone owns read-tree
+
+      await agent.send("what did you just do?");
+      const secondRequest = model.requests.at(-1)!;
+      // "make a change" is gone from history: the conversation genuinely restarted from before it.
+      expect(secondRequest.messages.some((message) => message.content === "make a change")).toBe(false);
+    });
+
+    it("conversation scope persists the truncated transcript immediately, not on the next turn", async () => {
+      const { agent } = checkpointedAgent();
+      await agent.send("make a change");
+      await agent.undo("conversation");
+
+      // Nobody has to send another turn for the file on disk to reflect the undo — closing Nova
+      // right after `/undo conversation` must not leave the untruncated transcript behind.
+      const onDisk = await loadSession(root, agent.sessionId);
+      expect(onDisk?.messages).toEqual([]);
+    });
+
+    it("both (the default) reverts files and truncates the conversation together", async () => {
+      const { agent, model, gitCalls } = checkpointedAgent();
+      await agent.send("make a change");
+      gitCalls.length = 0;
+
+      const reverted = await agent.undo();
+      expect(reverted?.tree).toBe("tree_abc");
+      expect(gitCalls.some((call) => call[0] === "read-tree")).toBe(true);
+
+      await agent.send("what did you just do?");
+      expect(model.requests.at(-1)!.messages.some((message) => message.content === "make a change")).toBe(false);
+    });
+
+    it("returns undefined for any scope when there is nothing to undo", async () => {
+      const { agent } = checkpointedAgent();
+      expect(await agent.undo("code")).toBeUndefined();
+      expect(await agent.undo("conversation")).toBeUndefined();
+      expect(await agent.undo("both")).toBeUndefined();
+    });
   });
 
   it("takes no checkpoint in plan mode, where nothing can change", async () => {

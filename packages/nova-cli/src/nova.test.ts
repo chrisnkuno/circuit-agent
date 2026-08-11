@@ -29,6 +29,14 @@ describe("argument parsing", () => {
     expect(parseArgs(["--build"]).mode).toBe("build");
   });
 
+  it("takes --json and its --headless alias, and keeps the request intact", () => {
+    expect(parseArgs([]).json).toBe(false);
+    expect(parseArgs(["--json", "fix", "the", "tests"])).toMatchObject({ json: true, prompt: "fix the tests" });
+    expect(parseArgs(["--headless", "ship", "it"])).toMatchObject({ json: true, prompt: "ship it" });
+    // Composes with the mode flags rather than replacing them — a headless run still has a mode.
+    expect(parseArgs(["--json", "--auto", "go"])).toMatchObject({ json: true, mode: "auto", prompt: "go" });
+  });
+
   it("treats every non-flag word as the request, so quoting is optional", () => {
     expect(parseArgs(["fix", "the", "failing", "test"]).prompt).toBe("fix the failing test");
     expect(parseArgs(["--plan", "why", "is", "it", "slow"])).toMatchObject({ mode: "plan", prompt: "why is it slow" });
@@ -147,7 +155,7 @@ describe("provider status view", () => {
 
   it("shows a configured provider with its model and where its price came from", () => {
     const rendered = plain(renderProviders({ ANTHROPIC_API_KEY: "sk-ant" }, "none"));
-    expect(rendered).toContain("claude-opus-5 · pricing: catalog");
+    expect(rendered).toContain("claude-sonnet-5 · pricing: catalog");
     expect(rendered).not.toContain("set ANTHROPIC_API_KEY");
   });
 
@@ -197,7 +205,7 @@ describe("renderEvent", () => {
 
   it("prints a checkpoint line naming a short prefix of the tree", () => {
     const { writes, restore } = captureStdout();
-    renderEvent({ type: "checkpoint", checkpoint: { tree: "abcdef1234567890", label: "before", createdAt: 0 } });
+    renderEvent({ type: "checkpoint", checkpoint: { tree: "abcdef1234567890", label: "before", createdAt: 0, turnId: "t1", messageCount: 0 } });
     restore();
     expect(writes.join("")).toContain("checkpoint abcdef12");
   });
@@ -234,7 +242,7 @@ describe("renderEvent", () => {
     renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "a.ts" } } });
     // A checkpoint between the call and its result means the announcement is no longer the last
     // line on screen, so rewriting it would clobber the checkpoint line instead.
-    renderEvent({ type: "checkpoint", checkpoint: { tree: "abcdef1234567890", label: "x", createdAt: 0 } });
+    renderEvent({ type: "checkpoint", checkpoint: { tree: "abcdef1234567890", label: "x", createdAt: 0, turnId: "t1", messageCount: 0 } });
     renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "a" } });
     restore();
     expect(writes.filter((chunk) => chunk === "\x1b[1A\x1b[2K")).toHaveLength(0);

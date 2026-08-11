@@ -57,9 +57,48 @@ export type Job = {
    * request is visible to `/jobs` and `/attach`, and a decision recorded here is what lets the
    * worker — which is polling for exactly this — carry on.
    */
-  pendingApproval?: { summary: string; toolName: string; requestedAt: number };
-  /** A decision delivered for `pendingApproval`, waiting for the owning worker to notice and act on it. */
-  approvalDecision?: "allow" | "allow_always" | "deny" | "deny_always";
+  pendingApproval?: PendingApproval;
+  /**
+   * A decision delivered for `pendingApproval`, waiting for the owning worker to notice and act on it.
+   *
+   * Carries the digest it was issued against, because a decision authorizes *an action*, not a job.
+   * Without it, "allow" meant "allow whatever this job asks next", and the action a human read in
+   * the prompt and the action the worker went on to run were only incidentally the same one.
+   */
+  approvalDecision?: { decision: ApprovalDecision; actionDigest: string; decidedAt: number };
+  /**
+   * Digests this job has already executed under a human decision.
+   *
+   * At-most-once enforcement: a decision is consumed exactly once, and a redelivered or replayed
+   * one for an action already run is refused rather than executed a second time.
+   */
+  executedApprovals?: string[];
+};
+
+export type ApprovalDecision = "allow" | "allow_always" | "deny" | "deny_always";
+
+/**
+ * The exact action a human is being asked to authorize, carried whole across the process boundary.
+ *
+ * In-process, `PermissionLedger` binds a decision to a digest over the tool, capability, effect and
+ * every argument, so a changed path or command must be approved again. A detached job crossed that
+ * boundary carrying only a summary string and a tool name, which meant the decision could not be
+ * checked against the call the worker actually went on to make. These fields are what make the
+ * cross-process decision as narrow as the in-process one.
+ */
+export type PendingApproval = {
+  summary: string;
+  toolName: string;
+  /** Identifies the specific call, so a decision cannot be applied to a different one. */
+  toolCallId: string;
+  /** SHA-256 over the normalized tool, capability, effect and arguments. */
+  actionDigest: string;
+  /** Versioned authorization key; a policy change invalidates decisions made under the old one. */
+  scopeKey: string;
+  policyVersion: string;
+  effect: "none" | "workspace" | "external";
+  capabilityId: string;
+  requestedAt: number;
 };
 
 export type JobStore = { jobs: Job[] };
@@ -171,7 +210,7 @@ export function heartbeat(store: JobStore, id: string, workerId: string, now: nu
   return { store: replace(store, { ...job, updatedAt: now, lease: { workerId, expiresAt: now + leaseMs } }), ok: true };
 }
 
-export type ApprovalRequest = { summary: string; toolName: string };
+export type ApprovalRequest = Omit<PendingApproval, "requestedAt">;
 
 /**
  * Parks the job on a decision only a human can make, and says so where `/jobs` and `/attach` look.
@@ -184,6 +223,10 @@ export type ApprovalRequest = { summary: string; toolName: string };
 export function requestApproval(store: JobStore, id: string, workerId: string, request: ApprovalRequest, now: number): { store: JobStore; ok: boolean } {
   const job = store.jobs.find((candidate) => candidate.id === id);
   if (!ownedBy(job, workerId, now)) return { store, ok: false };
+  if (!request.actionDigest.trim() || !request.scopeKey.trim()) throw new Error("An approval request must carry its action digest and scope key");
+  // Asking again for an action already executed under a decision would be a second execution of a
+  // single authorization, which is exactly what `executedApprovals` exists to prevent.
+  if (job.executedApprovals?.includes(request.actionDigest)) return { store, ok: false };
   return {
     store: replace(store, { ...job, status: "paused", updatedAt: now, pendingApproval: { ...request, requestedAt: now }, approvalDecision: undefined }),
     ok: true,
@@ -191,16 +234,22 @@ export function requestApproval(store: JobStore, id: string, workerId: string, r
 }
 
 /**
- * Delivers a decision for a pending approval.
+ * Delivers a decision for a pending approval, against the exact action the human was shown.
  *
  * Not lease-gated: the person resolving this is, by definition, not the worker — they are the human
  * the worker is waiting on, most often typing at `/attach` or `/jobs approve`, and the whole point is
  * that they can do this without holding the job's own claim.
+ *
+ * It *is* digest-gated. The caller states which action it is answering, and a mismatch is refused
+ * rather than applied: between a request being shown and a decision arriving, a worker can die and
+ * a re-claim can propose something different under the same job id. Answering "allow" to a prompt
+ * about `npm test` must never authorize the `rm -rf` that replaced it.
  */
-export function resolveApproval(store: JobStore, id: string, decision: NonNullable<Job["approvalDecision"]>, now: number): { store: JobStore; ok: boolean } {
+export function resolveApproval(store: JobStore, id: string, decision: ApprovalDecision, actionDigest: string, now: number): { store: JobStore; ok: boolean } {
   const job = store.jobs.find((candidate) => candidate.id === id);
-  if (!job || !job.pendingApproval) return { store, ok: false };
-  return { store: replace(store, { ...job, updatedAt: now, approvalDecision: decision }), ok: true };
+  if (!job?.pendingApproval) return { store, ok: false };
+  if (job.pendingApproval.actionDigest !== actionDigest) return { store, ok: false };
+  return { store: replace(store, { ...job, updatedAt: now, approvalDecision: { decision, actionDigest, decidedAt: now } }), ok: true };
 }
 
 /**
@@ -209,12 +258,37 @@ export function resolveApproval(store: JobStore, id: string, decision: NonNullab
  * Split from `resolveApproval` because the two happen on different sides of the same wait: a human
  * writes the decision from wherever they are watching, and the worker — mid-poll, holding the lease
  * — is the only one allowed to consume it and put the job back to work.
+ *
+ * The digest is re-checked here too, and returned with the decision so the worker can bind it to
+ * the call it is about to make. Recording an allowed digest in `executedApprovals` as it is
+ * consumed is what makes execution at-most-once: the decision is spent in the same transition that
+ * releases the job to run, so a duplicate delivery finds nothing left to consume.
  */
-export function consumeApproval(store: JobStore, id: string, workerId: string, now: number): { store: JobStore; decision?: NonNullable<Job["approvalDecision"]> } {
+export function consumeApproval(store: JobStore, id: string, workerId: string, now: number): { store: JobStore; decision?: ApprovalDecision; actionDigest?: string } {
   const job = store.jobs.find((candidate) => candidate.id === id);
-  if (!ownedBy(job, workerId, now) || !job.approvalDecision) return { store };
-  const decision = job.approvalDecision;
-  return { store: replace(store, { ...job, status: "running", updatedAt: now, pendingApproval: undefined, approvalDecision: undefined }), decision };
+  if (!ownedBy(job, workerId, now) || !job.approvalDecision || !job.pendingApproval) return { store };
+  const { decision, actionDigest } = job.approvalDecision;
+  // A decision that no longer matches the parked request answers a question that is no longer
+  // being asked. Drop both and leave the job paused rather than act on a stale authorization.
+  if (job.pendingApproval.actionDigest !== actionDigest) {
+    return { store: replace(store, { ...job, updatedAt: now, approvalDecision: undefined }) };
+  }
+  if (job.executedApprovals?.includes(actionDigest)) {
+    return { store: replace(store, { ...job, updatedAt: now, approvalDecision: undefined }) };
+  }
+  const allowed = decision === "allow" || decision === "allow_always";
+  return {
+    store: replace(store, {
+      ...job,
+      status: "running",
+      updatedAt: now,
+      pendingApproval: undefined,
+      approvalDecision: undefined,
+      executedApprovals: allowed ? [...(job.executedApprovals ?? []), actionDigest] : job.executedApprovals,
+    }),
+    decision,
+    actionDigest,
+  };
 }
 
 export type CompletionOptions = { now: number; error?: string };

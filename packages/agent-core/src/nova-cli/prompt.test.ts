@@ -117,6 +117,19 @@ describe("buildNovaSystemPrompt", () => {
     expect(prompt).not.toContain("Project root:");
   });
 
+  it("asks for invariant-based tests rather than a single happy-path example", () => {
+    // The failure this targets is an agent that writes one assertion for the value it just
+    // produced. Naming the properties — and saying plainly that a build is not a test — is what
+    // makes the difference between a suite that pins behaviour and one that pins a coincidence.
+    const prompt = buildNovaSystemPrompt(context, "build", ["run_command"]);
+    expect(prompt).toContain("Test by invariant");
+    expect(prompt).toContain("round-trips");
+    expect(prompt).toContain("idempotence");
+    expect(prompt).toContain("passing typecheck or build is not a test");
+    // A change to existing behaviour needs a test that distinguishes old from new.
+    expect(prompt).toContain("fails for the old behaviour");
+  });
+
   it("states the exact behavioural boundary for each mode", () => {
     expect(buildNovaSystemPrompt(context, "plan", [])).toContain("cannot write files or run commands");
     expect(buildNovaSystemPrompt(context, "build", [])).toContain("approved by the user before it runs");

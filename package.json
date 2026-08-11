@@ -48,6 +48,7 @@
     "nova": "./dist/nova.js"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ]
 }

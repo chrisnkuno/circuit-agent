@@ -74,7 +74,7 @@ describe("the log formatter", () => {
   });
 
   it("writes a line for checkpoints and compaction", () => {
-    expect(stepJobLog(emptyJobLogState(), { type: "checkpoint", checkpoint: { tree: "abc", label: "fix the build", createdAt: 0 } }).lines).toEqual(["✓ checkpoint: fix the build"]);
+    expect(stepJobLog(emptyJobLogState(), { type: "checkpoint", checkpoint: { tree: "abc", label: "fix the build", createdAt: 0, turnId: "t1", messageCount: 0 } }).lines).toEqual(["✓ checkpoint: fix the build"]);
     expect(stepJobLog(emptyJobLogState(), { type: "compaction", tokensBefore: 0, messagesBefore: 40, messagesAfter: 10 }).lines).toEqual(["… compacted 40 messages to 10"]);
   });
 
@@ -86,7 +86,7 @@ describe("the log formatter", () => {
 
 describe("summarizing a job for a human", () => {
   it("surfaces a pending approval inline", () => {
-    const job = { id: "j1", objective: "deploy", status: "paused", cwd: root, createdAt: 0, updatedAt: 0, attempts: 1, logPath: "l", pendingApproval: { summary: "run rm -rf dist", toolName: "run_command", requestedAt: 0 } } as const;
+    const job = { id: "j1", objective: "deploy", status: "paused", cwd: root, createdAt: 0, updatedAt: 0, attempts: 1, logPath: "l", pendingApproval: { summary: "run rm -rf dist", toolName: "run_command", toolCallId: "c1", actionDigest: "d1", scopeKey: "nova-approval-v2:d1", policyVersion: "nova-approval-v2", effect: "workspace", capabilityId: "workspace.terminal", requestedAt: 0 } } as const;
     expect(describeJobForHuman(job)).toContain("waiting on you: run rm -rf dist");
   });
 });
@@ -172,7 +172,8 @@ describe("approval while nobody is watching", () => {
     const resolving = (async () => {
       for (let attempt = 0; attempt < 50; attempt += 1) {
         const current = await getJob(root, job.id);
-        if (current?.pendingApproval) { await resolveJobApproval(root, job.id, "allow"); return; }
+        // Answers the digest that is actually parked, exactly as `/jobs approve` now does.
+        if (current?.pendingApproval) { await resolveJobApproval(root, job.id, "allow", current.pendingApproval.actionDigest); return; }
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       throw new Error("approval request never arrived");
@@ -204,7 +205,7 @@ describe("the detached approval prompt directly", () => {
     const job = await enqueueJob(root, { id: newJobId(), objective: "x", logPath: "l" });
     await import("@circuit-nova/nova-core").then((core) => core.claimJob(root, "worker-1", 60_000));
     const prompt = detachedApprovalPrompt({ root, jobId: job.id, ownerId: "worker-1", pollMs: 1, timeoutMs: 10 });
-    const decision = await prompt({ call: { id: "c1", name: "run_command", arguments: {} }, tool: { name: "run_command", description: "", inputSchema: { type: "object" }, capabilityId: "workspace.terminal", effect: "workspace", parallelSafe: false, requiresApproval: true, execute: async () => ({ content: "" }) }, summary: "run rm -rf /", actionDigest: "d", scopeKey: "s", policyVersion: "nova-approval-v1", safety: { sensitive: false, categories: [], reasons: [] } });
+    const decision = await prompt({ call: { id: "c1", name: "run_command", arguments: {} }, tool: { name: "run_command", description: "", inputSchema: { type: "object" }, capabilityId: "workspace.terminal", effect: "workspace", parallelSafe: false, requiresApproval: true, execute: async () => ({ content: "" }) }, summary: "run rm -rf /", actionDigest: "d", scopeKey: "s", policyVersion: "nova-approval-v2", safety: { sensitive: false, categories: [], reasons: [] } });
     expect(decision).toBe("deny");
   });
 });

@@ -4,14 +4,18 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agent";
+import { NovaSessionDaemon, type DaemonNotification, type NovaDaemonClient } from "@circuit-nova/nova-core/nova-cli/daemon";
 import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
-import { listSessions, loadSession } from "@circuit-nova/nova-core/nova-cli/session";
+import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
+import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
+import { EXIT_CODES, HeadlessEmitter, exitCodeForStatus } from "./headless";
+import { buildModelCatalog, describePrice, parseModelCommand, renderModelList } from "./models";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
 import { box, formatStatusLine, MarkdownStream, ReplaceableBlock, Spinner, StatusBar } from "./tui";
@@ -107,6 +111,13 @@ type ParsedArgs = {
   language: string | undefined;
   /** Explicit task-level consent for non-interactive sensitive work; tool gates still apply. */
   allowSensitive: boolean;
+  /**
+   * Machine-readable output: JSONL on stdout, human text on stderr, a stable exit code.
+   *
+   * Implies a single turn. A REPL that emits JSONL has nobody to read it, and the approval prompt
+   * it would need is exactly what headless callers cannot answer.
+   */
+  json: boolean;
 };
 
 /** Shape of the ids `newSessionId` mints, e.g. `20260808T001720Z-2ubjpz`. */
@@ -119,7 +130,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
     root: process.cwd(), help: false,
-    backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false,
+    backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false, json: false,
   };
   const rest: string[] = [];
 
@@ -133,6 +144,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--settings") parsed.settings = true;
     else if (argument === "--estimate") parsed.estimateOnly = true;
     else if (argument === "--allow-sensitive") parsed.allowSensitive = true;
+    else if (argument === "--json" || argument === "--headless") parsed.json = true;
     else if (argument === "--update") parsed.update = true;
     else if (argument === "--check-update") { parsed.update = true; parsed.checkUpdate = true; }
     else if (argument === "--check" && updateRequested) parsed.checkUpdate = true;
@@ -183,6 +195,7 @@ ${style.bold("nova")} — a coding agent in your terminal
   nova --plan               Plan mode: read and reason, never write
   nova --auto               Auto mode: ordinary edits apply; sensitive actions ask
   nova --allow-sensitive    Approve a flagged task preflight (tool guards still apply)
+  nova --json "task"        One turn, JSONL on stdout for another program to read
   nova --resume [id]        Continue a previous session ("latest" by default)
   nova --sessions           List sessions in this project
   nova --cwd <dir>          Work in a different project root
@@ -201,6 +214,8 @@ ${style.bold("Where the files go")}
 ${style.bold("Model")}
   nova --provider <name>    ${PROVIDER_IDS.join(" | ")}
   nova --model <id>         Model to run (defaults to the provider's)
+  /models                   List every model you can switch to, with its price
+  /model <N>                Switch to one by number, keeping the transcript
   nova --providers          Show which providers are configured, and what is missing
   nova settings             Configure keys, URLs, models, pricing and voice input
 
@@ -210,6 +225,12 @@ ${style.bold("Cost")}
   nova --budget N           Approve and enforce a cap in the display currency
   nova --estimate "task"    Show a token/cost forecast without calling the model
   /cost                     Token and cost breakdown for this session
+
+${style.bold("Headless output")}
+  With --json, stdout carries one JSON object per line and nothing else; everything
+  a person would read goes to stderr. Exit codes are stable:
+    0 completed   1 failed    2 usage         3 blocked
+    4 unverified  5 approval  6 limit hit     7 cancelled
 
 ${style.bold("In a session")}
 ${renderCommandHelp(language)}
@@ -394,11 +415,13 @@ export function renderProviders(environment: Record<string, string | undefined>,
     const mark = status.configured ? paint("✓", style.green) : paint("○", style.dim);
     const detail = status.configured
       ? paint(`${status.model} · pricing: ${status.pricing}`, style.dim)
-      : paint(`set ${status.missing.join(" and ")}`, style.yellow);
+      // `nova settings` leads: it stores the key for next time, where an exported variable lives
+      // only as long as the shell does. The variable name still appears, for CI and containers.
+      : paint(`nova settings, or set ${status.missing.join(" and ")}`, style.yellow);
     lines.push(`  ${mark} ${status.label.padEnd(14)} ${detail}`);
   }
   const exaConfigured = Boolean(environment.EXA_API_KEY?.trim());
-  lines.push(`  ${exaConfigured ? paint("✓", style.green) : paint("○", style.dim)} ${"Exa search".padEnd(14)} ${exaConfigured ? paint("web_search enabled", style.dim) : paint("set EXA_API_KEY or use nova settings", style.yellow)}`);
+  lines.push(`  ${exaConfigured ? paint("✓", style.green) : paint("○", style.dim)} ${"Exa search".padEnd(14)} ${exaConfigured ? paint("web_search enabled", style.dim) : paint("nova settings, or set EXA_API_KEY", style.yellow)}`);
 
   const unpriced = statuses.filter((status) => status.configured && status.pricing === "unknown");
   if (unpriced.length > 0) {
@@ -717,10 +740,63 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
+  /**
+   * Headless mode claims stdout for JSONL, and gives the human stream to stderr.
+   *
+   * Done by redirecting the process stream rather than by routing each of the hundred existing
+   * `process.stdout.write` calls, because the guarantee has to hold for output this file does not
+   * own: a warning from a dependency, a line added later by someone who has not read this comment.
+   * One choke point makes "stdout is only ever JSONL" structural instead of a convention.
+   */
+  let writeRecord: ((line: string) => void) | null = null;
+  if (args.json) {
+    if (!args.prompt) {
+      process.stderr.write("--json runs a single turn: pass the request, for example nova --json \"fix the failing tests\".\n");
+      return EXIT_CODES.usage;
+    }
+    const realStdoutWrite = process.stdout.write.bind(process.stdout);
+    writeRecord = (line) => { realStdoutWrite(line); };
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) =>
+      (process.stderr.write as (...args: unknown[]) => boolean)(chunk, ...rest)) as typeof process.stdout.write;
+    // Escape codes aimed at a terminal are noise in a log file, and the spinner would redraw over
+    // the diagnostics it shares the stream with.
+    environment.NO_COLOR = "1";
+  }
+
+  let resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
+  // Nothing configured yet is the ordinary first run, not an error. Exporting a key into the shell
+  // leaves it in shell history and dies with the shell; Nova already stores keys itself, so the
+  // first run offers that instead of printing a variable name and quitting. Automation still gets
+  // the message-and-exit path, because a prompt no one can answer is a hang.
+  // Never in headless mode: an interactive menu has nobody to answer it when a program is driving.
+  if ("error" in resolved && !args.json && !args.provider && !args.model && process.stdin.isTTY && process.stdout.isTTY) {
+    process.stdout.write(`${style.yellow("Nova is not configured yet.")} Add a provider key below — it is saved for next time, so you never need to export it.\n`);
+    const setupReadline = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      savedSettings = await runSettingsMenu(savedSettings, {
+        ask: (question) => setupReadline.question(question),
+        askSecret: (question) => hiddenQuestion(setupReadline, question),
+        write: (text) => process.stdout.write(text),
+      });
+      const file = await saveSettings(savedSettings, processEnvironment);
+      process.stdout.write(style.dim(`Settings saved to ${file}.\n`));
+    } catch (error) {
+      if (!isReadlineExit(error)) throw error;
+      process.stdout.write(style.dim("\nSetup cancelled.\n"));
+    } finally {
+      setupReadline.close();
+    }
+    // The freshly saved values have to reach the same merged view every later read uses, or the
+    // key the user just typed would be invisible for the rest of this process.
+    for (const field of SETTING_FIELDS) delete environment[field.key];
+    Object.assign(environment, mergedEnvironment(savedSettings, processEnvironment));
+    language = resolveControlLanguage(args.language ?? environment.NOVA_LANGUAGE ?? environment.LANG);
+    resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
+  }
   if ("error" in resolved) {
     process.stderr.write(`${style.red("Nova is not configured.")} ${resolved.error}\n`);
-    return 1;
+    process.stderr.write(`Run ${style.cyan("nova settings")} to save a key without exporting one.\n`);
+    return args.json ? EXIT_CODES.usage : 1;
   }
   let { provider: model, spec, prices } = resolved;
   let resolvedModelId = resolved.model;
@@ -792,8 +868,8 @@ async function main(): Promise<number> {
     : () => {};
   // The status bar and spinner draw over the current line and redraw in place — meaningless
   // (and corrupting) output when either end of the pipe is not a real terminal.
-  const ttyMode = interactive && Boolean(process.stdout.isTTY);
-  const depth = detectColorDepth(environment, Boolean(process.stdout.isTTY));
+  const ttyMode = interactive && !args.json && Boolean(process.stdout.isTTY);
+  const depth = detectColorDepth(environment, !args.json && Boolean(process.stdout.isTTY));
   configureRendering(depth);
   let mode = args.mode;
 
@@ -862,25 +938,54 @@ async function main(): Promise<number> {
   // `AbortSignal` is single-use) but the prompt function itself is built once per agent and must
   // keep seeing whichever turn is currently running.
   let currentTurnAbort: AbortController | undefined;
-  const newAgent = () => new NovaAgent({
-    root: args.root,
-    model,
-    // The runtime keeps its own integer-unit ceiling as a runaway guard; the ledger below owns the
-    // real, currency-aware budget. Feeding it the provider's own per-million rates keeps that guard
-    // proportionate to actual spend instead of to a unit nobody configured.
-    prices: modelPriceCatalogFor(prices, Boolean(approvedBudget)),
-    ...(approvedBudget && prices ? { budgets: { maxRwf: convertTo(approvedBudget, prices.currency, rates)?.micros ?? approvedBudget.micros } } : {}),
-    mode,
-    workspace,
-    approve: createApprovalPrompt(readline, interactive, () => currentTurnAbort?.signal),
-    search: createExaClient(environment),
-    onExpense: (expense) => ledger.recordExpense(expense),
-    onEvent: (event: NovaEvent) => {
-      if (event.type === "runtime" && event.event.type === "assistant_delta") streamedAnswer = true;
-      renderEvent(event);
-    },
-  });
-  let agent = newAgent();
+  const approvalPrompt = createApprovalPrompt(readline, interactive, () => currentTurnAbort?.signal);
+  const handleDaemonNotification = (notification: DaemonNotification) => {
+    // `turn_started`/`turn_finished`/`session_opened` exist for a client with no other way to know
+    // a turn's outcome; this CLI already gets that from `client.send()`'s own return value, so only
+    // the event stream needs forwarding here.
+    if (notification.type !== "agent_event") return;
+    const event = notification.event;
+    if (event.type === "runtime" && event.event.type === "assistant_delta") streamedAnswer = true;
+    headless?.agentEvent(event);
+    renderEvent(event);
+  };
+  /**
+   * One coordinator owns every live agent this process creates.
+   *
+   * Tabs, mode swaps and model swaps each become a daemon client rather than a directly-held
+   * `NovaAgent`, which is what makes this process's sessions reachable the same way a desktop
+   * window's or an IDE's are — through `NovaSessionDaemon`, not through a second, parallel way of
+   * constructing an agent that the daemon knows nothing about.
+   */
+  const daemon = new NovaSessionDaemon();
+  const openClient = async (record?: SessionRecord): Promise<NovaDaemonClient> => {
+    const client = daemon.connect({
+      onNotification: handleDaemonNotification,
+      // The daemon's approval type is the flattened cross-boundary shape; the terminal prompt only
+      // ever read `summary` and `safety` off the richer in-process one, so the adapter is this thin.
+      approve: (request) => approvalPrompt({ summary: request.summary, safety: request.safety }),
+    });
+    await client.open(({ onEvent, approve }) => new NovaAgent({
+      root: args.root,
+      model,
+      // The runtime keeps its own integer-unit ceiling as a runaway guard; the ledger below owns the
+      // real, currency-aware budget. Feeding it the provider's own per-million rates keeps that guard
+      // proportionate to actual spend instead of to a unit nobody configured.
+      prices: modelPriceCatalogFor(prices, Boolean(approvedBudget)),
+      ...(approvedBudget && prices ? { budgets: { maxRwf: convertTo(approvedBudget, prices.currency, rates)?.micros ?? approvedBudget.micros } } : {}),
+      mode,
+      workspace,
+      approve,
+      search: createExaClient(environment),
+      onExpense: (expense) => ledger.recordExpense(expense),
+      onEvent,
+    }), record);
+    return client;
+  };
+  // Human rendering still runs in headless mode — its output is the stderr diagnostic stream —
+  // so a person watching a piped run sees the same narration a caller's parser ignores.
+  const headless = writeRecord ? new HeadlessEmitter(writeRecord) : null;
+  let agent = await openClient();
 
   /**
    * One workspace, several pieces of work.
@@ -889,7 +994,7 @@ async function main(): Promise<number> {
    * this loop already reads. Threading a tab handle through every call site instead would touch
    * every line below without changing what any of them do.
    */
-  const tabs = new WorkspaceController<{ agent: NovaAgent; ledger: CostLedger; mode: NovaMode }>();
+  const tabs = new WorkspaceController<{ agent: NovaDaemonClient; ledger: CostLedger; mode: NovaMode }>();
   tabs.adopt(path.basename(args.root) || "nova", { agent, ledger, mode });
   const switchTab = (id: number): boolean => {
     const current = tabs.active;
@@ -935,7 +1040,7 @@ async function main(): Promise<number> {
       exitCleanly();
       return 1;
     }
-    process.stdout.write(`${ledger.formatPrediction(await agent.estimateNextTurn(args.prompt))}\n`);
+    process.stdout.write(`${ledger.formatPrediction(await agent.estimate(args.prompt))}\n`);
     await agent.dispose();
     exitCleanly();
     return 0;
@@ -945,7 +1050,11 @@ async function main(): Promise<number> {
     const id = args.resume === "latest" ? (await listSessions(args.root, 1))[0]?.id : args.resume;
     const record = id ? await loadSession(args.root, id) : null;
     if (record) {
-      agent.resume(record);
+      // The daemon resumes at construction, not in place — swap the fresh client already opened
+      // above for one opened against the resumed record, the same handoff every mode/model switch
+      // below performs.
+      await agent.relinquish();
+      agent = await openClient(record);
       process.stdout.write(style.dim(`Resumed ${record.id} — ${record.title}\n`));
     } else {
       process.stdout.write(style.yellow("No matching session; starting a new one.\n"));
@@ -983,7 +1092,10 @@ async function main(): Promise<number> {
   exitCleanly = () => { unbindSigint(); screen?.exit(); uninstallShortcuts(); readline.close(); };
 
   let streamedAnswer = false;
+  /** The last turn's terminal status, which headless mode turns into the process exit code. */
+  let lastTurnStatus: AgentRuntimeResult["status"] = "failed";
   const runTurn = async (request: string): Promise<boolean> => {
+    headless?.turnStart(request);
     streamedAnswer = false;
     if (screen) {
       screen.parkInTranscript();
@@ -1009,7 +1121,7 @@ async function main(): Promise<number> {
       agent.setModelSpendLimit(remainingProvider.micros);
     }
     try {
-      process.stdout.write(style.dim(`  ${ledger.formatPrediction(await agent.estimateNextTurn(request))}\n`));
+      process.stdout.write(style.dim(`  ${ledger.formatPrediction(await agent.estimate(request))}\n`));
     } catch (error) {
       process.stdout.write(style.yellow(`  Could not estimate this turn: ${error instanceof Error ? error.message : String(error)}\n`));
     }
@@ -1086,6 +1198,16 @@ async function main(): Promise<number> {
       process.stdout.write(style.dim(`\n  ${result.status} · ${ledger.formatTurn(turn)}\n`));
       const warning = ledger.budgetWarning();
       if (warning) process.stdout.write(`  ${style.yellow(warning)}\n`);
+      lastTurnStatus = result.status;
+      headless?.turnEnd({
+        status: result.status,
+        summary: result.summary,
+        iterations: result.iterations,
+        toolCalls: result.toolCallsExecuted,
+        usage: result.usage,
+        cost: ledger.displayTotal ? formatMoney(ledger.displayTotal) : null,
+        elapsedMs: Date.now() - started,
+      });
       refreshProjectFiles(); // a turn can create files, and the next mention should complete them
     } catch (error) {
       activity.awaitingFirstDelta = false;
@@ -1098,9 +1220,13 @@ async function main(): Promise<number> {
       if (/exceeds the reserved model budget/i.test(message) && args.budget) {
         process.stdout.write(`\n${style.yellow(`Stopped at the ${formatMoney(fromUnits(args.budget, display))} cap for this request.`)}\n`);
         process.stdout.write(style.dim(`  Raise it with --budget, or ask for something smaller.\n`));
+        lastTurnStatus = "iteration_limit";
+        headless?.error(`Stopped at the approved cap for this request.`, { status: "iteration_limit" });
         return false;
       }
       process.stdout.write(`${style.red("error")} ${message}\n`);
+      lastTurnStatus = "failed";
+      headless?.error(message, { status: "failed" });
       return false;
     } finally {
       turnActive = false;
@@ -1110,6 +1236,15 @@ async function main(): Promise<number> {
   };
 
   if (args.prompt) {
+    // Announced before any work, so a consumer knows what it is reading before the first event.
+    headless?.session({
+      sessionId: agent.sessionId,
+      root: args.root,
+      provider: spec.id,
+      model: resolvedModelId,
+      mode,
+      workspace: agent.workspaceLabel,
+    });
     const ran = await runTurn(args.prompt);
     // A one-shot run against a sandbox would otherwise leave the work unreachable, so it is
     // offered back before the sandbox goes away.
@@ -1120,7 +1255,8 @@ async function main(): Promise<number> {
     }
     await agent.dispose();
     exitCleanly();
-    return ran ? 0 : 1;
+    // Headless callers get the specific outcome; the human path keeps its long-standing 0/1.
+    return args.json ? exitCodeForStatus(lastTurnStatus) : (ran ? 0 : 1);
   }
 
   if (!interactive) {
@@ -1210,19 +1346,52 @@ async function main(): Promise<number> {
       // just produced is still in context when it starts building — Cline's behaviour, and the
       // reason Plan mode is useful rather than a separate conversation.
       const previous = agent;
+      // Read before relinquishing: the client's sessionId is only valid while it is still open.
+      const previousSessionId = previous.sessionId;
       await previous.relinquish();
-      agent = newAgent();
-      const carried = await loadSession(args.root, previous.sessionId);
-      if (carried) agent.resume(carried);
+      const carried = await loadSession(args.root, previousSessionId);
+      agent = await openClient(carried ?? undefined);
       const posture = mode === "plan" ? "read-only; no write tools" : mode === "build" ? "edits and commands require approval" : "ordinary edits and commands are pre-approved; sensitive and external actions require approval";
       process.stdout.write(style.dim(`  switched to ${mode} mode · ${posture}\n`));
       continue;
     }
-    if (input.startsWith("/model")) {
-      const [, providerArg, modelArg] = input.split(/\s+/);
+    const modelCommand = parseModelCommand(input);
+    if (modelCommand) {
+      const catalog = buildModelCatalog(environment);
+      if (modelCommand.kind === "list") {
+        if (catalog.choices.length === 0 && catalog.unconfigured.length > 0) {
+          process.stdout.write(style.yellow("  No provider is configured yet — run /settings to add a key.\n"));
+          continue;
+        }
+        process.stdout.write(`${renderModelList(catalog, {
+          current: { provider: spec.id, model: resolvedModelId },
+          price: (choice) => describePrice(choice.prices, display, (money) => convertTo(money, display, rates)),
+          paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
+        })}\n`);
+        continue;
+      }
+
+      let providerArg: string | undefined;
+      let modelArg: string | undefined;
+      if (modelCommand.kind === "pick") {
+        const chosen = catalog.choices[modelCommand.index - 1];
+        if (!chosen) {
+          process.stdout.write(style.yellow(`  There is no model ${modelCommand.index}. Run /models to see the list.\n`));
+          continue;
+        }
+        providerArg = chosen.provider;
+        modelArg = chosen.model;
+      } else {
+        ({ provider: providerArg, model: modelArg } = modelCommand);
+      }
+
       const attempt = resolveProvider(environment, { provider: providerArg, model: modelArg });
       if ("error" in attempt) {
         process.stdout.write(`${style.red(attempt.error)}\n`);
+        continue;
+      }
+      if (attempt.spec.id === spec.id && attempt.model === resolvedModelId) {
+        process.stdout.write(style.dim(`  already on ${spec.label} ${resolvedModelId}\n`));
         continue;
       }
       model = attempt.provider;
@@ -1231,10 +1400,10 @@ async function main(): Promise<number> {
       resolvedModelId = attempt.model;
       ledger.setPrices(prices);
       const previous = agent;
+      const previousSessionId = previous.sessionId;
       await previous.relinquish();
-      agent = newAgent();
-      const carried = await loadSession(args.root, previous.sessionId);
-      if (carried) agent.resume(carried);
+      const carried = await loadSession(args.root, previousSessionId);
+      agent = await openClient(carried ?? undefined);
       process.stdout.write(style.dim(`  switched to ${spec.label} ${resolvedModelId}${prices ? "" : " — no price configured, costs will show as unknown"}\n`));
       continue;
     }
@@ -1267,7 +1436,11 @@ async function main(): Promise<number> {
             leaving.payload.agent = agent;
             leaving.payload.ledger = ledger;
             leaving.payload.mode = mode;
-            const opened = tabs.open(tabCommand.title ?? `tab ${tabs.size + 1}`, () => ({ agent: newAgent(), ledger: new CostLedger({ prices, display, rates, catalog: PRICE_CATALOG, ...(approvedBudget ? { budget: approvedBudget } : {}) }), mode }));
+            // Opened before tabs.open() rather than inside its factory: WorkspaceController's
+            // factory is synchronous, and the client itself is already live by the time the tab
+            // record is created.
+            const newTabClient = await openClient();
+            const opened = tabs.open(tabCommand.title ?? `tab ${tabs.size + 1}`, () => ({ agent: newTabClient, ledger: new CostLedger({ prices, display, rates, catalog: PRICE_CATALOG, ...(approvedBudget ? { budget: approvedBudget } : {}) }), mode }));
             ({ agent, ledger, mode } = opened.payload);
             showTabs();
             break;
@@ -1370,8 +1543,14 @@ async function main(): Promise<number> {
             break;
           }
           case "approve": {
-            const ok = await resolveJobApproval(args.root, jobsCommand.id, jobsCommand.decision);
-            process.stdout.write(ok ? `  delivered — the worker will pick it up shortly.\n` : style.yellow(`  ${jobsCommand.id} has no pending approval.\n`));
+            // `/jobs approve <id>` names a job, not an action, so the action has to be read back
+            // and shown before the decision is bound to it — otherwise this authorizes whatever
+            // the job happens to be asking for now, which is the hole this whole path closes.
+            const pending = (await getJob(args.root, jobsCommand.id))?.pendingApproval;
+            if (!pending) { process.stdout.write(style.yellow(`  ${jobsCommand.id} has no pending approval.\n`)); break; }
+            process.stdout.write(style.dim(`  ${jobsCommand.decision === "deny" ? "denying" : "approving"}: ${pending.summary}\n`));
+            const ok = await resolveJobApproval(args.root, jobsCommand.id, jobsCommand.decision, pending.actionDigest);
+            process.stdout.write(ok ? `  delivered — the worker will pick it up shortly.\n` : style.yellow(`  that request changed before your answer arrived — nothing was authorized.\n`));
             break;
           }
         }
@@ -1421,8 +1600,13 @@ async function main(): Promise<number> {
           const current = await getJob(args.root, attachCommand.id);
           if (!current) break;
           if (current.pendingApproval) {
-            const answer = (await readline.question(`  ${style.yellow("approval needed:")} ${current.pendingApproval.summary} [y/N]: `)).trim().toLowerCase();
-            await resolveJobApproval(args.root, attachCommand.id, answer === "y" || answer === "yes" ? "allow" : "deny");
+            // The digest read here is the one displayed; answering it authorizes that action only.
+            // Re-reading the job after the question would race a worker that re-parked a different
+            // call while the human was typing, and silently redirect the answer onto it.
+            const { summary, actionDigest } = current.pendingApproval;
+            const answer = (await readline.question(`  ${style.yellow("approval needed:")} ${summary} [y/N]: `)).trim().toLowerCase();
+            const applied = await resolveJobApproval(args.root, attachCommand.id, answer === "y" || answer === "yes" ? "allow" : "deny", actionDigest);
+            if (!applied) process.stdout.write(style.yellow("  That request changed before your answer arrived — nothing was authorized.\n"));
             continue;
           }
           if (isTerminal(current.status)) { process.stdout.write(style.dim(`  job ${current.status}\n`)); break; }
@@ -1440,14 +1624,21 @@ async function main(): Promise<number> {
       process.stdout.write(`${keys.render()}\n\n${renderKeyboardShortcuts(language)}\n`);
       continue;
     }
-    if (input === "/undo") {
-      const restored = await agent.undo();
-      process.stdout.write(restored ? style.green(`  reverted to "${restored.label}"\n`) : style.yellow("  nothing to undo\n"));
+    if (input === "/undo" || input.startsWith("/undo ")) {
+      const argument = input.slice("/undo".length).trim();
+      const scope = argument === "code" || argument === "conversation" ? argument : argument === "" ? "both" : null;
+      if (scope === null) {
+        process.stdout.write(style.yellow(`  /undo takes no argument, "code", or "conversation" — not "${argument}".\n`));
+        continue;
+      }
+      const restored = await agent.undo(scope);
+      const label = scope === "code" ? "reverted the files for" : scope === "conversation" ? "rewound the conversation before" : "reverted";
+      process.stdout.write(restored ? style.green(`  ${label} "${restored.label}"\n`) : style.yellow("  nothing to undo\n"));
       continue;
     }
     if (input === "/clear") {
       await agent.relinquish();
-      agent = newAgent();
+      agent = await openClient();
       process.stdout.write(style.dim("  new thread\n"));
       continue;
     }
@@ -1485,8 +1676,7 @@ async function main(): Promise<number> {
       const previous = agent;
       const carried = await loadSession(args.root, previous.sessionId);
       await previous.relinquish();
-      agent = newAgent();
-      if (carried) agent.resume(carried);
+      agent = await openClient(carried ?? undefined);
       process.stdout.write(style.green(`  settings saved to ${file}\n`));
       process.stdout.write(style.dim(`  Settings are active now${environment.EXA_API_KEY?.trim() ? "; Exa web_search is available" : ""}. Use /model only to change the selected model.\n`));
       continue;
@@ -1551,7 +1741,7 @@ async function main(): Promise<number> {
       detachRequested = false;
       const sessionId = agent.sessionId;
       await agent.relinquish();
-      agent = newAgent();
+      agent = await openClient();
       const id = newJobId();
       const job = await enqueueJob(args.root, { id, objective: `Continue: ${input}`, logPath: jobLogPath(args.root, id), sessionId });
       await spawnJobWorker(args.root, job.id);
@@ -1560,6 +1750,11 @@ async function main(): Promise<number> {
   }
 
   await agent.dispose();
+  // A tab opened and left open (never closed, never made active again) never got its own explicit
+  // dispose — this is the safety net for it, closing whatever the daemon still holds, sandboxes
+  // included, rather than leaking them on exit. Idempotent: the active agent above is already gone
+  // from the daemon's session map by the time this runs, so its own dispose is not repeated.
+  await daemon.shutdown();
   const promptHistory = ([...((readline as Interface & { history?: string[] }).history ?? [])]).reverse();
   await saveHistory(promptHistory, environment).catch(() => undefined);
   exitCleanly();

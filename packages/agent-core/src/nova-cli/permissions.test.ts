@@ -31,6 +31,29 @@ describe("mode capabilities", () => {
   });
 });
 
+describe("action digest", () => {
+  it("changes when the same-named tool arrives from a different provenance", () => {
+    const builtIn = tool({ name: "run_command" });
+    const sameNameFromSkill = tool({ name: "run_command", provenance: { kind: "skill", providerId: "local-skills" } });
+    // A standing `allow_always` for Nova's own run_command must not silently cover a same-named
+    // tool an MCP server or skill file starts offering later — that is a different actor making
+    // the same-shaped request, and digest binding exists precisely to require fresh consent for it.
+    expect(actionDigest(call("run_command"), builtIn)).not.toBe(actionDigest(call("run_command"), sameNameFromSkill));
+  });
+
+  it("changes when the provider id changes but the kind does not", () => {
+    const fromServerA = tool({ name: "search", provenance: { kind: "mcp", providerId: "server-a" } });
+    const fromServerB = tool({ name: "search", provenance: { kind: "mcp", providerId: "server-b" } });
+    expect(actionDigest(call("search"), fromServerA)).not.toBe(actionDigest(call("search"), fromServerB));
+  });
+
+  it("treats an absent provenance the same as an explicit built-in one", () => {
+    const implicit = tool({ name: "run_command" });
+    const explicit = tool({ name: "run_command", provenance: { kind: "built-in" } });
+    expect(actionDigest(call("run_command"), implicit)).toBe(actionDigest(call("run_command"), explicit));
+  });
+});
+
 describe("permission ledger", () => {
   it("never asks about tools that change nothing", async () => {
     let asked = 0;
@@ -48,7 +71,7 @@ describe("permission ledger", () => {
     await ledger.isApproved(call("edit_file", { path: "b.ts" }), tool({ name: "edit_file" }));
     expect(asked).toEqual(["edit_file", "edit_file"]);
     expect(Object.keys(ledger.snapshot())).toHaveLength(2);
-    expect(Object.keys(ledger.snapshot()).every((key) => key.startsWith("nova-approval-v1:"))).toBe(true);
+    expect(Object.keys(ledger.snapshot()).every((key) => key.startsWith("nova-approval-v2:"))).toBe(true);
   });
 
   it("keeps a standing 'always allow' scoped to the one tool it was given for", async () => {
@@ -111,7 +134,7 @@ describe("permission ledger", () => {
     const ledger = new PermissionLedger("build", async () => { asked += 1; return "allow"; });
     const edit = call("edit_file", { path: "a.ts" });
     const editTool = tool({ name: "edit_file" });
-    const key = `nova-approval-v1:${actionDigest(edit, editTool)}`;
+    const key = `nova-approval-v2:${actionDigest(edit, editTool)}`;
     ledger.restore({ [key]: "allow", run_command: "deny" });
 
     expect(await ledger.isApproved(edit, editTool)).toBe(true);

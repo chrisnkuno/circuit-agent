@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancel, claim, consumeApproval, detach, emptyStore, enqueue, finish, heartbeat, MAX_ATTEMPTS, recoverStale, requestApproval, resolveApproval, summarize, type JobStore } from "./jobs";
+import { cancel, claim, consumeApproval, detach, emptyStore, enqueue, finish, heartbeat, MAX_ATTEMPTS, recoverStale, requestApproval, resolveApproval, summarize, type ApprovalRequest, type JobStore } from "./jobs";
 
 const LEASE = 30_000;
 const T0 = 1_760_000_000_000;
@@ -183,53 +183,149 @@ describe("detaching and cancelling", () => {
   });
 });
 
+/** A complete cross-process approval request; `digest` is the identity everything binds to. */
+function approvalFor(digest: string, overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    summary: "run npm test",
+    toolName: "run_command",
+    toolCallId: `call-${digest}`,
+    actionDigest: digest,
+    scopeKey: `nova-approval-v1:${digest}`,
+    policyVersion: "nova-approval-v1",
+    effect: "workspace",
+    capabilityId: "workspace.terminal",
+    ...overrides,
+  };
+}
+
 describe("approval while nobody is watching", () => {
   it("parks the job on a decision and says whose call it is", () => {
     const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
-    const paused = requestApproval(running.store, "job-1", "worker-1", { summary: "run rm -rf build/", toolName: "run_command" }, T0 + 1_000);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1", { summary: "run rm -rf build/" }), T0 + 1_000);
     expect(paused.ok).toBe(true);
     expect(paused.store.jobs[0]).toMatchObject({ status: "paused", pendingApproval: { summary: "run rm -rf build/", toolName: "run_command" } });
+  });
+
+  it("carries the whole authorization identity across the process boundary", () => {
+    // A summary and a tool name cannot be checked against anything. The digest, scope key, policy
+    // version, effect and capability are what let a decision be verified against the call it was
+    // issued for, which is the guarantee PermissionLedger already makes in-process.
+    const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
+    const request = approvalFor("d1");
+    const paused = requestApproval(running.store, "job-1", "worker-1", request, T0 + 1_000);
+    expect(paused.store.jobs[0].pendingApproval).toMatchObject({
+      actionDigest: "d1",
+      scopeKey: "nova-approval-v1:d1",
+      policyVersion: "nova-approval-v1",
+      effect: "workspace",
+      capabilityId: "workspace.terminal",
+      toolCallId: "call-d1",
+      requestedAt: T0 + 1_000,
+    });
+  });
+
+  it("refuses a request that cannot be identified", () => {
+    const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
+    expect(() => requestApproval(running.store, "job-1", "worker-1", approvalFor("", { actionDigest: "" }), T0 + 1_000)).toThrow(/action digest/);
   });
 
   it("keeps the lease alive while paused, so recovery does not mistake waiting for dead", () => {
     // The worker isn't gone, it's idle on purpose — a paused job must still be heartbeat-able,
     // or every approval wait would eventually be reclaimed out from under it.
     const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
-    const paused = requestApproval(running.store, "job-1", "worker-1", { summary: "x", toolName: "run_command" }, T0 + 1_000);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
     expect(heartbeat(paused.store, "job-1", "worker-1", T0 + 2_000, LEASE).ok).toBe(true);
     expect(recoverStale(paused.store, T0 + 2_000).recovered).toEqual([]);
   });
 
   it("lets a human resolve it without holding the job's lease", () => {
     const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
-    const paused = requestApproval(running.store, "job-1", "worker-1", { summary: "x", toolName: "run_command" }, T0 + 1_000);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
     // Whoever is deciding is, by construction, not the worker — /jobs approve has no lease to offer.
-    const resolved = resolveApproval(paused.store, "job-1", "allow", T0 + 5_000);
+    const resolved = resolveApproval(paused.store, "job-1", "allow", "d1", T0 + 5_000);
     expect(resolved.ok).toBe(true);
-    expect(resolved.store.jobs[0].approvalDecision).toBe("allow");
+    expect(resolved.store.jobs[0].approvalDecision).toMatchObject({ decision: "allow", actionDigest: "d1" });
     expect(resolved.store.jobs[0].status).toBe("paused");
+  });
+
+  it("refuses a decision aimed at an action the job is not asking about", () => {
+    // The attack this closes: a worker dies between the prompt and the answer, a re-claim parks a
+    // different call under the same job id, and a human's "allow" lands on a command they never
+    // saw. The decision names an action; a job id alone is not an authorization.
+    const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d-safe", { summary: "run npm test" }), T0 + 1_000);
+    const wrong = resolveApproval(paused.store, "job-1", "allow", "d-destructive", T0 + 5_000);
+    expect(wrong.ok).toBe(false);
+    expect(wrong.store.jobs[0].approvalDecision).toBeUndefined();
+  });
+
+  it("drops a decision whose action was replaced while it was in flight", () => {
+    // Resolved against the request that was showing, then the worker re-parks a different call
+    // before the decision is collected. The stale authorization must not carry over to the new one.
+    const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
+    const first = requestApproval(running.store, "job-1", "worker-1", approvalFor("d-safe"), T0 + 1_000);
+    const resolved = resolveApproval(first.store, "job-1", "allow", "d-safe", T0 + 2_000);
+    const replaced = requestApproval(resolved.store, "job-1", "worker-1", approvalFor("d-other"), T0 + 3_000);
+
+    const collected = consumeApproval(replaced.store, "job-1", "worker-1", T0 + 4_000);
+    expect(collected.decision).toBeUndefined();
+    expect(collected.store.jobs[0]).toMatchObject({ status: "paused", approvalDecision: undefined });
+    expect(collected.store.jobs[0].pendingApproval?.actionDigest).toBe("d-other");
   });
 
   it("only the owning worker collects the decision, and doing so resumes the job", () => {
     const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
-    const paused = requestApproval(running.store, "job-1", "worker-1", { summary: "x", toolName: "run_command" }, T0 + 1_000);
-    const resolved = resolveApproval(paused.store, "job-1", "deny_always", T0 + 5_000);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
+    const resolved = resolveApproval(paused.store, "job-1", "deny_always", "d1", T0 + 5_000);
 
     expect(consumeApproval(resolved.store, "job-1", "worker-2", T0 + 6_000).decision).toBeUndefined();
     const collected = consumeApproval(resolved.store, "job-1", "worker-1", T0 + 6_000);
     expect(collected.decision).toBe("deny_always");
+    expect(collected.actionDigest).toBe("d1");
     expect(collected.store.jobs[0]).toMatchObject({ status: "running", pendingApproval: undefined, approvalDecision: undefined });
+  });
+
+  it("executes an approved action at most once, however often the decision is redelivered", () => {
+    // One human decision authorizes one execution. A replayed or duplicated delivery — a retry, a
+    // resumed worker, a re-parked identical call — must find the authorization already spent.
+    const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
+    const resolved = resolveApproval(paused.store, "job-1", "allow", "d1", T0 + 2_000);
+    const first = consumeApproval(resolved.store, "job-1", "worker-1", T0 + 3_000);
+    expect(first.decision).toBe("allow");
+    expect(first.store.jobs[0].executedApprovals).toEqual(["d1"]);
+
+    // The same action cannot be parked again, so it cannot be approved or run a second time.
+    const again = requestApproval(first.store, "job-1", "worker-1", approvalFor("d1"), T0 + 4_000);
+    expect(again.ok).toBe(false);
+    expect(again.store.jobs[0].status).toBe("running");
+
+    // A decision redelivered for the spent digest is not collectable either.
+    const replayed = resolveApproval(first.store, "job-1", "allow", "d1", T0 + 5_000);
+    expect(replayed.ok).toBe(false);
+  });
+
+  it("does not spend the authorization when the answer was no", () => {
+    // A denial is not an execution, so the same action may legitimately be proposed and asked
+    // about again — recording it as executed would make every denial permanent by accident.
+    const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
+    const resolved = resolveApproval(paused.store, "job-1", "deny", "d1", T0 + 2_000);
+    const collected = consumeApproval(resolved.store, "job-1", "worker-1", T0 + 3_000);
+    expect(collected.decision).toBe("deny");
+    expect(collected.store.jobs[0].executedApprovals ?? []).toEqual([]);
+    expect(requestApproval(collected.store, "job-1", "worker-1", approvalFor("d1"), T0 + 4_000).ok).toBe(true);
   });
 
   it("has nothing to collect before a decision is delivered", () => {
     const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
-    const paused = requestApproval(running.store, "job-1", "worker-1", { summary: "x", toolName: "run_command" }, T0 + 1_000);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
     expect(consumeApproval(paused.store, "job-1", "worker-1", T0 + 2_000).decision).toBeUndefined();
   });
 
   it("clears a stale approval on recovery rather than leaving an unanswerable request behind", () => {
     const running = claim(seed(["ship it"]), "worker-1", T0, LEASE);
-    const paused = requestApproval(running.store, "job-1", "worker-1", { summary: "x", toolName: "run_command" }, T0 + 1_000);
+    const paused = requestApproval(running.store, "job-1", "worker-1", approvalFor("d1"), T0 + 1_000);
     const recovered = recoverStale(paused.store, T0 + LEASE + 1);
     expect(recovered.store.jobs[0]).toMatchObject({ status: "queued", pendingApproval: undefined });
   });

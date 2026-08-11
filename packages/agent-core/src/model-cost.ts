@@ -10,6 +10,20 @@ export type TokenEstimate = {
  * a flat characters-per-token ratio: source identifiers, punctuation and multibyte writing split
  * very differently. Actual provider usage remains the accounting source of truth.
  */
+/**
+ * UTF-8 length of one code point, by arithmetic rather than by encoding it.
+ *
+ * The encoding form allocated a fresh `TextEncoder` and a fresh byte array for every character of
+ * every punctuation run, which on a transcript-sized string is the dominant cost of estimating it.
+ * The ranges below are UTF-8's own definition, so this returns exactly what encoding returned.
+ */
+function utf8Length(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  if (codePoint < 0x10000) return 3;
+  return 4;
+}
+
 export function estimateTextTokens(text: string): number {
   if (!text) return 0;
   let tokens = 0;
@@ -22,7 +36,7 @@ export function estimateTextTokens(text: string): number {
       let asciiPunctuation = 0;
       let multibyteBytes = 0;
       for (const character of segment) {
-        const bytes = new TextEncoder().encode(character).byteLength;
+        const bytes = utf8Length(character.codePointAt(0)!);
         if (bytes === 1) asciiPunctuation += 1;
         else multibyteBytes += bytes;
       }
@@ -30,6 +44,13 @@ export function estimateTextTokens(text: string): number {
     }
   }
   return Math.max(1, tokens);
+}
+
+/** UTF-8 byte length without materializing the encoded copy. */
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (const character of text) bytes += utf8Length(character.codePointAt(0)!);
+  return bytes;
 }
 
 export type ModelPriceCatalog = {
@@ -72,13 +93,57 @@ function costRwf(inputTokens: number, outputTokens: number, prices: ModelPriceCa
  * Actual provider usage is always reconciled after execution.
  */
 export function approximateInputTokens(parts: string[]): TokenEstimate {
-  const text = parts.join("\n");
-  const utf8Bytes = new TextEncoder().encode(text).byteLength;
-  const expectedInputTokens = parts.reduce((sum, part) => sum + estimateTextTokens(part) + 4, 0) + 64;
+  const totals = newPartTotals();
+  for (const part of parts) addPart(totals, part);
+  return tokenEstimateFrom(totals);
+}
+
+/**
+ * Running measurement of a list of prompt parts.
+ *
+ * Exists so a caller re-estimating a *growing* list measures each part once instead of once per
+ * estimate. The agent loop re-priced its whole transcript before every model call, which is
+ * quadratic in the number of iterations and was measurably the most expensive synchronous work in
+ * a long turn — while every message but the newest had an answer that could not have changed.
+ */
+export type PartTotals = { count: number; tokens: number; bytes: number };
+
+export function newPartTotals(): PartTotals {
+  return { count: 0, tokens: 0, bytes: 0 };
+}
+
+export function addPart(totals: PartTotals, text: string): PartTotals {
+  totals.count += 1;
+  totals.tokens += estimateTextTokens(text) + 4;
+  totals.bytes += utf8ByteLength(text);
+  return totals;
+}
+
+/**
+ * The same estimate `approximateInputTokens` returns, folded from running totals.
+ *
+ * The byte figure accounts for the `"\n"` the parts were previously joined with, so a measurement
+ * accumulated part by part matches one taken over the whole list exactly.
+ */
+export function tokenEstimateFrom(totals: PartTotals): TokenEstimate {
+  const expectedInputTokens = totals.tokens + 64;
+  const utf8Bytes = totals.bytes + Math.max(0, totals.count - 1);
   return {
     expectedInputTokens,
     maximumInputTokens: Math.max(expectedInputTokens + 256, utf8Bytes + 1_024),
   };
+}
+
+/** Largest affordable output allowance from an estimate that has already been measured. */
+export function affordableOutputTokensFor(estimate: TokenEstimate, requestedOutputTokens: number, approvedRwf: number, prices: ModelPriceCatalog): number {
+  assertRate(prices.inputRwfPerMillionTokens, "inputRwfPerMillionTokens");
+  assertRate(prices.outputRwfPerMillionTokens, "outputRwfPerMillionTokens");
+  assertTokens(requestedOutputTokens, "requestedOutputTokens");
+  assertTokens(approvedRwf, "approvedRwf");
+  const availableForOutput = approvedRwf - costRwf(estimate.maximumInputTokens, 0, prices);
+  if (availableForOutput <= 0) return 0;
+  const affordable = Math.floor((availableForOutput * 1_000_000) / prices.outputRwfPerMillionTokens);
+  return Math.max(0, Math.min(requestedOutputTokens, affordable));
 }
 
 export function estimateModelCost(parts: string[], maximumOutputTokens: number, prices: ModelPriceCatalog): ModelCostEstimate {
