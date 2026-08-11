@@ -111,6 +111,32 @@ describe("rendering", () => {
   it("says so plainly when nothing matches", () => {
     expect(renderPalette({ query: "zzz", matches: [], selected: 0 })).toContain("(no match)");
   });
+
+  describe("opening upward", () => {
+    const matches = rankPaletteEntries(entries, "");
+
+    it("puts the query line last, where the user is typing", () => {
+      const lines = renderPalette({ query: "", matches, selected: 0 }, { direction: "up", rows: 3 }).split("\n");
+      expect(lines.at(-1)).toContain("›");
+      expect(lines).toHaveLength(4);
+    });
+
+    it("puts the selected row nearest the query line, not furthest from it", () => {
+      // In an upward list the row adjacent to the cursor is the one the eye lands on, so it has to
+      // be the one Return would take. Rendered downward, the same selection sits at the top.
+      const up = renderPalette({ query: "", matches, selected: 0 }, { direction: "up", rows: 3 }).split("\n");
+      expect(up.at(-2)).toContain("❯");
+
+      const down = renderPalette({ query: "", matches, selected: 0 }, { rows: 3 }).split("\n");
+      expect(down[1]).toContain("❯");
+    });
+
+    it("shows the same rows either way, only their order differs", () => {
+      const up = renderPalette({ query: "", matches, selected: 0 }, { direction: "up", rows: 3 }).split("\n");
+      const down = renderPalette({ query: "", matches, selected: 0 }, { rows: 3 }).split("\n");
+      expect([...up].reverse()).toEqual(down);
+    });
+  });
 });
 
 describe("the interaction end to end", () => {
@@ -130,6 +156,25 @@ describe("the interaction end to end", () => {
 
   it("returns nothing when dismissed, so the caller runs no command", async () => {
     expect(await runCommandPalette(keys([...type("di"), press("escape")]), entries, () => {})).toBeUndefined();
+  });
+
+  it("starts filtered by a seeded query, so a dropdown opened by typing '/' is already narrowed", async () => {
+    const chosen = await runCommandPalette(keys([...type("mode"), press("return")]), entries, () => {}, { initialQuery: "/" });
+    expect(chosen).toBe("/mode ");
+  });
+
+  it("hands the typed text back on dismissal instead of swallowing it", async () => {
+    // Escape means "not from this menu", not "forget that I typed" — a dropdown that opens on "/"
+    // would otherwise eat every keystroke of anyone typing an absolute path.
+    const dismissed: string[] = [];
+    await runCommandPalette(keys([...type("/hom"), press("escape")]), entries, () => {}, { onDismiss: (query) => dismissed.push(query) });
+    expect(dismissed).toEqual(["/hom"]);
+  });
+
+  it("does not report a dismissal when a command was chosen", async () => {
+    const dismissed: string[] = [];
+    await runCommandPalette(keys([...type("diff"), press("return")]), entries, () => {}, { onDismiss: (query) => dismissed.push(query) });
+    expect(dismissed).toEqual([]);
   });
 
   it("returns nothing when the key stream ends without a choice", async () => {

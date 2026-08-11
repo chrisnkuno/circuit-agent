@@ -152,6 +152,30 @@ describe("cost ledger", () => {
     const unpriced = ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
     expect(unpriced.cost).toBeUndefined();
   });
+
+  it("re-reads the whole session in a new currency after the location changes", () => {
+    const rate = { from: "USD", to: "RWF", rate: 1_300, asOf: "2026-08-12", source: "test" } as const;
+    const ledger = new CostLedger({ prices: opus, display: "USD", rates: [rate] });
+    ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
+    const inDollars = ledger.displayTotal!;
+
+    ledger.setDisplay("RWF");
+    const inFrancs = ledger.displayTotal!;
+
+    // Spending recorded *before* the change is converted too, not left behind in the old currency:
+    // the total still describes one history, read in different money.
+    expect(inFrancs.currency).toBe("RWF");
+    expect(toUnits(inFrancs)).toBeCloseTo(toUnits(inDollars) * 1_300, -3);
+  });
+
+  it("can be given the rates it needs at the same time as the currency", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD" });
+    ledger.record({ usage: usage(100_000, 1_000), iterations: 1, toolCalls: 0, elapsedMs: 1_000 });
+    // Without the rate arriving alongside, a session that started with nothing to convert with
+    // could never move currency at all.
+    ledger.setDisplay("RWF", [{ from: "USD", to: "RWF", rate: 1_300, asOf: "2026-08-12", source: "test" }]);
+    expect(ledger.displayTotal?.currency).toBe("RWF");
+  });
 });
 
 describe("spending beyond the model", () => {

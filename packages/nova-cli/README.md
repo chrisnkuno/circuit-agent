@@ -34,7 +34,7 @@ In a session: `/mode` shows the current permission posture, `/mode plan|build|au
 
 ## Setup
 
-Nova needs one model provider. It uses the first one configured unless `--provider` says otherwise.
+Nova needs one model provider. It uses the one you last switched to, or the first one configured, unless `--provider` says otherwise.
 
 The easiest interactive setup is:
 
@@ -56,6 +56,7 @@ export MODEL_INPUT_PER_MILLION=1.5      # per million tokens, in MODEL_PRICE_CUR
 export MODEL_OUTPUT_PER_MILLION=6
 export NOVA_COUNTRY=RW                  # optional; otherwise LANG/LC_MONETARY is used
 export NOVA_CURRENCY=RWF                # optional manual override; any supported ISO currency
+# Both are also in `nova settings`, where changing your location takes effect immediately
 export NOVA_FX_RWF_PER_USD=1320         # required to show USD-priced models in RWF
 # Generic offline/manual pair: NOVA_FX_FROM=USD NOVA_FX_TO=EGP NOVA_FX_RATE=48.5
 ```
@@ -90,6 +91,8 @@ Use `--yes` for an explicitly unattended update. Without it, Nova refuses to mut
 **Locally, an approved command runs as you.** This is the part worth being plain about: on your own machine there is no sandbox around `run_command`. Once you approve it, it has exactly the authority your shell has — it can read and write files outside the project and reach the network. Nova narrows *what gets proposed* (plan mode cannot run commands at all, a small set are refused outright, and auto mode still stops for anything sensitive), and Nova contains the process *tree* on Linux so a cancelled or timed-out command cannot leave background processes behind. Neither of those is a security boundary. The approval prompt is the boundary, which is why it shows the exact command and why a tool that did not ship with Nova always says where it came from. When you need a real one, `--sandbox` and `--sandbox docker` put the work inside a container.
 
 **Spending is bounded before work starts.** `--budget N` is expressed in the selected local currency. In an interactive session Nova confirms that cap before starting a sandbox or calling a model; in a one-shot command the explicit flag is the approval. If the required FX rate is unavailable, Nova refuses to pretend it can enforce a converted cap.
+
+**Switching models is a menu, not a lookup.** `/model` opens a picker: arrow to a model and press Enter, with each one's price beside it and the cursor starting on the one in use. Providers you have no key for are rows you can select, and selecting one opens settings — so a missing key is something you fix from where you noticed it. Typed forms skip the menu entirely: `/model opus` matches on any part of a model id and says which candidates it meant if the name is ambiguous. The transcript carries across the switch, and your choice is remembered for the next launch.
 
 **Undo is real.** Each turn snapshots the workspace into a private git index. `/undo` reverts modified files *and* removes files the agent created, without touching your staged changes.
 

@@ -2,10 +2,15 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { controlLabel, resolveControlLanguage } from "./i18n";
+import { SUPPORTED_COUNTRIES, currencyForCountry, normalizeCountryCode } from "./local-currency";
+import { isCurrency } from "@circuit-nova/nova-core/money";
 
 /** Settings Nova may persist. Unknown JSON keys are ignored on read. */
 export const SETTING_FIELDS = [
   { key: "NOVA_LANGUAGE", label: "Control language (en/zh/hi/es/fr/ar/bn/pt/ru/ur)" },
+  { key: "NOVA_COUNTRY", label: "Location (ISO country code, e.g. RW) — sets your currency" },
+  { key: "NOVA_CURRENCY", label: "Display currency (overrides the one your location implies)" },
+  { key: "NOVA_PROVIDER", label: "Default provider (anthropic/openai/circuitnotion)" },
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true },
   { key: "ANTHROPIC_BASE_URL", label: "Anthropic base URL", url: true },
   { key: "ANTHROPIC_MODEL", label: "Anthropic model" },
@@ -106,6 +111,23 @@ export function validateSetting(key: SettingKey, raw: string): string {
   }
   if (key === "MODEL_PRICE_CURRENCY" && !/^[A-Za-z]{3}$/.test(value)) throw new Error("Currency must be a three-letter ISO code such as USD.");
   if (key === "NOVA_LANGUAGE" && !/^(en|zh|hi|es|fr|ar|bn|pt|ru|ur)$/i.test(value)) throw new Error("Choose en, zh, hi, es, fr, ar, bn, pt, ru, or ur.");
+  if (key === "NOVA_PROVIDER" && !/^(anthropic|openai|circuitnotion)$/i.test(value)) throw new Error("Choose anthropic, openai, or circuitnotion.");
+  if (key === "NOVA_PROVIDER") return value.toLowerCase();
+  if (key === "NOVA_COUNTRY") {
+    const country = normalizeCountryCode(value);
+    if (!country) throw new Error("Enter a two-letter ISO country code, such as RW or EG.");
+    // Refused rather than accepted-and-ignored: the point of setting a location is the currency,
+    // and a code with no currency behind it would save cleanly and then change nothing.
+    if (!currencyForCountry(country)) {
+      throw new Error(`No local currency is known for ${country}. Set the display currency directly instead, or choose one of: ${SUPPORTED_COUNTRIES.join(", ")}.`);
+    }
+    return country;
+  }
+  if (key === "NOVA_CURRENCY") {
+    const currency = value.toUpperCase();
+    if (!isCurrency(currency)) throw new Error(`${currency} is not a currency Nova can convert to. Leave this empty to use the one your location implies.`);
+    return currency;
+  }
   return key === "MODEL_PRICE_CURRENCY" ? value.toUpperCase() : value;
 }
 

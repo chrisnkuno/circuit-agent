@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadSettings, maskSetting, mergedEnvironment, runSettingsMenu, saveSettings, settingsDirectory, validateSetting } from "./settings";
+import { SETTING_FIELDS, loadSettings, maskSetting, mergedEnvironment, runSettingsMenu, saveSettings, settingsDirectory, validateSetting, type SettingKey } from "./settings";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))); });
@@ -31,8 +31,37 @@ describe("Nova settings", () => {
     expect(maskSetting("sk-123456789")).toBe("sk-…789");
   });
 
+  it("takes a location as a country code and normalises it", () => {
+    expect(validateSetting("NOVA_COUNTRY", "rw")).toBe("RW");
+    expect(validateSetting("NOVA_COUNTRY", " eg ")).toBe("EG");
+  });
+
+  it("refuses a country it cannot price in, rather than saving a setting that does nothing", () => {
+    // The failure this prevents is the quiet one: the user says where they are, sees it saved, and
+    // still reads dollars, with nothing on screen connecting the two.
+    expect(() => validateSetting("NOVA_COUNTRY", "ZZ")).toThrow("No local currency is known");
+    expect(() => validateSetting("NOVA_COUNTRY", "Rwanda")).toThrow("two-letter");
+  });
+
+  it("takes an explicit display currency, and refuses one it cannot convert to", () => {
+    expect(validateSetting("NOVA_CURRENCY", "rwf")).toBe("RWF");
+    expect(() => validateSetting("NOVA_CURRENCY", "XYZ")).toThrow("not a currency");
+  });
+
+  it("accepts only real providers as the remembered default, normalised to lower case", () => {
+    // resolveProvider ignores an unrecognised NOVA_PROVIDER rather than failing to start, so a typo
+    // entered here would otherwise be accepted and then silently do nothing.
+    expect(validateSetting("NOVA_PROVIDER", "OpenAI")).toBe("openai");
+    expect(validateSetting("NOVA_PROVIDER", "anthropic")).toBe("anthropic");
+    expect(() => validateSetting("NOVA_PROVIDER", "gemini")).toThrow("anthropic");
+  });
+
   it("edits and clears values through the numbered menu without echoing secrets", async () => {
-    const answers = ["5", "secret-value", "6", "https://api.example.com/v1", "5", "-", "q"];
+    // Derived, not hardcoded: the menu numbers a field by its position in SETTING_FIELDS, so
+    // adding a setting renumbers every field below it and a literal "5" quietly starts editing a
+    // different setting than the one this test is about.
+    const position = (key: SettingKey) => String(SETTING_FIELDS.findIndex((field) => field.key === key) + 1);
+    const answers = [position("OPENAI_API_KEY"), "secret-value", position("OPENAI_BASE_URL"), "https://api.example.com/v1", position("OPENAI_API_KEY"), "-", "q"];
     const writes: string[] = [];
     const result = await runSettingsMenu({}, {
       ask: async () => answers.shift()!,

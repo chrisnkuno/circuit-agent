@@ -330,4 +330,16 @@ export class CostLedger {
   setPrices(prices: TokenPrices | undefined): void {
     this.options.prices = prices;
   }
+
+  /**
+   * Reads the same session back in a different currency — for changing location mid-session.
+   *
+   * Only the display side moves. Turns are stored in the currency they were charged in, so past
+   * spending is re-converted rather than rewritten, and the total after the change means the same
+   * thing it did before: a conversion of one history, not two histories in two currencies.
+   */
+  setDisplay(display: Currency, rates?: readonly FxRate[]): void {
+    this.options.display = display;
+    if (rates) this.options.rates = rates;
+  }
 }

@@ -19,6 +19,15 @@ const TIMEZONE_COUNTRIES: Record<string, string> = {
   "America/Sao_Paulo": "BR", "America/Mexico_City": "MX",
 };
 
+/**
+ * The countries a location can be set to, in the sense that matters: ones we can price in.
+ *
+ * Exported so settings can refuse a code that would change nothing. Accepting `XX` and then
+ * silently falling back to the provider's currency is the worst outcome available — the user has
+ * told Nova where they are, seen it saved, and gets dollars anyway with no indication why.
+ */
+export const SUPPORTED_COUNTRIES: readonly string[] = Object.keys(COUNTRY_CURRENCIES).sort();
+
 export type CurrencyPreference = {
   currency: Currency;
   countryCode: string | null;

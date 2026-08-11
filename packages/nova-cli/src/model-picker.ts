@@ -1,0 +1,151 @@
+import type { KeypressEvent } from "./keybindings";
+import type { ModelCatalog, ModelChoice } from "./models";
+import type { ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
+
+/**
+ * Choosing a model by moving to it, rather than by naming it.
+ *
+ * `/model` could already list and switch, but both halves asked the user to carry something: the
+ * numbered list asked them to read a number and then type it somewhere else, and the typed form
+ * asked them to know the id. Neither is hard; both are a step between deciding and doing that a
+ * cursor and Return remove entirely.
+ *
+ * The other thing a menu can do that a printed list cannot is *lead somewhere*. A provider with no
+ * key is the most common reason the list is short, and printing "set OPENAI_API_KEY" leaves the
+ * person holding a task. Here that line is a row you can select, and selecting it opens settings —
+ * the dead end becomes the fix.
+ */
+
+export type PickerRow =
+  | { kind: "model"; choice: ModelChoice; header?: string }
+  /** Selecting this leaves the picker and opens the settings menu. */
+  | { kind: "settings"; label: string; header?: string };
+
+export type PickerResult =
+  | { kind: "model"; choice: ModelChoice }
+  | { kind: "settings" };
+
+export type PickerState = { selected: number };
+
+/**
+ * The rows, in the order they are shown: what you can switch to, then what you could fix.
+ *
+ * Unconfigured providers come after the usable models deliberately. They are the more interesting
+ * rows to someone setting up and the less interesting to everyone else, and the list is opened to
+ * switch models far more often than to add a key.
+ */
+export function buildPickerRows(catalog: ModelCatalog): PickerRow[] {
+  const rows: PickerRow[] = [];
+  let lastProvider: ProviderId | null = null;
+  for (const choice of catalog.choices) {
+    const header = choice.provider === lastProvider ? undefined : choice.providerLabel;
+    lastProvider = choice.provider;
+    rows.push({ kind: "model", choice, ...(header ? { header } : {}) });
+  }
+  for (const entry of catalog.unconfigured) {
+    rows.push({ kind: "settings", header: entry.label, label: `Add a key — needs ${entry.missing.join(" and ")}` });
+  }
+  rows.push({ kind: "settings", header: "Settings", label: "Keys, models, pricing and voice…" });
+  return rows;
+}
+
+/** Where the cursor starts: on the model in use, so the common case is "look, then Escape". */
+export function initialSelection(rows: readonly PickerRow[], current: { provider: ProviderId; model: string }): number {
+  const index = rows.findIndex((row) => row.kind === "model" && row.choice.provider === current.provider && row.choice.model === current.model);
+  return index >= 0 ? index : 0;
+}
+
+export type PickerPaint = {
+  dim(text: string): string;
+  cyan(text: string): string;
+  green(text: string): string;
+  yellow(text: string): string;
+};
+
+export type RenderPickerOptions = {
+  /** Visible rows before the list scrolls under the selection. */
+  height?: number;
+  current: { provider: ProviderId; model: string };
+  price: (choice: ModelChoice) => string;
+  paint: PickerPaint;
+};
+
+export function renderModelPicker(frame: { rows: readonly PickerRow[]; selected: number }, options: RenderPickerOptions): string {
+  const { paint } = options;
+  const height = options.height ?? 10;
+  // Same windowing rule as the palette: keep the selection on screen, or the arrow keys look broken.
+  const start = Math.max(0, Math.min(frame.selected - Math.floor(height / 2), frame.rows.length - height));
+  const visible = frame.rows.slice(Math.max(0, start), Math.max(0, start) + height);
+  const width = Math.max(0, ...visible.map((row) => (row.kind === "model" ? row.choice.model.length : row.label.length)));
+
+  const lines: string[] = [];
+  for (const [offset, row] of visible.entries()) {
+    if (row.header) lines.push(`  ${paint.cyan(row.header)}`);
+    const active = Math.max(0, start) + offset === frame.selected;
+    const cursor = active ? paint.green("❯") : " ";
+    if (row.kind === "settings") {
+      lines.push(`  ${cursor} ${paint.yellow(row.label)}`);
+      continue;
+    }
+    const isCurrent = row.choice.provider === options.current.provider && row.choice.model === options.current.model;
+    const tags = [row.choice.isProviderDefault ? "default" : "", isCurrent ? "current" : ""].filter(Boolean).join(", ");
+    lines.push(`  ${cursor} ${isCurrent ? paint.green("●") : " "} ${row.choice.model.padEnd(width + 2)}${paint.dim(options.price(row.choice))}${tags ? paint.dim(`  (${tags})`) : ""}`);
+  }
+  lines.push(`  ${paint.dim("↑↓ move · Enter choose · Esc cancel")}`);
+  return lines.join("\n");
+}
+
+/**
+ * Advances the picker one keystroke.
+ *
+ * Split from the reading loop for the same reason the palette's is: the whole interaction is then
+ * testable without a terminal, and the loop below does nothing but turn keypresses into these calls.
+ */
+export function advanceModelPicker(state: PickerState, rows: readonly PickerRow[], input: { str?: string; key: KeypressEvent }): {
+  state: PickerState;
+  done?: { result?: PickerResult };
+} {
+  const name = input.key.name;
+  const last = Math.max(0, rows.length - 1);
+
+  if (name === "escape" || (input.key.ctrl && (name === "c" || name === "g"))) return { state, done: {} };
+  if (name === "return" || name === "enter") {
+    const row = rows[state.selected];
+    if (!row) return { state, done: {} };
+    return { state, done: { result: row.kind === "model" ? { kind: "model", choice: row.choice } : { kind: "settings" } } };
+  }
+  // Clamped rather than wrapped: wrapping past the end of a list this short reads as the cursor
+  // having jumped somewhere at random.
+  if (name === "up" || (input.key.ctrl && name === "p")) return { state: { selected: Math.max(0, state.selected - 1) } };
+  if (name === "down" || (input.key.ctrl && name === "n")) return { state: { selected: Math.min(last, state.selected + 1) } };
+  if (name === "home") return { state: { selected: 0 } };
+  if (name === "end") return { state: { selected: last } };
+
+  // Typing a number still works, because the printed list taught people to do that and a menu that
+  // silently ignores the habit it created is worse than one that never offered numbers at all.
+  if (input.str && /^[1-9]$/.test(input.str) && !input.key.ctrl && !input.key.meta) {
+    const index = Number(input.str) - 1;
+    if (index <= last) return { state: { selected: index } };
+  }
+  return { state };
+}
+
+export type RunModelPickerOptions = RenderPickerOptions & { rows: readonly PickerRow[] };
+
+export async function runModelPicker(
+  keys: AsyncIterable<{ str?: string; key: KeypressEvent }>,
+  paint: (frame: string) => void,
+  options: RunModelPickerOptions,
+): Promise<PickerResult | undefined> {
+  const { rows } = options;
+  let state: PickerState = { selected: initialSelection(rows, options.current) };
+  paint(renderModelPicker({ rows, selected: state.selected }, options));
+
+  for await (const input of keys) {
+    const step = advanceModelPicker(state, rows, input);
+    state = step.state;
+    if (step.done) return step.done.result;
+    paint(renderModelPicker({ rows, selected: state.selected }, options));
+  }
+  return undefined;
+}

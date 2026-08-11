@@ -26,8 +26,8 @@ export const COMMANDS = defineCommands({
   "/plan": { description: "Switch to plan mode — read and reason, no writes" },
   "/build": { description: "Switch to build mode — edits need approval" },
   "/auto": { description: "Auto-apply ordinary edits; sensitive actions still ask" },
-  "/models": { description: "List every model you can switch to, with its price" },
-  "/model": { args: "[N | provider model]", description: "Switch model by number or id, keeping the transcript" },
+  "/models": { description: "Pick a model from a list, with prices — or add a key for one you can't use yet" },
+  "/model": { args: "[name | N | provider model]", description: "Open the model picker, or switch straight to a name, keeping the transcript" },
   "/undo": { args: "[code|conversation]", description: "Revert the last turn — files, the conversation, or both (default)" },
   "/diff": { description: "What changed since the last checkpoint" },
   "/todos": { description: "The agent's current plan" },
@@ -71,6 +71,26 @@ export function completeCommand(line: string): [string[], string] {
   return [matches, line];
 }
 
+/**
+ * Completes the argument to `/model` against the models this session can actually switch to.
+ *
+ * Only configured models are offered, for the same reason the menu only lists them: a completion
+ * that produces a command which then fails is worse than no completion, because the user has been
+ * told the name is right. Matching is substring rather than prefix — model ids are front-loaded
+ * with vendor prefixes (`claude-`, `gpt-`), so prefix-only completion would mean typing the least
+ * distinguishing part of the name before getting any help with the part that matters.
+ */
+export function completeModelArgument(line: string, models: readonly string[]): [string[], string] | null {
+  const match = /^(\/models?\s+)(\S*)$/.exec(line);
+  if (!match) return null;
+  const fragment = match[2].toLowerCase();
+  const prefixed = models.filter((model) => model.toLowerCase().startsWith(fragment));
+  const contained = fragment === ""
+    ? []
+    : models.filter((model) => !model.toLowerCase().startsWith(fragment) && model.toLowerCase().includes(fragment));
+  return [[...prefixed, ...contained].map((model) => `${match[1]}${model}`), line];
+}
+
 /** The `@path` fragment being typed at the end of a line, if there is one. */
 const MENTION = /(^|\s)@([^\s]*)$/;
 
@@ -93,8 +113,31 @@ export function completeFileMention(line: string, files: readonly string[]): [st
 }
 
 /** The completer readline is given: commands at the start of a line, file mentions anywhere in it. */
-export function completeInput(line: string, files: readonly string[] = []): [string[], string] {
-  return completeFileMention(line, files) ?? completeCommand(line);
+export function completeInput(line: string, files: readonly string[] = [], models: readonly string[] = []): [string[], string] {
+  return completeFileMention(line, files) ?? completeModelArgument(line, models) ?? completeCommand(line);
+}
+
+/**
+ * The suggestions to show for a line being typed, best match first.
+ *
+ * Only for a line that is *becoming* a command: it must start with "/" and still be one word, so
+ * the list appears while a name is being chosen and gets out of the way the moment the user moves
+ * on to arguments. An exact, complete command name suggests nothing either — by then the list has
+ * said everything it can, and leaving it up is a menu hanging over a decision already made.
+ */
+export function suggestionsFor(line: string, models: readonly string[] = []): { command: string; args?: string; description: string }[] {
+  const model = /^\/models?\s+(\S*)$/.exec(line);
+  if (model) {
+    const fragment = model[1].toLowerCase();
+    const matched = models.filter((id) => id.toLowerCase().includes(fragment));
+    return matched.length === 1 && matched[0].toLowerCase() === fragment
+      ? []
+      : matched.map((id) => ({ command: id, description: "" }));
+  }
+  if (!/^\/\S*$/.test(line)) return [];
+  const matches = COMMANDS.filter((command) => command.name.startsWith(line));
+  if (matches.length === 1 && matches[0].name === line) return [];
+  return matches.map((command) => ({ command: command.name, ...(command.args ? { args: command.args } : {}), description: command.description }));
 }
 
 export function isKnownCommand(name: string): boolean {

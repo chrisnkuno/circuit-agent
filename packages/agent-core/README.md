@@ -29,6 +29,13 @@ for await (const event of runtime.execute({ messages: [{ role: "user", content: 
 }
 ```
 
+## Upgrading to 0.5.0
+
+Additive except for one resolution-order change. `^0.4.0` does not match `0.5.0`, so nothing picks this up by surprise.
+
+- **`resolveProvider` now honours `NOVA_PROVIDER`.** With no explicit `provider` option, a valid, configured `NOVA_PROVIDER` in the environment wins over the previous "first configured provider in catalog order" rule. If you embed this package in a process where that variable is set for unrelated reasons, resolution changes; pass `provider` explicitly to pin it. An unset, unrecognised, or unconfigured value falls back to the old behaviour rather than erroring, so a stale setting can never stop a session starting.
+- **`CostLedger.setDisplay(display, rates?)` is new.** Re-reads a session in another currency, converting spending already recorded rather than leaving it in the old one. Mirrors `setPrices` for the display side.
+
 ## Upgrading to 0.4.0
 
 Four changes need an edit if you embed this package. `^0.3.0` deliberately does not match `0.4.0`, so nothing upgrades into these by surprise.

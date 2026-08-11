@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, completeCommand, completeFileMention, completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { COMMANDS, completeCommand, completeFileMention, completeInput, completeModelArgument, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 
 describe("command registry", () => {
   it("lists every command exactly once, each starting with a slash", () => {
@@ -122,6 +122,79 @@ describe("completeInput", () => {
   it("prefers the mention when a line has both a command and a mention", () => {
     // The mention is what the cursor is on, so it is what completing should act on.
     expect(completeInput("/model @src/", files)[0]).toContain("@src/app.ts");
+  });
+});
+
+describe("model argument completion", () => {
+  const models = ["claude-sonnet-5", "claude-opus-5", "gpt-5.6-terra"];
+
+  it("completes the whole line, so accepting a match leaves a runnable command", () => {
+    // Returning the bare model id would replace `/model claude-` with `claude-sonnet-5`, which is
+    // not a command at all — readline substitutes the match for the entire line it was given.
+    expect(completeModelArgument("/model claude-s", models)?.[0]).toEqual(["/model claude-sonnet-5"]);
+  });
+
+  it("matches inside the id, not just at the front", () => {
+    // Model ids are front-loaded with vendor prefixes; prefix-only completion would mean typing
+    // the least distinguishing part of the name before getting any help with the rest.
+    expect(completeModelArgument("/model opus", models)?.[0]).toEqual(["/model claude-opus-5"]);
+  });
+
+  it("ranks prefix matches above substring matches", () => {
+    expect(completeModelArgument("/model claude", models)?.[0]).toEqual(["/model claude-sonnet-5", "/model claude-opus-5"]);
+  });
+
+  it("offers every model on a bare /model", () => {
+    expect(completeModelArgument("/model ", models)?.[0]).toHaveLength(3);
+  });
+
+  it("declines lines that are not a model argument", () => {
+    expect(completeModelArgument("/mode plan", models)).toBeNull();
+    expect(completeModelArgument("/model", models)).toBeNull();
+    expect(completeModelArgument("/model a b", models)).toBeNull();
+    expect(completeModelArgument("switch the model", models)).toBeNull();
+  });
+
+  it("offers only what the session can switch to", () => {
+    // An unconfigured provider's model completing is a completion that produces a failing command,
+    // which is worse than none: the user has been told the name is right.
+    expect(completeInput("/model gpt", [], ["claude-opus-5"])[0]).toEqual([]);
+  });
+
+  it("falls back to command completion when no models are known", () => {
+    expect(completeInput("/mod", [], [])[0]).toEqual(expect.arrayContaining(["/model", "/models"]));
+  });
+});
+
+describe("what the suggestion dropdown offers", () => {
+  const models = ["claude-sonnet-5", "claude-opus-5"];
+
+  it("offers the commands sharing the prefix being typed", () => {
+    expect(suggestionsFor("/mod").map((entry) => entry.command)).toEqual(["/mode", "/models", "/model"]);
+  });
+
+  it("stops once the name is complete and nothing else shares it", () => {
+    // A list hanging over a decision already made is a menu in the way, not a hint. `/model` is
+    // not that case: `/models` is a real other command, and hiding it would hide a live choice.
+    expect(suggestionsFor("/diff")).toEqual([]);
+    expect(suggestionsFor("/model", models).map((entry) => entry.command)).toEqual(["/models", "/model"]);
+  });
+
+  it("switches to models once the command takes an argument", () => {
+    expect(suggestionsFor("/model op", models).map((entry) => entry.command)).toEqual(["claude-opus-5"]);
+    expect(suggestionsFor("/model ", models)).toHaveLength(2);
+    expect(suggestionsFor("/model claude-opus-5", models)).toEqual([]);
+  });
+
+  it("stays out of ordinary prose, including lines containing a path", () => {
+    // A "/" mid-sentence is a path or a date; the dropdown must not appear over a normal message.
+    expect(suggestionsFor("check /home/me/notes.txt")).toEqual([]);
+    expect(suggestionsFor("")).toEqual([]);
+    expect(suggestionsFor("fix the tests")).toEqual([]);
+  });
+
+  it("offers nothing for a command name that does not exist", () => {
+    expect(suggestionsFor("/zzz")).toEqual([]);
   });
 });
 

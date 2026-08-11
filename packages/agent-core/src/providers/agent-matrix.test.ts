@@ -18,6 +18,36 @@ describe("provider matrix", () => {
     expect(resolveProvider({})).toMatchObject({ error: expect.stringContaining("No model provider is configured") });
   });
 
+  describe("the provider a previous session remembered", () => {
+    const both = { ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k" };
+
+    it("wins over the first-configured default, which is the point of persisting it", () => {
+      // Anthropic sorts first, so without NOVA_PROVIDER a user who switched to OpenAI and restarted
+      // would silently be back on Anthropic — the switch would not have survived the restart.
+      const resolved = resolveProvider({ ...both, NOVA_PROVIDER: "openai" });
+      expect("error" in resolved ? resolved.error : resolved.spec.id).toBe("openai");
+    });
+
+    it("still loses to an explicit choice, which is a live request", () => {
+      const resolved = resolveProvider({ ...both, NOVA_PROVIDER: "openai" }, { provider: "anthropic" });
+      expect("error" in resolved ? resolved.error : resolved.spec.id).toBe("anthropic");
+    });
+
+    it("fails soft, because stale config must not refuse to start a session that would run", () => {
+      // Both cases are unactionable from inside a CLI that never opened: a provider this build
+      // dropped, and one whose key has since been removed.
+      const unknown = resolveProvider({ ...both, NOVA_PROVIDER: "gemini" });
+      expect("error" in unknown ? unknown.error : unknown.spec.id).toBe("anthropic");
+
+      const revoked = resolveProvider({ ANTHROPIC_API_KEY: "k", NOVA_PROVIDER: "openai" });
+      expect("error" in revoked ? revoked.error : revoked.spec.id).toBe("anthropic");
+    });
+
+    it("does not conjure a provider when nothing at all is configured", () => {
+      expect(resolveProvider({ NOVA_PROVIDER: "openai" })).toMatchObject({ error: expect.stringContaining("No model provider is configured") });
+    });
+  });
+
   it("resolves a provider, its model, and its published price", () => {
     const resolved = resolveProvider({ ANTHROPIC_API_KEY: "sk-ant-test" });
     expect("error" in resolved).toBe(false);

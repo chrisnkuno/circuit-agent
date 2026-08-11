@@ -1,4 +1,4 @@
-import { PROVIDER_IDS, PROVIDERS, catalogPrices, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { PROVIDER_IDS, PROVIDERS, catalogPrices, isProviderId, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { formatMoney, fromUnits, type Currency, type TokenPrices } from "@circuit-nova/nova-core/money";
 
@@ -123,20 +123,26 @@ export function renderModelList(catalog: ModelCatalog, options: RenderModelsOpti
   for (const entry of catalog.unconfigured) {
     lines.push(`\n  ${paint.dim(entry.label)} ${paint.yellow(`— nova settings, or set ${entry.missing.join(" and ")}`)}`);
   }
-  if (catalog.choices.length > 0) lines.push(`\n  ${paint.dim("Choose with /model <number>, or /model <provider> <id>.")}`);
+  if (catalog.choices.length > 0) lines.push(`\n  ${paint.dim("Choose with /model <number>, or /model <name> — /model opus is enough. Your choice is remembered.")}`);
   return lines.join("\n");
 }
 
 export type ModelCommand =
   | { kind: "list" }
   | { kind: "pick"; index: number }
+  | { kind: "query"; text: string }
   | { kind: "explicit"; provider?: string; model?: string };
 
 /**
- * Reads `/model`, `/models`, `/model 3`, `/model anthropic claude-sonnet-5`.
+ * Reads `/model`, `/models`, `/model 3`, `/model opus`, `/model anthropic claude-sonnet-5`.
  *
  * A bare `/model` lists rather than doing nothing: with a numbered menu available, showing it is
  * the most useful reading of an argumentless command, and it costs a keystroke to then choose.
+ *
+ * A lone word that is not a provider is a *query*, not a provider. Reading it as a provider is what
+ * made `/model opus` fail with `Unknown provider "opus"` — an error about a word the user never
+ * meant as a provider, offering a list of three provider names when what they typed was most of a
+ * model id. Provider names stay reserved, so `/model openai` still means "that provider's default".
  */
 export function parseModelCommand(input: string): ModelCommand | null {
   const trimmed = input.trim();
@@ -146,5 +152,39 @@ export function parseModelCommand(input: string): ModelCommand | null {
   if (!rest) return { kind: "list" };
   if (/^\d+$/.test(rest)) return { kind: "pick", index: Number(rest) };
   const [provider, model] = rest.split(/\s+/);
+  if (model === undefined && !isProviderId(provider)) return { kind: "query", text: provider };
   return { kind: "explicit", provider, model };
+}
+
+export type ModelMatch =
+  | { kind: "match"; choice: ModelChoice }
+  | { kind: "ambiguous"; candidates: ModelChoice[] }
+  | { kind: "none" };
+
+/**
+ * Finds the model a partial name means.
+ *
+ * Ranked in tiers — exact id, then prefix, then substring — and only the best non-empty tier is
+ * considered. Tiers rather than one flat pool is what makes `/model claude-opus-5` land on that
+ * model even while `claude-opus-5-fast` also contains it: an exact id is never ambiguous with the
+ * things it is a prefix of, which would otherwise make the most precise thing a user can type the
+ * one input guaranteed to need disambiguating.
+ *
+ * A tie inside a tier is reported, not guessed. Two models matching `sonnet` are two different bills
+ * and two different sets of abilities, and silently taking the first is a switch the user did not
+ * ask for and has no reason to notice.
+ */
+export function matchModelQuery(catalog: ModelCatalog, query: string): ModelMatch {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return { kind: "none" };
+  const tiers: ModelChoice[][] = [[], [], []];
+  for (const choice of catalog.choices) {
+    const model = choice.model.toLowerCase();
+    if (model === needle) tiers[0].push(choice);
+    else if (model.startsWith(needle)) tiers[1].push(choice);
+    else if (model.includes(needle)) tiers[2].push(choice);
+  }
+  const best = tiers.find((tier) => tier.length > 0);
+  if (!best) return { kind: "none" };
+  return best.length === 1 ? { kind: "match", choice: best[0] } : { kind: "ambiguous", candidates: best };
 }

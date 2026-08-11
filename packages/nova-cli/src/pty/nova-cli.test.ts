@@ -296,10 +296,15 @@ describe("nova CLI under a real pty", () => {
 
       let before = p.output().length;
       p.writeLine("/models");
-      const listed = await p.waitFor(/Choose with \/model/, { timeoutMs: 10_000, since: before });
+      const listed = await p.waitFor(/Esc cancel/, { timeoutMs: 10_000, since: before });
       // The current model is marked, proving the list reflects the live daemon client's state,
       // not a snapshot taken once at startup.
       expect(listed.slice(before)).toMatch(/current/);
+
+      // Leave the picker the way someone who only wanted to look would.
+      before = p.output().length;
+      p.write(String.fromCharCode(27));
+      await p.waitFor(/no change/, { timeoutMs: 10_000, since: before });
 
       // Index 1 is always the provider's own default (modelsForProvider puts it first), which is
       // already selected — picking it would correctly print "already on", not exercise a switch.

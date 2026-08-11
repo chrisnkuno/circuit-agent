@@ -66,20 +66,36 @@ export type PaletteFrame = {
   selected: number;
 };
 
-export function renderPalette(frame: PaletteFrame, options: { rows?: number } = {}): string {
+export type PaletteOptions = {
+  rows?: number;
+  /**
+   * Which way the list grows from the query line.
+   *
+   * `"up"` is what the suggestion dropdown uses. The query line goes last so it sits where the
+   * user's own typing is — at the bottom, against the prompt — and the matches stack above it into
+   * the transcript. The list order also inverts, keeping the best match adjacent to the query
+   * rather than furthest from it: in an upward list the row nearest the cursor is the one the eye
+   * lands on, and that has to be the one Return would take.
+   */
+  direction?: "up" | "down";
+};
+
+export function renderPalette(frame: PaletteFrame, options: PaletteOptions = {}): string {
   const rows = options.rows ?? 8;
-  const lines = [`  › ${frame.query}${frame.matches.length === 0 ? "   (no match)" : ""}`];
+  const queryLine = `  › ${frame.query}${frame.matches.length === 0 ? "   (no match)" : ""}`;
   // Scroll the window with the selection so the highlighted row is always on screen; a palette
   // whose selection moves off the visible list looks like the arrow keys have stopped working.
   const start = Math.max(0, Math.min(frame.selected - Math.floor(rows / 2), frame.matches.length - rows));
   const visible = frame.matches.slice(Math.max(0, start), Math.max(0, start) + rows);
   const width = Math.max(0, ...visible.map((entry) => entry.command.length + (entry.args ? entry.args.length + 1 : 0)));
-  for (const [offset, entry] of visible.entries()) {
+  const rendered = visible.map((entry, offset) => {
     const active = Math.max(0, start) + offset === frame.selected;
     const head = entry.args ? `${entry.command} ${entry.args}` : entry.command;
-    lines.push(`  ${active ? "❯" : " "} ${head.padEnd(width + 2)}${entry.description}${entry.chord ? `  [${entry.chord}]` : ""}`);
-  }
-  return lines.join("\n");
+    return `  ${active ? "❯" : " "} ${head.padEnd(width + 2)}${entry.description}${entry.chord ? `  [${entry.chord}]` : ""}`;
+  });
+  return options.direction === "up"
+    ? [...rendered.reverse(), queryLine].join("\n")
+    : [queryLine, ...rendered].join("\n");
 }
 
 export type PaletteKey = { str?: string; key: KeypressEvent };
@@ -123,19 +139,36 @@ export function advancePalette(state: PaletteState, entries: readonly PaletteEnt
  * Takes the keys as an async iterable rather than reaching for `process.stdin` so the caller owns
  * terminal setup and teardown — and so this is exercised by tests that press real keys at it.
  */
+export type RunPaletteOptions = PaletteOptions & {
+  /** Seeds the query, so a dropdown opened by typing "/" starts already filtered by it. */
+  initialQuery?: string;
+  /**
+   * The query at the moment the user dismissed without choosing.
+   *
+   * Reported rather than dropped so a caller can hand the text back to the line editor. A dropdown
+   * that opens on "/" would otherwise eat every keystroke of anyone who meant to type an absolute
+   * path and pressed Escape — the characters were typed, and Escape means "not this menu", not
+   * "discard what I wrote".
+   */
+  onDismiss?: (query: string) => void;
+};
+
 export async function runCommandPalette(
   keys: AsyncIterable<PaletteKey>,
   entries: readonly PaletteEntry[],
   paint: (frame: string) => void,
-  options: { rows?: number } = {},
+  options: RunPaletteOptions = {},
 ): Promise<string | undefined> {
-  let state: PaletteState = { query: "", selected: 0 };
+  let state: PaletteState = { query: options.initialQuery ?? "", selected: 0 };
   paint(renderPalette({ query: state.query, matches: rankPaletteEntries(entries, state.query), selected: state.selected }, options));
 
   for await (const input of keys) {
     const step = advancePalette(state, entries, input);
     state = step.state;
-    if (step.done) return step.done.command;
+    if (step.done) {
+      if (step.done.command === undefined) options.onDismiss?.(state.query);
+      return step.done.command;
+    }
     paint(renderPalette({ query: state.query, matches: rankPaletteEntries(entries, state.query), selected: state.selected }, options));
   }
   return undefined;

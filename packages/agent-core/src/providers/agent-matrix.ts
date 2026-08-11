@@ -95,11 +95,28 @@ export type ResolvedProvider = {
 };
 
 /**
+ * The provider a previous session settled on, when it is still a usable answer.
+ *
+ * Unlike `options.provider` this is not a live request — it is stale configuration, so it fails
+ * soft. A `NOVA_PROVIDER` naming a provider this build dropped, or one whose key has since been
+ * removed, must not be able to refuse to start a session that would otherwise run fine; falling
+ * back to the ordinary first-configured rule is strictly better than an error the user cannot act
+ * on from inside a CLI that never opened.
+ */
+function rememberedProvider(environment: ProviderEnvironment): ProviderSpec | undefined {
+  const remembered = environment.NOVA_PROVIDER?.trim();
+  if (!remembered || !isProviderId(remembered)) return undefined;
+  const spec = PROVIDERS[remembered];
+  return spec.requires.every((name) => environment[name]?.trim()) ? spec : undefined;
+}
+
+/**
  * Picks the provider and model for a session.
  *
  * An explicit choice is honoured even when its credentials are missing, so the error names the
- * thing the user asked for. Without a choice, the first configured provider wins — in catalog
- * order, which is deliberate rather than alphabetical.
+ * thing the user asked for. Without a choice, the provider a previous session persisted wins, and
+ * failing that the first configured provider — in catalog order, which is deliberate rather than
+ * alphabetical.
  */
 export function resolveProvider(
   environment: ProviderEnvironment,
@@ -108,7 +125,9 @@ export function resolveProvider(
   if (options.provider && !isProviderId(options.provider)) {
     return { error: `Unknown provider "${options.provider}". Choose one of: ${PROVIDER_IDS.join(", ")}.` };
   }
-  const spec = options.provider ? PROVIDERS[options.provider as ProviderId] : availableProviders(environment)[0];
+  const spec = options.provider
+    ? PROVIDERS[options.provider as ProviderId]
+    : rememberedProvider(environment) ?? availableProviders(environment)[0];
   if (!spec) {
     return { error: `No model provider is configured. Set one of: ${PROVIDER_IDS.map((id) => PROVIDERS[id].requires.join("+")).join(", ")}.` };
   }

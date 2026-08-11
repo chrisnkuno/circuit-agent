@@ -15,19 +15,20 @@ import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadP
 import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { EXIT_CODES, HeadlessEmitter, exitCodeForStatus } from "./headless";
-import { buildModelCatalog, describePrice, parseModelCommand, renderModelList } from "./models";
+import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, renderModelList, type ModelChoice } from "./models";
+import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
 import { box, formatStatusLine, MarkdownStream, ReplaceableBlock, Spinner, StatusBar } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
-import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
-import { installShortcuts, openPalette } from "./shortcuts";
+import { installShortcuts, openModelPicker, openPalette } from "./shortcuts";
 import { fetchDailyFxRate, resolveCurrencyPreference } from "./local-currency";
 import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
-import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings } from "./settings";
+import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingKey } from "./settings";
 import { loadHistory, saveHistory } from "./history";
 import { renderTabStrip, parseTabCommand, WorkspaceController } from "./tabs";
 import { buildWanderPrompt, gatherWanderEvidence, parseWanderCommand, wanderJobObjective } from "./wander";
@@ -232,8 +233,8 @@ ${style.bold("Where the files go")}
 ${style.bold("Model")}
   nova --provider <name>    ${PROVIDER_IDS.join(" | ")}
   nova --model <id>         Model to run (defaults to the provider's)
-  /models                   List every model you can switch to, with its price
-  /model <N>                Switch to one by number, keeping the transcript
+  /model                    Pick a model from a list, with prices, keeping the transcript
+  /model <name>             Switch straight to one, e.g. /model opus
   nova --providers          Show which providers are configured, and what is missing
   nova settings             Configure keys, URLs, models, pricing and voice input
 
@@ -851,7 +852,10 @@ async function main(): Promise<number> {
     input: process.stdin,
     output: process.stdout,
     // Reads the cached project listing below, so completion never blocks on a filesystem walk.
-    completer: (line: string) => completeInput(line, projectFiles),
+    // Built per keystroke rather than cached: the catalog depends on `environment`, which a
+    // `/settings` edit mutates mid-session, and a stale list would keep offering a provider whose
+    // key was just removed. It is a walk over a literal table, not IO.
+    completer: (line: string) => completeInput(line, projectFiles, buildModelCatalog(environment).choices.map((choice) => choice.model)),
     history: (await loadHistory(environment)).reverse(),
     historySize: 200,
     removeHistoryDuplicates: true,
@@ -876,6 +880,7 @@ async function main(): Promise<number> {
   const uninstallShortcuts = interactive
     ? installShortcuts({
       readline, input: process.stdin, output: process.stdout, registry: keys,
+      canSuggest: () => !turnActive,
       onIntercept: (command) => {
         if (command !== "/detach" || !turnActive) return false;
         detachRequested = true;
@@ -1350,7 +1355,97 @@ async function main(): Promise<number> {
       screen?.resize();
       screen?.renderStatus(idleStatusLine());
     });
+
+    /**
+     * The suggestion dropdown, repainted from whatever is on the line.
+     *
+     * Driven off keypresses rather than off a wrapper around input, because readline owns the line
+     * and this must not: the buffer is read after each key and never written to. `setImmediate`
+     * defers to readline's own handler, which is registered first — reading `line` synchronously
+     * would see the state from before the keystroke and leave the list one character stale.
+     */
+    const paintSuggestions = () => setImmediate(() => {
+      if (turnActive) return;
+      const line = (readline as { line?: string }).line ?? "";
+      const suggestions = suggestionsFor(line, buildModelCatalog(environment).choices.map((choice) => choice.model));
+      if (suggestions.length === 0) { screen?.clearSuggestions(); return; }
+      const width = Math.max(...suggestions.map((entry) => entry.command.length + (entry.args ? entry.args.length + 1 : 0)));
+      screen?.renderSuggestions(suggestions.map((entry) => {
+        const head = entry.args ? `${entry.command} ${entry.args}` : entry.command;
+        return `  ${style.cyan(head.padEnd(width + 2))}${style.dim(entry.description)}`;
+      }));
+    });
+    process.stdin.on("keypress", paintSuggestions);
   }
+
+  /**
+   * Re-reads the display currency from settings, and makes the session actually use it.
+   *
+   * Setting your location is only worth doing if the next number you read is in your money. The
+   * preference is resolved once at startup, so without this a location saved in `/settings` would
+   * be correct in the file, correct on the next launch, and invisible for the rest of the session
+   * the user changed it in — which reads as the setting not working.
+   *
+   * A command-line `--currency` still wins: it is this run's explicit instruction, and a saved
+   * preference should not quietly override what was typed to start the process.
+   */
+  const applyCurrencyPreference = async (): Promise<void> => {
+    const next = resolveCurrencyPreference({ currency: args.currency, country: args.country, environment, providerCurrency: prices?.currency ?? "USD" });
+    if (next.currency === display) return;
+
+    if (prices && next.currency !== prices.currency) {
+      const convertible = () => rates.some((rate) => (rate.from === prices!.currency && rate.to === next.currency) || (rate.to === prices!.currency && rate.from === next.currency));
+      if (!convertible() && environment.NOVA_FX_OFFLINE !== "true") {
+        const daily = await fetchDailyFxRate(prices.currency, next.currency);
+        if (daily) rates.push(daily);
+      }
+      // Refusing to switch beats switching to a currency every future cost then fails to convert
+      // into — the session would keep working while reporting nothing.
+      if (!convertible()) {
+        process.stdout.write(style.yellow(`  No ${prices.currency}→${next.currency} rate is available, so costs stay in ${display}.\n`));
+        return;
+      }
+    }
+    display = next.currency;
+    ledger.setDisplay(display, rates);
+    for (const tab of tabs.all) tab.payload.ledger.setDisplay(display, rates);
+    process.stdout.write(style.dim(`  costs now shown in ${display}${next.countryCode ? ` · location ${next.countryCode}` : ""}\n`));
+  };
+
+  /**
+   * The settings menu, and everything that has to happen once it closes.
+   *
+   * A function rather than an inline block because `/settings` is no longer the only way in: the
+   * model picker's "add a key" row opens the same flow, and a second copy would be a second place
+   * for "reload the environment and rebuild the client" to be got wrong.
+   */
+  const openSettings = async (): Promise<"saved" | "cancelled" | "exit"> => {
+    let nextSettings: NovaSettings;
+    try {
+      nextSettings = await runSettingsMenu(savedSettings, {
+        ask: (question) => readline.question(question),
+        askSecret: (question) => hiddenQuestion(readline, question),
+        write: (text) => process.stdout.write(text),
+      });
+    } catch (error) {
+      if (!isReadlineExit(error)) throw error;
+      process.stdout.write(style.dim("\n  settings cancelled — no changes were saved\n"));
+      return exitRequested ? "exit" : "cancelled";
+    }
+    savedSettings = nextSettings;
+    const file = await saveSettings(savedSettings, processEnvironment);
+    for (const field of SETTING_FIELDS) delete environment[field.key];
+    Object.assign(environment, mergedEnvironment(savedSettings, processEnvironment));
+    language = resolveControlLanguage(args.language ?? environment.NOVA_LANGUAGE ?? environment.LANG);
+    const previous = agent;
+    const carried = await loadSession(args.root, previous.sessionId);
+    await previous.relinquish();
+    agent = await openClient(carried ?? undefined);
+    process.stdout.write(style.green(`  settings saved to ${file}\n`));
+    await applyCurrencyPreference();
+    process.stdout.write(style.dim(`  Settings are active now${environment.EXA_API_KEY?.trim() ? "; Exa web_search is available" : ""}. Use /model only to change the selected model.\n`));
+    return "saved";
+  };
 
   for (;;) {
     screen?.renderStatus(idleStatusLine());
@@ -1363,6 +1458,8 @@ async function main(): Promise<number> {
       if (isReadlineExit(error) || exitRequested) break;
       throw error;
     }
+    // Before parking, so the transcript region is whole again before anything is written into it.
+    screen?.clearSuggestions();
     screen?.parkInTranscript();
     let input = rawInput.trim();
     if (!input) continue;
@@ -1412,22 +1509,43 @@ async function main(): Promise<number> {
     const modelCommand = parseModelCommand(input);
     if (modelCommand) {
       const catalog = buildModelCatalog(environment);
+      const paint = { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow };
+      const price = (choice: ModelChoice) => describePrice(choice.prices, display, (money) => convertTo(money, display, rates));
+
+      let picked: ModelChoice | undefined;
       if (modelCommand.kind === "list") {
-        if (catalog.choices.length === 0 && catalog.unconfigured.length > 0) {
-          process.stdout.write(style.yellow("  No provider is configured yet — run /settings to add a key.\n"));
+        // Nothing configured is not a list to show — it is one thing to do. Printing "run
+        // /settings" here would be telling someone the name of the door they are standing at.
+        if (catalog.choices.length === 0) {
+          process.stdout.write(style.yellow("  No provider is configured yet — opening settings.\n"));
+          if (await openSettings() === "exit") break;
           continue;
         }
-        process.stdout.write(`${renderModelList(catalog, {
+        // A pipe or a non-TTY has no cursor to move, so it keeps the printed list it always had.
+        if (!interactive) {
+          process.stdout.write(`${renderModelList(catalog, { current: { provider: spec.id, model: resolvedModelId }, price, paint })}\n`);
+          continue;
+        }
+        const chosen = await openModelPicker({ readline, input: process.stdin, output: process.stdout, registry: keys }, {
+          rows: buildPickerRows(catalog),
           current: { provider: spec.id, model: resolvedModelId },
-          price: (choice) => describePrice(choice.prices, display, (money) => convertTo(money, display, rates)),
-          paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
-        })}\n`);
-        continue;
+          price,
+          paint,
+        });
+        if (!chosen) { process.stdout.write(style.dim("  no change\n")); continue; }
+        if (chosen.kind === "settings") {
+          if (await openSettings() === "exit") break;
+          continue;
+        }
+        picked = chosen.choice;
       }
 
       let providerArg: string | undefined;
       let modelArg: string | undefined;
-      if (modelCommand.kind === "pick") {
+      if (picked) {
+        providerArg = picked.provider;
+        modelArg = picked.model;
+      } else if (modelCommand.kind === "pick") {
         const chosen = catalog.choices[modelCommand.index - 1];
         if (!chosen) {
           process.stdout.write(style.yellow(`  There is no model ${modelCommand.index}. Run /models to see the list.\n`));
@@ -1435,7 +1553,20 @@ async function main(): Promise<number> {
         }
         providerArg = chosen.provider;
         modelArg = chosen.model;
-      } else {
+      } else if (modelCommand.kind === "query") {
+        const found = matchModelQuery(catalog, modelCommand.text);
+        if (found.kind === "none") {
+          process.stdout.write(style.yellow(`  No configured model matches "${modelCommand.text}". Run /models to see the list.\n`));
+          continue;
+        }
+        if (found.kind === "ambiguous") {
+          // Naming the candidates makes the retry a copy rather than another guess.
+          process.stdout.write(style.yellow(`  "${modelCommand.text}" matches ${found.candidates.length} models: ${found.candidates.map((choice) => choice.model).join(", ")}.\n`));
+          continue;
+        }
+        providerArg = found.choice.provider;
+        modelArg = found.choice.model;
+      } else if (modelCommand.kind === "explicit") {
         ({ provider: providerArg, model: modelArg } = modelCommand);
       }
 
@@ -1458,7 +1589,28 @@ async function main(): Promise<number> {
       await previous.relinquish();
       const carried = await loadSession(args.root, previousSessionId);
       agent = await openClient(carried ?? undefined);
-      process.stdout.write(style.dim(`  switched to ${spec.label} ${resolvedModelId}${prices ? "" : " — no price configured, costs will show as unknown"}\n`));
+      const priceNote = prices ? "" : " — no price configured, costs will show as unknown";
+
+      // Persisted, because a switch the user had to make again on every launch is a switch they
+      // never really made. Both halves are written: the model alone would be re-read under whatever
+      // provider happened to sort first, which is how you ask for one model and get another.
+      const modelKey = `${spec.id.toUpperCase()}_MODEL` as SettingKey;
+      savedSettings = { ...savedSettings, NOVA_PROVIDER: spec.id, [modelKey]: resolvedModelId };
+      let persistence = "";
+      try {
+        await saveSettings(savedSettings, processEnvironment);
+        // A real environment variable outranks the file by design (mergedEnvironment), so saving
+        // succeeds while changing nothing about the next launch. Saying so beats a silent no-op.
+        const shadowed = [modelKey, "NOVA_PROVIDER"].filter((key) => processEnvironment[key]?.trim());
+        persistence = shadowed.length > 0
+          ? ` · saved, but ${shadowed.join(" and ")} in your environment will override it next launch`
+          : " · saved as your default";
+        Object.assign(environment, mergedEnvironment(savedSettings, processEnvironment));
+      } catch {
+        // The switch itself already happened and is valid for this session; only the memory failed.
+        persistence = " · could not save it as your default";
+      }
+      process.stdout.write(style.dim(`  switched to ${spec.label} ${resolvedModelId}${priceNote}${persistence}\n`));
       continue;
     }
     if (input === "/todos") {
@@ -1709,30 +1861,7 @@ async function main(): Promise<number> {
       continue;
     }
     if (input === "/settings") {
-      let nextSettings: NovaSettings;
-      try {
-        nextSettings = await runSettingsMenu(savedSettings, {
-          ask: (question) => readline.question(question),
-          askSecret: (question) => hiddenQuestion(readline, question),
-          write: (text) => process.stdout.write(text),
-        });
-      } catch (error) {
-        if (!isReadlineExit(error)) throw error;
-        process.stdout.write(style.dim("\n  settings cancelled — no changes were saved\n"));
-        if (exitRequested) break;
-        continue;
-      }
-      savedSettings = nextSettings;
-      const file = await saveSettings(savedSettings, processEnvironment);
-      for (const field of SETTING_FIELDS) delete environment[field.key];
-      Object.assign(environment, mergedEnvironment(savedSettings, processEnvironment));
-      language = resolveControlLanguage(args.language ?? environment.NOVA_LANGUAGE ?? environment.LANG);
-      const previous = agent;
-      const carried = await loadSession(args.root, previous.sessionId);
-      await previous.relinquish();
-      agent = await openClient(carried ?? undefined);
-      process.stdout.write(style.green(`  settings saved to ${file}\n`));
-      process.stdout.write(style.dim(`  Settings are active now${environment.EXA_API_KEY?.trim() ? "; Exa web_search is available" : ""}. Use /model only to change the selected model.\n`));
+      if (await openSettings() === "exit") break;
       continue;
     }
     if (input.startsWith("/voice")) {

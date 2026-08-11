@@ -1,6 +1,7 @@
 import type { Interface } from "node:readline/promises";
 import { KeyBindingRegistry, type KeypressEvent } from "./keybindings";
-import { paletteEntries, runCommandPalette, type PaletteKey } from "./palette";
+import { paletteEntries, runCommandPalette, type PaletteKey, type RunPaletteOptions } from "./palette";
+import { runModelPicker, type PickerResult, type RunModelPickerOptions } from "./model-picker";
 
 /**
  * Where feature keys meet the terminal.
@@ -24,6 +25,15 @@ export type ShortcutHost = {
    * hook) falls through to the ordinary submit-as-if-typed path.
    */
   onIntercept?: (command: string) => boolean;
+  /**
+   * Whether typing "/" should open the suggestion dropdown right now.
+   *
+   * The host owns this because the shortcut layer cannot tell a waiting prompt from a running turn:
+   * the keypress listener stays attached either way, and an empty line during a turn looks exactly
+   * like an empty line at the prompt. Opening a menu over a turn in progress would steal the
+   * keyboard from a user who is trying to Ctrl-C it.
+   */
+  canSuggest?: () => boolean;
 };
 
 /** Replaces whatever is on the line and submits, so a key works mid-typing without appending to it. */
@@ -50,14 +60,22 @@ function painter(output: NodeJS.WriteStream): (frame: string) => void {
 }
 
 /**
- * Runs the palette with the terminal to itself.
+ * Runs a full-screen chooser with the terminal to itself.
  *
  * `readline` is listening for the same keypresses and would treat them as line editing — Up would
  * recall history instead of moving the selection. Detaching its listener for the duration is the
  * narrow way to borrow the keyboard; restoring in `finally` is what keeps a thrown error from
  * leaving the prompt permanently deaf.
+ *
+ * Shared by the palette and the model picker rather than written twice: the borrowing is the part
+ * that is easy to get subtly wrong and impossible to notice until a prompt somewhere stops
+ * responding, so there is one copy of it to be correct.
  */
-export async function openPalette(host: ShortcutHost, self?: unknown): Promise<string | undefined> {
+export async function withBorrowedKeyboard<T>(
+  host: ShortcutHost,
+  self: unknown,
+  body: (keys: AsyncIterable<PaletteKey>, paint: (frame: string) => void) => Promise<T>,
+): Promise<T> {
   const borrowed = host.input.listeners("keypress").filter((listener) => listener !== self);
   for (const listener of borrowed) host.input.off("keypress", listener as never);
 
@@ -77,14 +95,22 @@ export async function openPalette(host: ShortcutHost, self?: unknown): Promise<s
     }
   }
 
-  const paint = painter(host.output);
   try {
-    const chords = Object.fromEntries(host.registry.bindings.map((binding) => [binding.command, formatBinding(binding.chord)]));
-    return await runCommandPalette(keys(), paletteEntries(chords), paint);
+    return await body(keys(), painter(host.output));
   } finally {
     host.input.off("keypress", collect);
     for (const listener of borrowed) host.input.on("keypress", listener as never);
   }
+}
+
+export async function openPalette(host: ShortcutHost, self?: unknown, options: RunPaletteOptions = {}): Promise<string | undefined> {
+  const chords = Object.fromEntries(host.registry.bindings.map((binding) => [binding.command, formatBinding(binding.chord)]));
+  return withBorrowedKeyboard(host, self, (keys, paint) => runCommandPalette(keys, paletteEntries(chords), paint, options));
+}
+
+/** The model chooser, over the same borrowed keyboard the palette uses. */
+export async function openModelPicker(host: ShortcutHost, options: RunModelPickerOptions, self?: unknown): Promise<PickerResult | undefined> {
+  return withBorrowedKeyboard(host, self, (keys, paint) => runModelPicker(keys, paint, options));
 }
 
 function formatBinding(chord: { key: string; ctrl: boolean; shift: boolean; meta: boolean }): string {
@@ -98,8 +124,28 @@ function formatBinding(chord: { key: string; ctrl: boolean; shift: boolean; meta
  */
 export function installShortcuts(host: ShortcutHost): () => void {
   let busy = false;
-  const onKeypress = (_str: string | undefined, key: KeypressEvent) => {
+
+  /** Runs the palette with the keyboard, then puts back whatever the user is left holding. */
+  const run = (options: RunPaletteOptions) => {
+    busy = true;
+    void openPalette(host, onKeypress as never, options)
+      .then((chosen) => { if (chosen) submit(host.readline, chosen); })
+      .finally(() => {
+        busy = false;
+        host.readline.prompt(true);
+      });
+  };
+
+  const onKeypress = (str: string | undefined, key: KeypressEvent) => {
     if (busy || !key) return;
+
+    // The suggestion dropdown is deliberately *not* driven from here. Opening a palette on "/"
+    // means the palette owns the keyboard from the first character, so the rest of a typed
+    // `/model haiku` lands in its query instead of the line — the command is then never run, and
+    // history, Ctrl-A/E and @-completion are dead for the whole time it is open. Suggestions are
+    // painted non-modally by the screen instead (`PinnedScreen.renderSuggestions`), leaving
+    // readline in charge of every keystroke.
+
     const command = host.registry.match(key);
     if (!command) return;
     if (host.onIntercept?.(command)) return;
@@ -107,13 +153,7 @@ export function installShortcuts(host: ShortcutHost): () => void {
       submit(host.readline, command);
       return;
     }
-    busy = true;
-    void openPalette(host, onKeypress as never)
-      .then((chosen) => { if (chosen) submit(host.readline, chosen); })
-      .finally(() => {
-        busy = false;
-        host.readline.prompt(true);
-      });
+    run({ direction: "up" });
   };
 
   host.input.on("keypress", onKeypress);
