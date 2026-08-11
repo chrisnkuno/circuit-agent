@@ -45,7 +45,7 @@ export { discoverMcpServers, parseMcpServerConfig, McpConnection, McpToolProvide
 export type { McpServerConfig } from "./nova-cli/mcp-provider";
 export { discoverPlugins, parsePluginManifest, PLUGINS_DIRECTORY } from "./nova-cli/plugins";
 export type { PluginManifest } from "./nova-cli/plugins";
-export { loadLocalExternalTooling } from "./nova-cli/external-tools";
+export { loadLocalExternalTooling, IMPLICIT_SKILL_PROVIDER_ID } from "./nova-cli/external-tools";
 export type { LocalExternalTooling } from "./nova-cli/external-tools";
 export { PermissionLedger, actionDigest, approvalScopeKey, capabilitiesForMode } from "./nova-cli/permissions";
 export type { NovaMode, PermissionDecision, ToolApprovalOutcome } from "./nova-cli/permissions";

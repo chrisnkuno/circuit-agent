@@ -47,6 +47,7 @@ import {
 } from "@circuit-nova/nova-core";
 import { runJobWorkerForever, workerId } from "./job-worker";
 import { parseAttachCommand, parseDetachCommand, parseJobsCommand } from "./jobs-command";
+import { IMPLICIT_SKILL_PROVIDER_ID } from "@circuit-nova/nova-core";
 import { renderTools } from "./tools-command";
 import { removeRecording, startRecording, transcribeAudio } from "./voice";
 import { controlLabel, resolveControlLanguage, type ControlLanguage } from "./i18n";
@@ -794,7 +795,7 @@ async function main(): Promise<number> {
         ask: (question) => setupReadline.question(question),
         askSecret: (question) => hiddenQuestion(setupReadline, question),
         write: (text) => process.stdout.write(text),
-      });
+      }, { focus: "providers" });
       const file = await saveSettings(savedSettings, processEnvironment);
       process.stdout.write(style.dim(`Settings saved to ${file}.\n`));
     } catch (error) {
@@ -1770,12 +1771,16 @@ async function main(): Promise<number> {
     }
     if (input === "/tools") {
       const inspected = await agent.inspectTools();
-      // A provider that loaded but contributed nothing still gets named — see renderTools.
       const contributing = new Set(inspected.tools.map((tool) => (tool.provenance && tool.provenance.kind !== "built-in" ? `${tool.provenance.kind}:${tool.provenance.providerId}` : "built-in")));
       process.stdout.write(`${renderTools({
         tools: inspected.tools,
         hooks: inspected.hooks,
-        emptyProviders: inspected.providerIds.filter((id) => !contributing.has(id)),
+        // A configured source that contributed nothing is worth naming — it usually means a wrong
+        // path in a manifest. The always-present `.nova/skills` reader is not: a project with no
+        // skills is the ordinary case, and reporting it as an anomaly to everyone who has none is
+        // noise dressed as a warning.
+        emptyProviders: inspected.providerIds
+          .filter((id) => !contributing.has(id) && id !== `skill:${IMPLICIT_SKILL_PROVIDER_ID}`),
       }, style)}\n`);
       continue;
     }

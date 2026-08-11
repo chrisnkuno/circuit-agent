@@ -24,8 +24,19 @@ export type LocalExternalTooling = {
   dispose(): Promise<void>;
 };
 
+/**
+ * The one provider that is always present rather than configured: the top-level `.nova/skills`
+ * reader, which exists whether or not the directory does.
+ *
+ * Named here so a caller can tell it apart from a source the user actually declared. Reporting
+ * "loaded but offering no tools" is useful for an MCP server or plugin someone put in a manifest —
+ * that usually means a wrong path — but for this one it is just the ordinary state of a project
+ * with no skills, and saying it to every such user is noise dressed as a warning.
+ */
+export const IMPLICIT_SKILL_PROVIDER_ID = "local-skills";
+
 export async function loadLocalExternalTooling(workspace: NovaWorkspace): Promise<LocalExternalTooling> {
-  const providers: ToolProvider[] = [new SkillToolProvider("local-skills", SKILLS_DIRECTORY, workspace)];
+  const providers: ToolProvider[] = [new SkillToolProvider(IMPLICIT_SKILL_PROVIDER_ID, SKILLS_DIRECTORY, workspace)];
   const hookSources: HookSource[] = [HOOKS_DIRECTORY];
   const connections: McpConnection[] = [];
 

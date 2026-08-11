@@ -44,3 +44,55 @@ describe("Nova settings", () => {
     expect(writes.join("")).not.toContain("secret-value");
   });
 });
+
+describe("the first run someone actually sees", () => {
+  function scriptedPrompts(answers: string[]) {
+    const written: string[] = [];
+    return {
+      written,
+      prompts: {
+        ask: async () => answers.shift() ?? "q",
+        askSecret: async () => answers.shift() ?? "q",
+        write: (text: string) => { written.push(text); },
+      },
+    };
+  }
+
+  it("asks only which provider key you have, not all twenty-four settings", async () => {
+    // The obstacle this removes: someone installing Nova to use Claude was shown a 24-item list
+    // with "Anthropic API key" at position 2, between a language selector and a relay secret.
+    const { written, prompts } = scriptedPrompts(["q"]);
+    await runSettingsMenu({}, prompts, { focus: "providers" });
+    const screen = written.join("");
+    expect(screen).toContain("Anthropic API key");
+    expect(screen).toContain("OpenAI API key");
+    expect(screen).toContain("CircuitNotion API key");
+    // None of the things a first run has no opinion about.
+    expect(screen).not.toContain("Cached input price");
+    expect(screen).not.toContain("Microphone device");
+    expect(screen).not.toContain("E2B template");
+    expect(screen).not.toContain("Key bindings");
+  });
+
+  it("still offers everything else, one keystroke away", async () => {
+    const { written, prompts } = scriptedPrompts(["a", "q"]);
+    await runSettingsMenu({}, prompts, { focus: "providers" });
+    const screen = written.join("");
+    expect(screen).toContain("everything else");
+    expect(screen).toContain("Microphone device override"); // revealed after "a"
+  });
+
+  it("saves the key against the right setting even though the menu is renumbered", async () => {
+    // The focused list has its own numbering; "2" here is OpenAI, not the second global field.
+    const { prompts } = scriptedPrompts(["2", "sk-openai-typed-by-user", "q"]);
+    const settings = await runSettingsMenu({}, prompts, { focus: "providers" });
+    expect(settings.OPENAI_API_KEY).toBe("sk-openai-typed-by-user");
+    expect(settings.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  it("shows the full list by default, so /settings is unchanged", async () => {
+    const { written, prompts } = scriptedPrompts(["q"]);
+    await runSettingsMenu({}, prompts);
+    expect(written.join("")).toContain("Microphone device override");
+  });
+});

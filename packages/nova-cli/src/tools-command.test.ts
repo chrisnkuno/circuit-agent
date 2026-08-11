@@ -39,6 +39,17 @@ describe("renderTools", () => {
     expect(output).toContain("wordcount");
   });
 
+  it("gives a project with no skills the friendly empty state, not a warning about the always-on reader", () => {
+    // Regression: `/tools` on a fresh project reported `skill:local-skills (0) — loaded but
+    // offering no tools`, because the top-level skills reader is always present whether or not the
+    // directory is. Every new user was shown an anomaly notice for the ordinary state of having no
+    // skills, and the helpful empty-state hint below could never appear.
+    const output = renderTools(view({ emptyProviders: [] }));
+    expect(output).toContain("No skills, plugins or MCP servers loaded.");
+    expect(output).not.toContain("loaded but offering no tools");
+    expect(output).not.toContain("local-skills");
+  });
+
   it("shows a provider that loaded but offers nothing, rather than hiding it as if absent", () => {
     // Usually a wrong manifest path — indistinguishable from "not configured" unless it is shown.
     const output = renderTools(view({ emptyProviders: ["mcp:typo-server"] }));

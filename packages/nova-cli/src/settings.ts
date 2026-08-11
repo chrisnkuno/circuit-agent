@@ -116,22 +116,47 @@ export type SettingsPrompts = {
 };
 
 /** Numbered, screen-reader-friendly settings menu. Secrets are never printed back to the terminal. */
-export async function runSettingsMenu(current: NovaSettings, prompts: SettingsPrompts): Promise<NovaSettings> {
+/**
+ * The keys that decide whether Nova can run at all. One of these is the entire requirement.
+ *
+ * Kept as its own list so the first-run menu can ask for exactly that and nothing else: someone who
+ * has just installed Nova and wants to use Claude should not have to find "Anthropic API key" at
+ * position 2 of 24, between a control-language selector and a CircuitNotion relay secret. Every
+ * other setting has a sensible default and can be changed later from `/settings`.
+ */
+const PROVIDER_KEY_FIELDS = SETTING_FIELDS.filter((field) =>
+  field.key === "ANTHROPIC_API_KEY" || field.key === "OPENAI_API_KEY" || field.key === "CIRCUITNOTION_API_KEY");
+
+export type SettingsMenuOptions = {
+  /**
+   * Show only the provider keys, with a way to reveal the rest.
+   *
+   * Used on a first run, where the question is "which provider are you using?" and a wall of
+   * twenty-four unrelated options is an obstacle between someone and their first working session.
+   */
+  focus?: "providers";
+};
+
+export async function runSettingsMenu(current: NovaSettings, prompts: SettingsPrompts, options: SettingsMenuOptions = {}): Promise<NovaSettings> {
   const settings = { ...current };
+  let focused = options.focus === "providers";
   for (;;) {
     const language = resolveControlLanguage(settings.NOVA_LANGUAGE);
+    const fields = focused ? PROVIDER_KEY_FIELDS : SETTING_FIELDS;
     prompts.write(`\nNova ${controlLabel(language, "settings")}\n`);
-    SETTING_FIELDS.forEach((field, index) => {
+    fields.forEach((field, index) => {
       const value = settings[field.key];
       const shown = "secret" in field && field.secret ? maskSetting(value) : value || "not set";
       prompts.write(`  ${String(index + 1).padStart(2)}. ${field.label}: ${shown}\n`);
     });
+    if (focused) prompts.write("   a. everything else (base URLs, models, pricing, voice, keys)\n");
     prompts.write(`   q. ${controlLabel(language, "saved")} / ${controlLabel(language, "exit")}\n`);
     const choice = (await prompts.ask(`${controlLabel(language, "choose")}: `)).trim().toLowerCase();
     if (choice === "q" || choice === "done" || choice === "exit") return settings;
+    if (focused && choice === "a") { focused = false; continue; }
     const index = Number(choice) - 1;
-    const field = SETTING_FIELDS[index];
-    if (!field) { prompts.write("Choose a number from the menu, or q to save.\n"); continue; }
+    const field = fields[index];
+    if (!field) { prompts.write(`Choose a number from the menu${focused ? ", a for the full list" : ""}, or q to save.\n`); continue; }
     const raw = await ("secret" in field && field.secret ? prompts.askSecret(`${field.label} (paste hidden; - clears): `) : prompts.ask(`${field.label} (- clears): `));
     if (raw.trim() === "-") {
       delete settings[field.key];
