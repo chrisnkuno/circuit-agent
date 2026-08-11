@@ -40,6 +40,15 @@ export interface NovaWorkspace {
   readonly label: string;
   /** Backend-specific truth appended to run_command's description. */
   readonly commandGuidance: string;
+  /**
+   * The platform whose shell rules apply to a command this workspace runs.
+   *
+   * Deliberately not `process.platform`: a sandbox runs Linux containers no matter what the host
+   * is, so a skill's arguments must be POSIX-quoted for an E2B session even when Nova itself is on
+   * Windows — while `LocalWorkspace` on Windows genuinely needs cmd.exe's rules. Anything building
+   * a command string (skills.ts, hooks.ts) reads this rather than the host's own platform.
+   */
+  readonly commandPlatform: NodeJS.Platform;
   readFile(path: string, options?: { offset?: number; limit?: number }): Promise<ReadResult>;
   writeFile(path: string, content: string): Promise<{ path: string; bytesWritten: number }>;
   editFile(path: string, oldText: string, newText: string, options?: { replaceAll?: boolean }): Promise<{ path: string; replacements: number }>;
@@ -75,6 +84,8 @@ const CONFIG_FILE_SCAN_LIMIT = 500;
 export class LocalWorkspace implements NovaWorkspace {
   readonly kind = "local" as const;
   readonly commandGuidance = "Runs in a real shell, so pipes and redirection work.";
+  /** The host's own platform: this backend runs commands on this machine. */
+  readonly commandPlatform: NodeJS.Platform = process.platform;
 
   constructor(private readonly root: string, private readonly limits: WorkspaceLimits = DEFAULT_WORKSPACE_LIMITS, private readonly runner: CommandRunner = runLocalCommand) {}
 
@@ -176,6 +187,8 @@ export type E2BWorkspaceOptions = {
  */
 abstract class SandboxWorkspace implements NovaWorkspace {
   abstract readonly kind: "e2b" | "docker";
+  /** Always Linux: the container's platform, which the host's own has no bearing on. */
+  readonly commandPlatform: NodeJS.Platform = "linux";
   readonly commandGuidance =
     "Runs in an isolated remote sandbox as argv, not through a shell: pipes, redirection and command chaining are unavailable, and only allowlisted programs (node, python3, npm, git, rg, ls, find, pytest, cargo, go, bun, uv) may run.";
 

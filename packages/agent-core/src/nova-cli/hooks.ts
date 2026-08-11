@@ -44,8 +44,22 @@ function runHookScript(workspace: NovaWorkspace, scriptPath: string, event: Hook
   // path and the shell path identically. A base64 payload's alphabet (`A-Za-z0-9+/=`) never collides
   // with a shell metacharacter or whitespace, so it needs no quoting either.
   const payload = Buffer.from(JSON.stringify(event), "utf8").toString("base64");
-  const command = `env NOVA_HOOK_EVENT_B64=${payload} ${scriptPath}`;
-  return workspace.runCommand(command, HOOK_TIMEOUT_MS);
+  return workspace.runCommand(hookCommand(scriptPath, payload, workspace.commandPlatform), HOOK_TIMEOUT_MS);
+}
+
+/**
+ * The invocation that sets `NOVA_HOOK_EVENT_B64` for one hook script, per shell.
+ *
+ * `env VAR=value program` is a POSIX idiom and `env` is not a program on Windows at all, so the
+ * original spelling did not merely misbehave under cmd.exe — it failed to find anything to run.
+ * cmd's own equivalent is `set` followed by the command, which needs `&&` and therefore a real
+ * shell; `hasShellSyntax` sees the `&&` and routes it accordingly, which is exactly what is wanted
+ * here. A base64 payload never contains a character either shell treats as special, so neither
+ * form needs quoting around it.
+ */
+export function hookCommand(scriptPath: string, payload: string, platform: NodeJS.Platform): string {
+  if (platform !== "win32") return `env NOVA_HOOK_EVENT_B64=${payload} ${scriptPath}`;
+  return `set NOVA_HOOK_EVENT_B64=${payload}&& ${scriptPath.split("/").join("\\")}`;
 }
 
 export type PreToolUseOutcome = { blocked: false } | { blocked: true; reason: string };

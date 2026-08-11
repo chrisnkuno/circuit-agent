@@ -90,17 +90,30 @@ export function discoverSkillManifests(workspace: NovaWorkspace): Promise<SkillM
  * (the one array coercion `validateToolArguments` performs) are joined space-separated, each element
  * quoted the same way.
  */
-export function substitutePlaceholders(command: string, args: Record<string, unknown>): string {
+export function substitutePlaceholders(command: string, args: Record<string, unknown>, platform: NodeJS.Platform = "linux"): string {
   return command.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => {
     if (!(name in args)) throw new Error(`Skill command references {{${name}}}, which was not provided`);
     const value = args[name];
     const values = Array.isArray(value) ? value : [value];
-    return values.map((item) => shellQuote(String(item))).join(" ");
+    return values.map((item) => shellQuote(String(item), platform)).join(" ");
   });
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+/**
+ * Quotes one argument for the shell that will actually run it.
+ *
+ * The two shells disagree on the fundamentals, so one scheme cannot serve both: `cmd.exe` gives no
+ * meaning to a single quote at all, which means POSIX `'...'` quoting does not merely fail to
+ * protect an argument there — it passes the quote marks through as literal characters and leaves
+ * every metacharacter inside them live. Defaults to POSIX because that is what every sandbox runs;
+ * only a local Windows workspace asks for the other.
+ */
+function shellQuote(value: string, platform: NodeJS.Platform): string {
+  if (platform !== "win32") return `'${value.replace(/'/g, `'\\''`)}'`;
+  // cmd.exe: double quotes group, `""` escapes a literal quote inside them, and `%` must be
+  // defused or the shell expands a variable the caller never wrote. `^` escaping is not used here
+  // because inside double quotes cmd does not treat `& | < > ( )` as special in the first place.
+  return `"${value.replace(/"/g, '""').replace(/%/g, '%%')}"`;
 }
 
 /** Exposes every discovered skill as a `ToolProvider`, executed through the workspace's own `runCommand`. */
@@ -118,7 +131,7 @@ export class SkillToolProvider implements ToolProvider {
       inputSchema: manifest.inputSchema,
       invoke: async (argumentsValue) => {
         const validated = validateToolArguments(manifest.name, manifest.inputSchema, argumentsValue);
-        const command = substitutePlaceholders(manifest.command, validated);
+        const command = substitutePlaceholders(manifest.command, validated, this.workspace.commandPlatform);
         const result = await this.workspace.runCommand(command, manifest.timeoutMs ?? DEFAULT_SKILL_TIMEOUT_MS);
         const body = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || "(no output)";
         return { content: `exit ${result.exitCode}\n${body}`, isError: result.exitCode !== 0 };

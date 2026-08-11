@@ -117,6 +117,40 @@ nova --sandbox --upload "try upgrading to the new API and run the tests"
 
 The sandbox executes commands as argv against an allowlist rather than through a shell, so pipes and redirection are unavailable there — Nova says so rather than failing obscurely.
 
+`--sandbox docker` uses a local Docker container instead of a remote one, for keeping work off your working tree without sending it to a third party. Pick the image with `--docker-image` or `DOCKER_CODING_IMAGE`.
+
+## Extending Nova: skills, hooks, plugins and MCP
+
+Everything here lives under `.nova/` in your project, so it travels with the repository and works the same in a local, Docker or E2B session. `/tools` lists whatever is currently loaded and where each piece came from.
+
+**Skills** are commands you name and describe, in `.nova/skills/<name>/skill.json`:
+
+```json
+{
+  "name": "coverage",
+  "description": "Reports test coverage for a package.",
+  "command": "npm run coverage -- --scope {{package}}",
+  "inputSchema": {
+    "type": "object",
+    "properties": { "package": { "type": "string" } },
+    "required": ["package"],
+    "additionalProperties": false
+  }
+}
+```
+
+`{{package}}` is filled in with the model's argument, quoted for the shell that will run it — arguments are never pasted into the command raw.
+
+**Hooks** are scripts that see every tool call, in `.nova/hooks/pre-tool-use/` and `.nova/hooks/post-tool-use/`. They run in filename order and receive the call as base64 JSON in `NOVA_HOOK_EVENT_B64`. A pre-tool-use hook that exits non-zero blocks the call and its stderr becomes the reason the model is given; a post-tool-use hook can only warn, since the work has already happened.
+
+**MCP servers** go in `.nova/mcp.json` as `{ "servers": [{ "id": "…", "command": "…", "args": [], "env": {} }] }`. Nova speaks stdio JSON-RPC to them and offers their tools alongside its own.
+
+**Plugins** bundle all three under `.nova/plugins/<name>/`, with a `plugin.json` naming any MCP servers plus optional `skills/` and `hooks/` directories in the same formats.
+
+Every tool that does not ship with Nova is approval-gated on every call regardless of mode, and the approval prompt names where it came from — a tool called `deploy` from an MCP server never looks like one of Nova's own.
+
+On Windows, hook scripts need an extension `cmd.exe` can execute (`.cmd` or `.bat`, or a `.ps1` invoked through one); a `.sh` file will not run without a POSIX shell installed. Skill commands and hook invocations are quoted for `cmd.exe` automatically when the session is local — a sandbox session is always quoted for Linux, since that is what the container runs.
+
 ## Requirements
 
 Node 22.5 or newer on Windows, macOS, or Linux. `git` enables checkpoints (Nova degrades to no-undo without it). `ffmpeg` is optional and needed only for direct microphone recording; existing audio files can still be transcribed without it.

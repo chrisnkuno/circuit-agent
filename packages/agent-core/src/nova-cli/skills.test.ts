@@ -62,6 +62,36 @@ describe("substitutePlaceholders", () => {
   it("throws when the command references a placeholder that was never provided", () => {
     expect(() => substitutePlaceholders("echo {{missing}}", {})).toThrow(/missing/);
   });
+
+  describe("on Windows, where cmd.exe does not understand POSIX quoting at all", () => {
+    it("uses double quotes, because a single quote is not a quote character to cmd", () => {
+      // POSIX quoting here would not merely fail to protect the argument — cmd would pass the
+      // quote marks through literally and leave anything inside them live.
+      expect(substitutePlaceholders("echo {{text}}", { text: "hello world" }, "win32")).toBe('echo "hello world"');
+    });
+
+    it("escapes an embedded double quote by doubling it, cmd's own convention", () => {
+      expect(substitutePlaceholders("echo {{text}}", { text: 'say "hi"' }, "win32")).toBe('echo "say ""hi"""');
+    });
+
+    it("defuses % so cmd cannot expand a variable the caller never wrote", () => {
+      expect(substitutePlaceholders("echo {{text}}", { text: "100%PATH%" }, "win32")).toBe('echo "100%%PATH%%"');
+    });
+
+    it("contains an injection attempt inside the quoted argument rather than letting it chain", () => {
+      const malicious = 'x" & del /q C:\\ & echo "';
+      const substituted = substitutePlaceholders("echo {{text}}", { text: malicious }, "win32");
+      // Every quote the attacker supplied is doubled, so none of them closes the argument early
+      // and the `&` never reaches cmd as a command separator.
+      expect(substituted).toBe('echo "x"" & del /q C:\\ & echo """');
+      expect(substituted.startsWith('echo "')).toBe(true);
+      expect(substituted.endsWith('"')).toBe(true);
+    });
+
+    it("still quotes POSIX-style for a sandbox, which runs Linux whatever the host is", () => {
+      expect(substitutePlaceholders("echo {{text}}", { text: "hello world" }, "linux")).toBe("echo 'hello world'");
+    });
+  });
 });
 
 describe("discoverSkillManifests", () => {

@@ -244,6 +244,14 @@ let containmentAvailability: Promise<boolean> | null = null;
  */
 function isProcessContainmentAvailable(): Promise<boolean> {
   containmentAvailability ??= new Promise((resolve) => {
+    // Namespaces are a Linux kernel feature; nothing else can have them however the probe behaves.
+    // Spawning `unshare` on Windows or macOS to be told so costs a process launch on the first
+    // command of every session, and on Windows would surface as a spurious ENOENT for a program the
+    // user never asked for. `terminateProcessTree` already has its own win32 path (taskkill /T).
+    if (process.platform !== "linux") {
+      resolve(false);
+      return;
+    }
     let probe: ReturnType<typeof spawn>;
     try {
       probe = spawn("unshare", [...CONTAINMENT_ARGS, "true"], { stdio: "ignore" });

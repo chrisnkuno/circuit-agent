@@ -3,7 +3,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { LocalWorkspace } from "./backends";
-import { HookRegistry } from "./hooks";
+import { hasShellSyntax } from "./command";
+import { HookRegistry, hookCommand } from "./hooks";
 
 let root: string;
 
@@ -20,6 +21,25 @@ async function writeHookScript(scriptPath: string, body: string): Promise<void> 
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   await fs.writeFile(scriptPath, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
+
+describe("hook invocation across shells", () => {
+  it("uses env(1) on POSIX, where it is a real program", () => {
+    expect(hookCommand(".nova/hooks/pre-tool-use/x.sh", "eyJhIjoxfQ==", "linux"))
+      .toBe("env NOVA_HOOK_EVENT_B64=eyJhIjoxfQ== .nova/hooks/pre-tool-use/x.sh");
+  });
+
+  it("uses cmd's own `set &&` on Windows, where env(1) does not exist to be found", () => {
+    // The POSIX spelling did not merely misbehave under cmd.exe — `env` is not a program there, so
+    // there was nothing to run at all.
+    const command = hookCommand(".nova/hooks/pre-tool-use/x.cmd", "eyJhIjoxfQ==", "win32");
+    expect(command).toBe("set NOVA_HOOK_EVENT_B64=eyJhIjoxfQ==&& .nova\\hooks\\pre-tool-use\\x.cmd");
+    expect(command).not.toContain("env ");
+  });
+
+  it("produces a Windows command the executor will route through a shell, since `set` needs one", () => {
+    expect(hasShellSyntax(hookCommand(".nova/hooks/pre-tool-use/x.cmd", "abc==", "win32"))).toBe(true);
+  });
+});
 
 describe("HookRegistry.local pre-tool-use", () => {
   it("runs with no hooks present — never blocks", async () => {
