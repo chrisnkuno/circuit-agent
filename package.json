@@ -17,7 +17,7 @@
     "typecheck": "tsc -b && tsc -p sidecar/tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@circuit-nova/nova-core": "^0.1.1",
+    "@circuit-nova/nova-core": "workspace:*",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.3.0",
