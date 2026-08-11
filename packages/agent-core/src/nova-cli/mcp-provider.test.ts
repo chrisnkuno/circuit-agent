@@ -104,6 +104,63 @@ describe("McpConnection", () => {
   });
 });
 
+describe("an MCP server's environment", () => {
+  // Found by probing the running code, not by reading it: `run_command` already had Nova's own
+  // provider keys stripped, while an MCP server — third-party code Nova spawns, with strictly less
+  // reason to see them — was started with the full parent environment. Same defect, newer path.
+  const originalEnv = { ...process.env };
+  afterEach(() => { process.env = { ...originalEnv }; });
+
+  /** Writes a server that records what it can see in its own environment, then answers normally. */
+  async function envReportingServer(outputPath: string): Promise<string> {
+    const scriptPath = path.join(root, "env-server.js");
+    await fs.writeFile(scriptPath, `
+      require("node:fs").writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({
+        anthropic: process.env.ANTHROPIC_API_KEY ?? null,
+        ownCredential: process.env.MY_SERVER_TOKEN ?? null,
+        path: Boolean(process.env.PATH),
+      }));
+      ${FAKE_SERVER_SCRIPT}
+    `);
+    return scriptPath;
+  }
+
+  it("never sees Nova's own provider keys, matching what run_command already guaranteed", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-live-secret-value";
+    const reportPath = path.join(root, "seen.json");
+    const connection = new McpConnection({ id: "probe", command: "node", args: [await envReportingServer(reportPath)] });
+    try {
+      await connection.listTools();
+      const seen = JSON.parse(await fs.readFile(reportPath, "utf8"));
+      expect(seen.anthropic).toBeNull();
+      expect(seen.path).toBe(true); // still a working environment, not an empty one
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("still receives its own declared credentials, which sanitizing must not strip", async () => {
+    // The server's own token is exactly what `env` in its config is for, and it is applied after
+    // sanitizing precisely so a credential-shaped name of its own survives.
+    process.env.ANTHROPIC_API_KEY = "sk-ant-live-secret-value";
+    const reportPath = path.join(root, "seen-own.json");
+    const connection = new McpConnection({
+      id: "probe",
+      command: "node",
+      args: [await envReportingServer(reportPath)],
+      env: { MY_SERVER_TOKEN: "the-server-own-token" },
+    });
+    try {
+      await connection.listTools();
+      const seen = JSON.parse(await fs.readFile(reportPath, "utf8"));
+      expect(seen.ownCredential).toBe("the-server-own-token");
+      expect(seen.anthropic).toBeNull();
+    } finally {
+      connection.close();
+    }
+  });
+});
+
 describe("McpToolProvider", () => {
   it("exposes the connection's tools as invokable ExternalTools", async () => {
     const connection = new McpConnection({ id: "fake", command: "node", args: [serverPath] });

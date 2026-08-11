@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { sanitizeCommandEnvironment } from "./command";
 import type { ExternalTool, ToolProvider } from "./tool-providers";
 
 /**
@@ -87,7 +88,13 @@ export class McpConnection {
   /** `requestTimeoutMs` is a constructor option (not only the default) so a test can prove the timeout fires without waiting 15s for it. */
   constructor(private readonly config: McpServerConfig, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS) {
     this.child = spawn(config.command, config.args ?? [], {
-      env: { ...process.env, ...config.env },
+      // An MCP server is third-party code Nova spawns, exactly like a command `run_command` runs,
+      // and it gets the same treatment: Nova's own provider keys are stripped before it starts.
+      // Verified live before this: a server process could read ANTHROPIC_API_KEY in full while the
+      // agent's own shell commands already could not — the same defect, in the newer of the two
+      // code paths. A server's own credentials still reach it through `config.env`, which is
+      // applied after sanitizing and so is never stripped.
+      env: { ...sanitizeCommandEnvironment(process.env), ...config.env } as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.on("error", (error) => this.rejectAllPending(error));
