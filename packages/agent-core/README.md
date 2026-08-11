@@ -29,6 +29,15 @@ for await (const event of runtime.execute({ messages: [{ role: "user", content: 
 }
 ```
 
+## Upgrading to 0.4.0
+
+Four changes need an edit if you embed this package. `^0.3.0` deliberately does not match `0.4.0`, so nothing upgrades into these by surprise.
+
+- **`createNovaTools` is now `async`.** It awaits externally-sourced tools (skills, MCP servers, plugins) before returning. `const tools = createNovaTools(…)` becomes `const tools = await createNovaTools(…)`.
+- **`NovaWorkspace` gained two required members.** A custom implementation needs `listConfigFiles(prefix)` — files under a prefix, ignoring the ignored-directory list, `[]` when the directory is absent — and `commandPlatform`, the platform whose shell rules apply to commands it runs (`process.platform` for a local workspace, `"linux"` for anything containerised).
+- **Discovery takes a workspace, not a root path.** `discoverSkillManifests`, `discoverPlugins`, `discoverMcpServers`, `loadLocalExternalTooling` and `HookRegistry.local` now receive a `NovaWorkspace`, which is what lets a `.nova` directory work in a sandbox rather than only on the host.
+- **Stored approvals are void.** `APPROVAL_POLICY_VERSION` moved to `nova-approval-v2` because a tool's provenance now forms part of its action digest — a standing approval for a built-in `run_command` must not silently cover a same-named tool an MCP server starts offering. Persisted `allow_always` decisions from v1 are ignored and will be asked again once.
+
 ## Optional peer dependencies
 
 Both are lazy-loaded — importing this package doesn't require either unless you actually use the adapter that needs it:
