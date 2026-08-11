@@ -200,12 +200,25 @@ function terminateProcessTree(pid: number | undefined, signal: NodeJS.Signals): 
 /**
  * What OS-level containment for a locally spawned command does and does not cover.
  *
- * Covers: the process tree (this file — a PID namespace no process can escape by detaching) and
- * the filesystem (`workspace.ts` — every path a command's arguments or a tool call can reference is
- * resolved against the workspace root first, refusing anything that escapes it, including via `..`
- * or an outward-pointing symlink).
+ * It is not a sandbox, and nothing here should be read as one. What it covers is the process
+ * *tree*: a PID namespace no child can escape by detaching, so a timeout or a cancel reaches
+ * everything the command started. That is lifecycle hygiene, not a security boundary.
  *
- * Does not cover network egress, and cannot from here. Blocking it requires either a privileged
+ * A command run through `run_command` has the full authority of the user who started Nova. It can
+ * read and write any file that user can, inside the workspace or far outside it, and reach the
+ * network. Verified by probing it, not assumed: with containment active, `cat ../secrets`,
+ * `echo > ~/anything` and a DNS lookup all succeed. The `resolveInWorkspace` path confinement in
+ * `workspace.ts` constrains the *file tools* — `read_file`, `write_file`, `edit_file`, whose
+ * arguments it resolves — and a shell command's arguments never pass through it. An earlier version
+ * of this comment claimed the filesystem was covered by citing that code, which conflated the two
+ * and would have told a reader the opposite of the truth.
+ *
+ * What actually stands between a destructive command and the disk is therefore the layer above:
+ * `isRefusedCommand` for the handful that are never worth running, `assessToolSafety` for the ones
+ * auto mode must not wave through, and a human reading the approval prompt for everything else in
+ * build mode. Real isolation means the E2B or Docker backend, where the boundary is the container.
+ *
+ * Does not cover network egress either, and cannot from here. Blocking it requires either a privileged
  * kernel feature this process does not have (a network namespace, iptables rules) or an unprivileged
  * one that does not exist as a per-process knob on Linux — there is no equivalent of `unshare --pid`
  * for "this process tree gets no sockets." When network containment actually matters, the existing
