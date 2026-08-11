@@ -1,5 +1,4 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import type { NovaWorkspace } from "./backends";
 import { INSTRUCTION_FILES } from "./prompt";
 
 /**
@@ -41,45 +40,48 @@ export type NestedInstruction = {
 export class NestedInstructionTracker {
   private readonly seenDirectories = new Set<string>();
 
-  constructor(private readonly root: string) {}
+  /**
+   * Reads through the workspace rather than `node:fs`, so a repository's own `src/api/AGENTS.md` is
+   * found on an E2B or Docker session exactly as it is locally — the files the agent is actually
+   * working on are the ones whose rules should reach it, wherever they live.
+   */
+  constructor(private readonly workspace: NovaWorkspace) {}
 
-  /** Root-relative paths already surfaced, for inspection — a session log or a test, not the runtime. */
+  /** Root-relative directories already surfaced, for inspection — a session log or a test, not the runtime. */
   get discovered(): string[] {
-    return [...this.seenDirectories].map((dir) => this.toRelative(dir)).sort();
-  }
-
-  private toRelative(absoluteDir: string): string {
-    const relative = path.relative(path.resolve(this.root), absoluteDir);
-    return relative === "" ? "." : relative.split(path.sep).join("/");
+    return [...this.seenDirectories].sort();
   }
 
   /**
    * Checks the directories between the root and `relativePath`'s own directory, newest-reached
    * last (broad to specific, matching the static chain's own ordering), and returns whichever of
    * them have an instruction file not already shown this session.
+   *
+   * A path whose last segment has no extension is treated as naming a directory itself, rather than
+   * a file inside one. This replaces the `fs.stat` the local-only version used: statting through a
+   * remote workspace costs a round trip on every single call, and the tools actually wired to this
+   * (`PATH_TOOLS` in tools.ts) only ever pass file paths, so the probe would almost always be
+   * answering a question that did not arise. The cost of the heuristic being wrong is one directory
+   * checked that did not need to be — never a missed instruction file, and never an error.
    */
   async discover(relativePath: string): Promise<NestedInstruction[]> {
-    const rootAbsolute = path.resolve(this.root);
-    const targetAbsolute = path.resolve(rootAbsolute, relativePath);
-    // list/glob/grep may name a directory directly; read/write/edit always name a file. Either
-    // way, what matters is the directory whose rules would govern working in it.
-    const directory = await fs.stat(targetAbsolute).then((stat) => (stat.isDirectory() ? targetAbsolute : path.dirname(targetAbsolute))).catch(() => path.dirname(targetAbsolute));
-    if (directory !== rootAbsolute && !directory.startsWith(`${rootAbsolute}${path.sep}`)) return [];
+    const normalized = relativePath.split("\\").join("/").replace(/^\.\//, "");
+    // A path escaping the root is the workspace's business to refuse, not this one's to interpret.
+    if (normalized.startsWith("../") || normalized.startsWith("/")) return [];
+    const segments = normalized.split("/").filter((segment) => segment && segment !== ".");
+    if (segments.at(-1)?.includes(".")) segments.pop(); // a file inside the directory that matters
 
     const chain: string[] = [];
-    for (let current = directory; current !== rootAbsolute; current = path.dirname(current)) {
-      chain.unshift(current);
-      if (path.dirname(current) === current) break; // filesystem root reached without finding workspace root — malformed input, stop rather than loop
-    }
+    for (let depth = 1; depth <= segments.length; depth += 1) chain.push(segments.slice(0, depth).join("/"));
 
     const found: NestedInstruction[] = [];
-    for (const dir of chain) {
-      if (this.seenDirectories.has(dir)) continue;
-      this.seenDirectories.add(dir);
+    for (const directory of chain) {
+      if (this.seenDirectories.has(directory)) continue;
+      this.seenDirectories.add(directory);
       for (const candidate of INSTRUCTION_FILES) {
-        const content = await fs.readFile(path.join(dir, candidate), "utf8").catch(() => null);
-        if (content === null) continue;
-        found.push({ path: `${this.toRelative(dir)}/${candidate}`, content });
+        const file = await this.workspace.readFile(`${directory}/${candidate}`).catch(() => null);
+        if (!file) continue;
+        found.push({ path: `${directory}/${candidate}`, content: file.content });
         break; // one instruction file per directory, same precedence prompt.ts uses
       }
     }

@@ -1,5 +1,4 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import type { NovaWorkspace } from "./backends";
 import { parseMcpServerConfig, type McpServerConfig } from "./mcp-provider";
 
 /**
@@ -49,21 +48,26 @@ export function parsePluginManifest(displayPath: string, raw: string): PluginMan
 }
 
 /**
- * Every `.nova/plugins/<name>/plugin.json` under `root`, plus the absolute path to that plugin's own
- * directory — the caller needs it to find the plugin's `skills/` and `hooks/` subdirectories, which
- * this function deliberately does not reach into itself (that is `skills.ts`/`hooks.ts`'s job, kept
- * one function per concern rather than one function that knows about all three).
+ * Every `.nova/plugins/<name>/plugin.json` in the workspace, plus that plugin's own directory as a
+ * workspace-relative path — the caller needs it to find the plugin's `skills/` and `hooks/`
+ * subdirectories, which this function deliberately does not reach into itself (that is
+ * `skills.ts`/`hooks.ts`'s job, kept one function per concern rather than one that knows all three).
  */
-export async function discoverPlugins(root: string): Promise<Array<{ manifest: PluginManifest; directory: string }>> {
-  const pluginsRoot = path.join(root, PLUGINS_DIRECTORY);
-  const entries = await fs.readdir(pluginsRoot, { withFileTypes: true }).catch(() => []);
+export async function discoverPlugins(workspace: NovaWorkspace): Promise<Array<{ manifest: PluginManifest; directory: string }>> {
+  const files = await workspace.listConfigFiles(PLUGINS_DIRECTORY);
+  // Exactly one level deep, mirroring skills: `.nova/plugins/<name>/plugin.json`.
+  const manifestPaths = files.filter((file) => {
+    const rest = file.slice(PLUGINS_DIRECTORY.length + 1).split("/");
+    return rest.length === 2 && rest[1] === "plugin.json";
+  });
   const plugins: Array<{ manifest: PluginManifest; directory: string }> = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const directory = path.join(pluginsRoot, entry.name);
-    const raw = await fs.readFile(path.join(directory, "plugin.json"), "utf8").catch(() => null);
-    if (raw === null) continue;
-    plugins.push({ manifest: parsePluginManifest(`${PLUGINS_DIRECTORY}/${entry.name}/plugin.json`, raw), directory });
+  for (const manifestPath of manifestPaths) {
+    const file = await workspace.readFile(manifestPath).catch(() => null);
+    if (!file) continue;
+    plugins.push({
+      manifest: parsePluginManifest(manifestPath, file.content),
+      directory: manifestPath.slice(0, manifestPath.length - "/plugin.json".length),
+    });
   }
   return plugins;
 }

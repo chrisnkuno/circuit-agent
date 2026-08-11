@@ -1,5 +1,3 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { NovaWorkspace } from "./backends";
 
 /**
@@ -14,11 +12,9 @@ import type { NovaWorkspace } from "./backends";
  * a side effect that already happened, so a non-zero post-hook only appends a warning rather than
  * turning an already-completed call into an error.
  *
- * Discovery reads through `node:fs` directly against the workspace root, local sessions only — the
- * same scope `skills.ts` documents for the same reasons (`.nova` sits in every backend's
- * `ignoredDirectories`, and a remote session's local root is not a mirror of the sandbox). Running a
- * hook script itself goes through `NovaWorkspace.runCommand`, so it is subject to the same
- * containment and environment sanitization as `run_command`.
+ * Discovery and execution both go through `NovaWorkspace`, so a hook committed to a repository
+ * behaves the same on a local, E2B or Docker session — and running one is subject to the same
+ * containment and environment sanitization as `run_command`, since it *is* a `runCommand` call.
  */
 export type HookEvent =
   | { event: "pre_tool_use"; toolName: string; arguments: Record<string, unknown> }
@@ -27,10 +23,11 @@ export type HookEvent =
 export const HOOKS_DIRECTORY = ".nova/hooks";
 const HOOK_TIMEOUT_MS = 5_000;
 
-/** Every executable file directly under `phaseDirectory` (an absolute path), sorted for a deterministic run order. */
-async function scriptsIn(phaseDirectory: string, displayPrefix: string): Promise<string[]> {
-  const entries = await fs.readdir(phaseDirectory, { withFileTypes: true }).catch(() => []);
-  return entries.filter((entry) => entry.isFile()).map((entry) => `${displayPrefix}/${entry.name}`).sort();
+/** Every script directly under `phaseDirectory`, sorted for a deterministic run order. */
+async function scriptsIn(workspace: NovaWorkspace, phaseDirectory: string): Promise<string[]> {
+  const files = await workspace.listConfigFiles(phaseDirectory);
+  // Directly under, not nested: a hook script's own helper files are not themselves hooks.
+  return files.filter((file) => !file.slice(phaseDirectory.length + 1).includes("/")).sort();
 }
 
 function runHookScript(workspace: NovaWorkspace, scriptPath: string, event: HookEvent): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -54,15 +51,14 @@ function runHookScript(workspace: NovaWorkspace, scriptPath: string, event: Hook
 export type PreToolUseOutcome = { blocked: false } | { blocked: true; reason: string };
 
 /**
- * One place hooks are discovered from — the top-level `.nova/hooks`, or a specific plugin's.
- * `hooksDirectory` is absolute (used for `fs.readdir`); `displayPrefix` is workspace-root-relative
- * (used both for error messages and as the actual path `runCommand` executes, since a hook script
- * runs with the workspace root as its cwd).
+ * One place hooks are discovered from — the top-level `.nova/hooks`, or a specific plugin's own.
+ * Workspace-root-relative, which is both how it is displayed and the path `runCommand` executes,
+ * since a hook script runs with the workspace root as its cwd.
  */
-export type HookSource = { hooksDirectory: string; displayPrefix: string };
+export type HookSource = string;
 
-async function scriptsFromSources(sources: readonly HookSource[], phase: "pre-tool-use" | "post-tool-use"): Promise<string[]> {
-  const perSource = await Promise.all(sources.map((source) => scriptsIn(path.join(source.hooksDirectory, phase), `${source.displayPrefix}/${phase}`)));
+async function scriptsFromSources(workspace: NovaWorkspace, sources: readonly HookSource[], phase: "pre-tool-use" | "post-tool-use"): Promise<string[]> {
+  const perSource = await Promise.all(sources.map((source) => scriptsIn(workspace, `${source}/${phase}`)));
   return perSource.flat();
 }
 
@@ -71,12 +67,27 @@ export class HookRegistry {
   constructor(private readonly sources: readonly HookSource[], private readonly workspace: NovaWorkspace) {}
 
   /** The top-level `.nova/hooks` directory only — the common case. */
-  static local(root: string, workspace: NovaWorkspace): HookRegistry {
-    return new HookRegistry([{ hooksDirectory: path.join(root, HOOKS_DIRECTORY), displayPrefix: HOOKS_DIRECTORY }], workspace);
+  static local(workspace: NovaWorkspace): HookRegistry {
+    return new HookRegistry([HOOKS_DIRECTORY], workspace);
+  }
+
+  /**
+   * Every hook script that would run, by phase, for display.
+   *
+   * Worth exposing precisely because a hook is otherwise invisible: it is the one mechanism here
+   * that can silently block a tool call, and a script nobody remembers adding is indistinguishable
+   * from a bug in Nova unless something can show that it exists.
+   */
+  async list(): Promise<{ preToolUse: string[]; postToolUse: string[] }> {
+    const [preToolUse, postToolUse] = await Promise.all([
+      scriptsFromSources(this.workspace, this.sources, "pre-tool-use"),
+      scriptsFromSources(this.workspace, this.sources, "post-tool-use"),
+    ]);
+    return { preToolUse, postToolUse };
   }
 
   async runPreToolUse(toolName: string, argumentsValue: Record<string, unknown>): Promise<PreToolUseOutcome> {
-    const scripts = await scriptsFromSources(this.sources, "pre-tool-use");
+    const scripts = await scriptsFromSources(this.workspace, this.sources, "pre-tool-use");
     for (const script of scripts) {
       const result = await runHookScript(this.workspace, script, { event: "pre_tool_use", toolName, arguments: argumentsValue });
       if (result.exitCode !== 0) {
@@ -88,7 +99,7 @@ export class HookRegistry {
 
   /** Never throws — a broken or hanging post-hook must not turn an already-completed tool call into an error. */
   async runPostToolUse(toolName: string, argumentsValue: Record<string, unknown>, result: { content: string; isError: boolean }): Promise<string[]> {
-    const scripts = await scriptsFromSources(this.sources, "post-tool-use");
+    const scripts = await scriptsFromSources(this.workspace, this.sources, "post-tool-use");
     const warnings: string[] = [];
     for (const script of scripts) {
       try {

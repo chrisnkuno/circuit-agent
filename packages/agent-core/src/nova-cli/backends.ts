@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { InteractiveCodingSandboxProvider } from "../providers/contracts";
 import { listSandboxFiles, searchSandboxText } from "../sandbox-search";
 import {
@@ -46,9 +47,29 @@ export interface NovaWorkspace {
   glob(pattern: string): Promise<string[]>;
   grep(query: string, options?: { include?: string; regex?: boolean }): Promise<GrepMatch[]>;
   runCommand(command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  /**
+   * Files under `prefix`, ignoring the ignored-directory list — root-relative, forward-slashed.
+   *
+   * Exists for exactly one caller: loading Nova's own configuration out of `.nova` (skills, hooks,
+   * plugins, MCP servers). `.nova` sits in `ignoredDirectories` so the *agent's* searches are not
+   * cluttered by Nova's own bookkeeping, which is right — but that list was never meant to hide
+   * configuration from Nova itself, and routing config discovery through `list`/`glob` means it
+   * silently finds nothing on every backend.
+   *
+   * Deliberately narrow: files only (every config file Nova looks for is a file), bounded, and
+   * returning `[]` for a missing directory rather than throwing, since "no skills" is the normal
+   * case and not an error.
+   */
+  listConfigFiles(prefix: string): Promise<string[]>;
   /** Releases anything the backend is holding. Local keeps nothing; E2B has a sandbox to stop. */
   dispose(): Promise<void>;
 }
+
+/**
+ * Ceiling on a config scan. `.nova` holds manifests and small scripts; anything approaching this
+ * many files means something unintended is in there, and a bounded scan is better than a hang.
+ */
+const CONFIG_FILE_SCAN_LIMIT = 500;
 
 /** The developer's own working tree. */
 export class LocalWorkspace implements NovaWorkspace {
@@ -87,6 +108,20 @@ export class LocalWorkspace implements NovaWorkspace {
 
   glob(pattern: string): Promise<string[]> {
     return globWorkspace(this.root, pattern, this.limits);
+  }
+
+  async listConfigFiles(prefix: string): Promise<string[]> {
+    // `walkWorkspace` with an empty ignore list rather than `fs.readdir` by hand: it already
+    // resolves against the root, refuses to leave it, and never follows a symlink outward — the
+    // path-confinement properties this must not quietly opt out of just because it reads config.
+    const files: string[] = [];
+    const base = path.resolve(this.root, prefix);
+    if (!base.startsWith(path.resolve(this.root))) return [];
+    for await (const entry of walkWorkspace(base, { ...this.limits, ignoredDirectories: [] }, CONFIG_FILE_SCAN_LIMIT)) {
+      if (!entry.isDirectory) files.push(`${prefix}/${entry.relative}`);
+      if (files.length >= CONFIG_FILE_SCAN_LIMIT) break;
+    }
+    return files.sort();
   }
 
   grep(query: string, options: { include?: string; regex?: boolean } = {}): Promise<GrepMatch[]> {
@@ -261,6 +296,28 @@ abstract class SandboxWorkspace implements NovaWorkspace {
       regex: options.regex,
       ignoredDirectories: this.limits.ignoredDirectories,
     });
+  }
+
+  async listConfigFiles(prefix: string): Promise<string[]> {
+    // Same `find -type f` shape `listSandboxFiles` uses, minus the ignore filters — see the
+    // interface comment for why config discovery must not inherit them. A missing directory makes
+    // find exit non-zero, which is the normal "no skills configured" case, so it returns [].
+    const root = `${this.options.workspaceRoot}/${prefix}`;
+    const result = await this.options.sandbox.runCommand(this.options.sandboxId, {
+      program: "find",
+      args: [root, "-type", "f"],
+      cwd: this.options.workspaceRoot,
+      timeoutMs: 30_000,
+    }).catch(() => null);
+    if (!result || result.exitCode !== 0) return [];
+    const absolutePrefix = `${this.options.workspaceRoot}/`;
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => (line.startsWith(absolutePrefix) ? line.slice(absolutePrefix.length) : line))
+      .slice(0, CONFIG_FILE_SCAN_LIMIT)
+      .sort();
   }
 
   async runCommand(command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {

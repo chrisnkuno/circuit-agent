@@ -23,19 +23,19 @@ async function writeHookScript(scriptPath: string, body: string): Promise<void> 
 
 describe("HookRegistry.local pre-tool-use", () => {
   it("runs with no hooks present — never blocks", async () => {
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     await expect(registry.runPreToolUse("write_file", { path: "a.txt" })).resolves.toEqual({ blocked: false });
   });
 
   it("lets an allowing hook (exit 0) through", async () => {
     await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/allow.sh"), "exit 0");
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     await expect(registry.runPreToolUse("write_file", { path: "a.txt" })).resolves.toEqual({ blocked: false });
   });
 
   it("blocks on a non-zero exit and surfaces the hook's own stderr as the reason", async () => {
     await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/deny.sh"), "echo 'no writes to secrets' >&2\nexit 1");
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     const outcome = await registry.runPreToolUse("write_file", { path: "secrets.env" });
     expect(outcome).toEqual({ blocked: true, reason: "no writes to secrets" });
   });
@@ -50,7 +50,7 @@ describe("HookRegistry.local pre-tool-use", () => {
         `case "$payload" in *'"toolName":"run_command"'*'"command":"rm -rf /tmp/x"'*) exit 0 ;; *) echo "unexpected payload: $payload" >&2; exit 1 ;; esac`,
       ].join("\n"),
     );
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     const outcome = await registry.runPreToolUse("run_command", { command: "rm -rf /tmp/x" });
     expect(outcome).toEqual({ blocked: false });
   });
@@ -60,7 +60,7 @@ describe("HookRegistry.local pre-tool-use", () => {
     await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/1-first.sh"), `echo first >> ${order}\nexit 0`);
     await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/2-second.sh"), `echo second >> ${order}\nexit 1`);
     await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/3-third.sh"), `echo third >> ${order}\nexit 0`);
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     const outcome = await registry.runPreToolUse("write_file", { path: "a.txt" });
     expect(outcome.blocked).toBe(true);
     const log = await fs.readFile(order, "utf8");
@@ -70,13 +70,13 @@ describe("HookRegistry.local pre-tool-use", () => {
 
 describe("HookRegistry.local post-tool-use", () => {
   it("returns no warnings when nothing is registered", async () => {
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     await expect(registry.runPostToolUse("write_file", { path: "a.txt" }, { content: "ok", isError: false })).resolves.toEqual([]);
   });
 
   it("collects a warning from a failing post-hook without throwing", async () => {
     await writeHookScript(path.join(root, ".nova/hooks/post-tool-use/audit.sh"), "echo 'file left uncommitted' >&2\nexit 1");
-    const registry = HookRegistry.local(root, new LocalWorkspace(root));
+    const registry = HookRegistry.local(new LocalWorkspace(root));
     const warnings = await registry.runPostToolUse("write_file", { path: "a.txt" }, { content: "wrote it", isError: false });
     expect(warnings).toEqual(["file left uncommitted"]);
   });

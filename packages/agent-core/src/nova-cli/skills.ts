@@ -1,5 +1,3 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { NovaWorkspace } from "./backends";
 import type { ExternalTool, ToolProvider } from "./tool-providers";
 import { assertSupportedSchema, validateToolArguments, type ToolInputSchema } from "./tool-schema";
@@ -10,15 +8,11 @@ import { assertSupportedSchema, validateToolArguments, type ToolInputSchema } fr
  * Discovered from `.nova/skills/<name>/skill.json` — one directory per skill, so a skill can later
  * carry sibling files (a script `command` shells out to) without inventing a second convention.
  *
- * Discovery reads through `node:fs` directly against the workspace root, local sessions only — the
- * same deliberate, documented scope `NestedInstructionTracker` (nested-instructions.ts) already
- * uses, for the same two reasons: `.nova` is in every backend's `ignoredDirectories`, so the
- * `NovaWorkspace.list`/`glob` a remote-safe discovery would need never even sees it, and for a
- * remote E2B/Docker session the workspace root passed to `NovaAgent` is only where session and
- * checkpoint bookkeeping live locally, not a mirror of the sandbox's actual files. Execution is not
- * similarly restricted: a discovered skill's `command` runs through `NovaWorkspace.runCommand`, so
- * once discovered it runs wherever the session runs — the containment/sanitization work in
- * command.ts applies to it exactly as it does to `run_command`.
+ * Both halves go through `NovaWorkspace`: discovery via `listConfigFiles` (which deliberately
+ * bypasses the ignored-directory list that hides `.nova` from the agent's own searches — see the
+ * interface comment in backends.ts), and execution via `runCommand`. So a skill committed to a
+ * repository is found and runs identically on a local, E2B or Docker session, and running one is
+ * subject to the same containment and environment sanitization as `run_command`.
  */
 export type SkillManifest = {
   name: string;
@@ -57,29 +51,33 @@ export function parseSkillManifest(displayPath: string, raw: string): SkillManif
 }
 
 /**
- * Every `<skill>/skill.json` directly under `skillsDirectory` (an absolute path). A manifest that fails to
- * parse is reported, not skipped silently — a skill a developer thought they added and that never
- * actually loaded is a confusing, hard-to-notice gap; a startup error naming the exact bad file is
- * not. A missing directory is simply zero skills, not an error. `displayPrefix` is only cosmetic —
- * what error messages call the directory, so a plugin's skills report their plugin-relative path
- * rather than an absolute one.
+ * Every `<skill>/skill.json` one level under `skillsDirectory`, read through the workspace so a
+ * skill committed to a repository behaves identically on a local, E2B or Docker session.
+ *
+ * A manifest that fails to parse is reported, not skipped silently — a skill a developer thought
+ * they added and that never actually loaded is a confusing, hard-to-notice gap; an error naming the
+ * exact bad file is not. A missing directory is simply zero skills.
  */
-export async function discoverSkillManifestsIn(skillsDirectory: string, displayPrefix: string): Promise<SkillManifest[]> {
-  const skillDirectories = await fs.readdir(skillsDirectory, { withFileTypes: true }).catch(() => []);
+export async function discoverSkillManifestsIn(workspace: NovaWorkspace, skillsDirectory: string): Promise<SkillManifest[]> {
+  const files = await workspace.listConfigFiles(skillsDirectory);
+  // Exactly one level deep: `<skillsDirectory>/<name>/skill.json`. A skill's own sibling files are
+  // its business, and a stray skill.json nested deeper is not a skill directory.
+  const manifestPaths = files.filter((file) => {
+    const rest = file.slice(skillsDirectory.length + 1).split("/");
+    return rest.length === 2 && rest[1] === "skill.json";
+  });
   const manifests: SkillManifest[] = [];
-  for (const entry of skillDirectories) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = path.join(skillsDirectory, entry.name, "skill.json");
-    const raw = await fs.readFile(manifestPath, "utf8").catch(() => null);
-    if (raw === null) continue;
-    manifests.push(parseSkillManifest(`${displayPrefix}/${entry.name}/skill.json`, raw));
+  for (const manifestPath of manifestPaths) {
+    const file = await workspace.readFile(manifestPath).catch(() => null);
+    if (!file) continue;
+    manifests.push(parseSkillManifest(manifestPath, file.content));
   }
   return manifests;
 }
 
-/** Every `.nova/skills/<skill>/skill.json` under the workspace root. */
-export function discoverSkillManifests(root: string): Promise<SkillManifest[]> {
-  return discoverSkillManifestsIn(path.join(root, SKILLS_DIRECTORY), SKILLS_DIRECTORY);
+/** Every `.nova/skills/<skill>/skill.json` in the workspace. */
+export function discoverSkillManifests(workspace: NovaWorkspace): Promise<SkillManifest[]> {
+  return discoverSkillManifestsIn(workspace, SKILLS_DIRECTORY);
 }
 
 /**
@@ -109,11 +107,11 @@ function shellQuote(value: string): string {
 export class SkillToolProvider implements ToolProvider {
   readonly kind = "skill" as const;
 
-  /** `skillsDirectory` is absolute — the workspace root plus whichever skills directory this provider covers (top-level `.nova/skills`, or a specific plugin's). */
+  /** `skillsDirectory` is workspace-root-relative — `.nova/skills`, or a specific plugin's own. */
   constructor(readonly id: string, private readonly skillsDirectory: string, private readonly workspace: NovaWorkspace) {}
 
   async listTools(): Promise<ExternalTool[]> {
-    const manifests = await discoverSkillManifestsIn(this.skillsDirectory, this.id);
+    const manifests = await discoverSkillManifestsIn(this.workspace, this.skillsDirectory);
     return manifests.map((manifest) => ({
       name: manifest.name,
       description: manifest.description,

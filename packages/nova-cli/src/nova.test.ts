@@ -50,6 +50,19 @@ describe("argument parsing", () => {
     expect(parseArgs(["--sandbox", "write", "a", "test"])).toMatchObject({ backend: "e2b", prompt: "write a test" });
   });
 
+  it("selects the local Docker backend, which was previously unreachable from the CLI", () => {
+    expect(parseArgs(["--sandbox", "docker"]).backend).toBe("docker");
+    // Still defaults to E2B when bare, so the existing meaning of --sandbox is unchanged.
+    expect(parseArgs(["--sandbox"]).backend).toBe("e2b");
+    // And a bare --sandbox before a request must not swallow the request as its value.
+    expect(parseArgs(["--sandbox", "docker", "write", "a", "test"])).toMatchObject({ backend: "docker", prompt: "write a test" });
+  });
+
+  it("takes a docker image from the flag, and otherwise has a usable default", () => {
+    expect(parseArgs(["--sandbox", "docker", "--docker-image", "node:22-slim"]).dockerImage).toBe("node:22-slim");
+    expect(parseArgs(["--sandbox", "docker"]).dockerImage).toBeTruthy();
+  });
+
   it("parses provider, model, currency and budget", () => {
     const args = parseArgs(["--provider", "anthropic", "--model", "claude-sonnet-5", "--currency", "usd", "--budget", "25"]);
     expect(args).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5", currency: "USD", budget: 25 });

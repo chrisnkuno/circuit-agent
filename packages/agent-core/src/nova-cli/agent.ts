@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { BoundedAgentRuntime, type AgentMessage, type AgentRuntimeEvent, type AgentRuntimeResult, type AgentTurnProvider } from "../agent-runtime";
+import { BoundedAgentRuntime, type AgentMessage, type AgentRuntimeEvent, type AgentRuntimeResult, type AgentTool, type AgentTurnProvider } from "../agent-runtime";
 import { affordableOutputTokens, approximateInputTokens, priceActualModelUsage, type ModelPriceCatalog } from "../model-cost";
 import type { ModelUsage } from "../providers/model";
 import type { ExaSearchClient } from "../providers/exa";
@@ -93,16 +93,14 @@ export type RestoreScope = "code" | "conversation" | "both";
 export class NovaAgent {
   private readonly todoList = new TodoList();
   /**
-   * Local only. It reads through Node's real filesystem at `options.root`, which is the workspace
-   * itself for a local session but is unrelated to a remote sandbox's actual file tree — the root
-   * held here is just where sessions and checkpoints live for that case, not a mirror of what the
-   * sandbox contains. Extending this to E2B/Docker would mean reading through `this.workspace`
-   * instead of `fs` directly, which nested-instructions.ts does not do (yet).
+   * A directory's own AGENTS.md, surfaced the first time a tool reaches it. Reads through
+   * `this.workspace`, so it works on every backend — the files the agent is working on are the ones
+   * whose rules should reach it, whether they live on this machine or in a sandbox.
    */
   private readonly nestedInstructions: NestedInstructionTracker | undefined;
   /**
-   * Skills, hooks and MCP servers discovered from `.nova/`. Local only, for the same reason as
-   * `nestedInstructions` above. Lazily loaded and memoized on first turn rather than in the
+   * Skills, hooks, plugins and MCP servers discovered from `.nova/`, also through `this.workspace`
+   * and so also backend-independent. Lazily loaded and memoized on first turn rather than in the
    * constructor — construction stays synchronous, and a session that never sends a turn never pays
    * for discovery or spawns an MCP server it will never use.
    */
@@ -122,7 +120,7 @@ export class NovaAgent {
   constructor(private readonly options: NovaAgentOptions) {
     this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...options.budgets };
     this.workspace = options.workspace ?? new LocalWorkspace(options.root, options.limits);
-    this.nestedInstructions = this.workspace.kind === "local" ? new NestedInstructionTracker(options.root) : undefined;
+    this.nestedInstructions = new NestedInstructionTracker(this.workspace);
     this.checkpoints = new CheckpointStore(options.root, path.join(options.root, ".nova", "checkpoint-index"), options.git);
     this.session = {
       schemaVersion: 2,
@@ -212,7 +210,10 @@ export class NovaAgent {
   }
 
   private loadExternalTooling(): Promise<LocalExternalTooling | undefined> {
-    this.externalTooling ??= this.workspace.kind === "local" ? loadLocalExternalTooling(this.options.root, this.workspace) : Promise.resolve(undefined);
+    // Every backend, not only local: discovery reads through the workspace, so a `.nova` directory
+    // committed to a repository is found in an E2B or Docker session exactly as it is on this
+    // machine. (`nestedInstructions` above is still local-only — it reads `node:fs` directly.)
+    this.externalTooling ??= loadLocalExternalTooling(this.workspace);
     return this.externalTooling;
   }
 
@@ -226,6 +227,33 @@ export class NovaAgent {
 
   listCheckpoints(): Checkpoint[] {
     return this.checkpoints.list();
+  }
+
+  /**
+   * What this session can actually call, and which hook scripts would run — for `/tools`.
+   *
+   * Built by the same `createNovaTools` call a real turn uses, rather than a second list assembled
+   * for display: a "what is loaded" answer that is computed differently from what actually loads is
+   * the one kind of answer that is worse than none. Scoped to the mode's capabilities for the same
+   * reason — plan mode genuinely cannot call the write tools, so listing them would be a lie.
+   */
+  async inspectTools(): Promise<{ tools: AgentTool[]; hooks: { preToolUse: string[]; postToolUse: string[] }; providerIds: string[] }> {
+    const externalTooling = await this.loadExternalTooling();
+    const tools = await createNovaTools({
+      workspace: this.workspace,
+      todos: this.todoList,
+      search: this.options.search,
+      onExpense: this.options.onExpense,
+      instructions: this.nestedInstructions,
+      externalToolProviders: externalTooling?.providers,
+      hooks: externalTooling?.hooks,
+    });
+    const capabilities = capabilitiesForMode(this.options.mode);
+    return {
+      tools: tools.filter((tool) => capabilities.includes(tool.capabilityId)),
+      hooks: (await externalTooling?.hooks.list()) ?? { preToolUse: [], postToolUse: [] },
+      providerIds: externalTooling?.providers.map((provider) => `${provider.kind}:${provider.id}`) ?? [],
+    };
   }
 
   /** Token-based preflight using the actual system prompt, history and tool schemas for this mode. */

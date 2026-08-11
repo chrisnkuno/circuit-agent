@@ -35,6 +35,7 @@ export const COMMANDS = defineCommands({
   "/tab": { args: "[new|next|prev|close|rename|N]", description: "Work on several things at once, one in front at a time" },
   "/pull": { args: "[dir]", description: "Copy sandbox files here" },
   "/where": { description: "Show the current workspace" },
+  "/tools": { description: "What the agent can call, and which skills, plugins, MCP servers or hooks a project added" },
   "/providers": { description: "Which model providers are configured" },
   "/settings": { description: "Configure API keys, URLs, models and voice input" },
   "/voice": { args: "[audio-file]", description: "Record or transcribe an editable voice prompt" },

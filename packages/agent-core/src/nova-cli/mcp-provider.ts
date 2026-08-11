@@ -46,13 +46,21 @@ export function parseMcpServerConfig(displayPath: string, index: number, value: 
   return { id, command, args: args as string[] | undefined, env: env as Record<string, string> | undefined };
 }
 
-/** `.nova/mcp.json`: `{ "servers": [...] }`, for MCP servers wanted every session rather than only inside a plugin. A missing file is zero servers, not an error. */
-export async function discoverMcpServers(root: string): Promise<McpServerConfig[]> {
-  const raw = await fs.readFile(path.join(root, MCP_CONFIG_PATH), "utf8").catch(() => null);
-  if (raw === null) return [];
+/**
+ * `.nova/mcp.json`: `{ "servers": [...] }`, for MCP servers wanted every session rather than only
+ * inside a plugin. A missing file is zero servers, not an error.
+ *
+ * Read through the workspace like every other `.nova` manifest, so the declaration travels with the
+ * repository. Note this configures where to *find* servers, not where they run: an MCP server is a
+ * process Nova spawns on the machine Nova itself is running on, which is true regardless of whether
+ * the workspace's files live locally or in a sandbox.
+ */
+export async function discoverMcpServers(workspace: { readFile(path: string): Promise<{ content: string }> }): Promise<McpServerConfig[]> {
+  const file = await workspace.readFile(MCP_CONFIG_PATH).catch(() => null);
+  if (!file) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(file.content);
   } catch (error) {
     throw new Error(`${MCP_CONFIG_PATH}: invalid JSON (${error instanceof Error ? error.message : String(error)})`);
   }

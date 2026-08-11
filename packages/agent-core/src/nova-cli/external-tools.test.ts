@@ -29,7 +29,7 @@ async function writeHook(directory: string, fileName: string, body: string): Pro
 
 describe("loadLocalExternalTooling", () => {
   it("returns a working, empty assembly for a project with no .nova directory at all", async () => {
-    const tooling = await loadLocalExternalTooling(root, new LocalWorkspace(root));
+    const tooling = await loadLocalExternalTooling(new LocalWorkspace(root));
     try {
       // The top-level skill provider is always present; it simply finds nothing.
       expect(await tooling.providers[0].listTools()).toEqual([]);
@@ -45,7 +45,7 @@ describe("loadLocalExternalTooling", () => {
     await fs.writeFile(path.join(root, ".nova/plugins/demo/plugin.json"), JSON.stringify({ name: "demo" }));
     await writeSkill(path.join(root, ".nova/plugins/demo/skills"), "bundled", "printf bundled");
 
-    const tooling = await loadLocalExternalTooling(root, new LocalWorkspace(root));
+    const tooling = await loadLocalExternalTooling(new LocalWorkspace(root));
     try {
       expect(tooling.providers.map((provider) => provider.id).sort()).toEqual(["local-skills", "plugin:demo"]);
       // Distinct provider ids are what keeps their approval digests distinct — a bundled skill and a
@@ -65,7 +65,7 @@ describe("loadLocalExternalTooling", () => {
     await fs.writeFile(path.join(root, ".nova/plugins/demo/plugin.json"), JSON.stringify({ name: "demo" }));
     await writeHook(path.join(root, ".nova/plugins/demo/hooks/pre-tool-use"), "bundled.sh", `echo bundled >> ${log}\nexit 0`);
 
-    const tooling = await loadLocalExternalTooling(root, new LocalWorkspace(root));
+    const tooling = await loadLocalExternalTooling(new LocalWorkspace(root));
     try {
       await expect(tooling.hooks.runPreToolUse("write_file", { path: "a.txt" })).resolves.toEqual({ blocked: false });
       const lines = (await fs.readFile(log, "utf8")).trim().split("\n").sort();
@@ -80,7 +80,7 @@ describe("loadLocalExternalTooling", () => {
     await fs.writeFile(path.join(root, ".nova/plugins/demo/plugin.json"), JSON.stringify({ name: "demo" }));
     await writeHook(path.join(root, ".nova/plugins/demo/hooks/pre-tool-use"), "deny.sh", "echo 'plugin says no' >&2\nexit 1");
 
-    const tooling = await loadLocalExternalTooling(root, new LocalWorkspace(root));
+    const tooling = await loadLocalExternalTooling(new LocalWorkspace(root));
     try {
       await expect(tooling.hooks.runPreToolUse("write_file", { path: "a.txt" })).resolves.toEqual({ blocked: true, reason: "plugin says no" });
     } finally {
@@ -91,11 +91,11 @@ describe("loadLocalExternalTooling", () => {
   it("surfaces a malformed plugin manifest rather than loading the rest and staying silent", async () => {
     await fs.mkdir(path.join(root, ".nova/plugins/broken"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/plugins/broken/plugin.json"), "not json");
-    await expect(loadLocalExternalTooling(root, new LocalWorkspace(root))).rejects.toThrow(/broken\/plugin\.json/);
+    await expect(loadLocalExternalTooling(new LocalWorkspace(root))).rejects.toThrow(/broken\/plugin\.json/);
   });
 
   it("is safe to dispose when no MCP server was ever started", async () => {
-    const tooling = await loadLocalExternalTooling(root, new LocalWorkspace(root));
+    const tooling = await loadLocalExternalTooling(new LocalWorkspace(root));
     await expect(tooling.dispose()).resolves.toBeUndefined();
     await expect(tooling.dispose()).resolves.toBeUndefined(); // and idempotent
   });

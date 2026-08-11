@@ -239,6 +239,7 @@ export class NovaSessionDaemon {
   todos(clientId: string, sessionId: string): TodoItem[] { return this.requireAttached(clientId, sessionId).agent.todos; }
   diffStat(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffStat(); }
   undo(clientId: string, sessionId: string, scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.requireAttached(clientId, sessionId).agent.undo(scope); }
+  inspectTools(clientId: string, sessionId: string): ReturnType<NovaAgent["inspectTools"]> { return this.requireAttached(clientId, sessionId).agent.inspectTools(); }
 
   async release(clientId: string, sessionId: string, dispose = false): Promise<void> {
     const live = this.requireAttached(clientId, sessionId);
@@ -317,6 +318,7 @@ export class NovaDaemonClient {
   setModelSpendLimit(remaining: number): void { this.daemon.setModelSpendLimit(this.id, this.sessionId, remaining); }
   diffStat(): Promise<string> { return this.daemon.diffStat(this.id, this.sessionId); }
   undo(scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.daemon.undo(this.id, this.sessionId, scope); }
+  inspectTools(): ReturnType<NovaAgent["inspectTools"]> { return this.daemon.inspectTools(this.id, this.sessionId); }
   decideApproval(id: string, decision: PermissionDecision): void { this.daemon.decideApproval(this.id, id, decision); }
   async release(dispose = false): Promise<void> {
     if (this.activeSession) await this.daemon.release(this.id, this.activeSession, dispose);

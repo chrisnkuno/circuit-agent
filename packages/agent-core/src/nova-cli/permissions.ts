@@ -167,20 +167,44 @@ export class PermissionLedger {
   }
 }
 
-/** Human-readable one-liner for an approval prompt or a transcript line. */
+/**
+ * Where a tool came from, in words, for the human being asked to approve it — empty for Nova's own
+ * built-in tools, which need no disclaimer.
+ *
+ * The digest already distinguishes provenance (see `actionDigest`), but a digest is not what anyone
+ * reads before pressing `y`. Without this, an MCP server offering a tool called `deploy` renders in
+ * the prompt as exactly `deploy` — indistinguishable from something Nova ships — and the entire
+ * point of tracking provenance is to inform precisely this decision.
+ */
+export function describeProvenance(tool: AgentTool): string {
+  const provenance = tool.provenance;
+  if (!provenance || provenance.kind === "built-in") return "";
+  const source = provenance.kind === "mcp" ? "MCP server" : provenance.kind;
+  return ` [from ${source} "${provenance.providerId}", not built into Nova]`;
+}
+
+/**
+ * Human-readable one-liner for an approval prompt or a transcript line.
+ *
+ * The single place a tool call is put into words, which is why the provenance marker belongs here:
+ * every surface that asks a human to approve something — the interactive prompt, the non-TTY
+ * refusal, a parked job's stored request, the daemon's forwarded one — renders `summary`, so
+ * attaching it at this choke point reaches all of them and cannot be forgotten by a new one.
+ */
 export function describeToolCall(call: AgentToolCall, tool: AgentTool): string {
   const args = (call.arguments ?? {}) as Record<string, unknown>;
   const asString = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const origin = describeProvenance(tool);
   switch (call.name) {
     case "write_file":
-      return `write ${asString(args.path) ?? "a file"}`;
+      return `write ${asString(args.path) ?? "a file"}${origin}`;
     case "edit_file":
-      return `edit ${asString(args.path) ?? "a file"}`;
+      return `edit ${asString(args.path) ?? "a file"}${origin}`;
     case "run_command": {
       const program = asString(args.command) ?? "a command";
-      return `run ${program}`;
+      return `run ${program}${origin}`;
     }
     default:
-      return `${tool.name}${args.path ? ` ${asString(args.path)}` : ""}`;
+      return `${tool.name}${args.path ? ` ${asString(args.path)}` : ""}${origin}`;
   }
 }

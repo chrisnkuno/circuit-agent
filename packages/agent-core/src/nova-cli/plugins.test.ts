@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { LocalWorkspace } from "./backends";
 import { discoverPlugins, parsePluginManifest } from "./plugins";
 
 let root: string;
@@ -46,22 +47,24 @@ describe("parsePluginManifest", () => {
 
 describe("discoverPlugins", () => {
   it("finds every plugin.json and pairs it with its own directory, and reports a missing directory as zero plugins", async () => {
-    expect(await discoverPlugins(root)).toEqual([]);
+    expect(await discoverPlugins(new LocalWorkspace(root))).toEqual([]);
 
     await fs.mkdir(path.join(root, ".nova/plugins/alpha"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/plugins/alpha/plugin.json"), JSON.stringify({ name: "alpha" }));
     await fs.mkdir(path.join(root, ".nova/plugins/beta"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/plugins/beta/plugin.json"), JSON.stringify({ name: "beta", mcpServers: [{ id: "s", command: "node" }] }));
 
-    const plugins = await discoverPlugins(root);
+    const plugins = await discoverPlugins(new LocalWorkspace(root));
     expect(plugins.map((plugin) => plugin.manifest.name).sort()).toEqual(["alpha", "beta"]);
     const alpha = plugins.find((plugin) => plugin.manifest.name === "alpha")!;
-    expect(alpha.directory).toBe(path.join(root, ".nova/plugins/alpha"));
+    // Workspace-relative, not absolute: the same value has to address a plugin's directory whether
+    // the workspace is this machine or a sandbox where the local path means nothing.
+    expect(alpha.directory).toBe(".nova/plugins/alpha");
   });
 
   it("reports a parse failure for one bad manifest rather than silently skipping it", async () => {
     await fs.mkdir(path.join(root, ".nova/plugins/broken"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/plugins/broken/plugin.json"), "not json");
-    await expect(discoverPlugins(root)).rejects.toThrow(/broken\/plugin\.json/);
+    await expect(discoverPlugins(new LocalWorkspace(root))).rejects.toThrow(/broken\/plugin\.json/);
   });
 });

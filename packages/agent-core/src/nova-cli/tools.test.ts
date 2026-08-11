@@ -287,7 +287,7 @@ describe("nested instructions surfaced through the real tool wiring", () => {
     await fs.mkdir(path.join(root, "src", "api"), { recursive: true });
     await fs.writeFile(path.join(root, "src", "api", "AGENTS.md"), "Use snake_case for API field names.");
     await fs.writeFile(path.join(root, "src", "api", "handler.ts"), "export const handler = 1;");
-    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(new LocalWorkspace(root)) });
 
     const first = await toolNamed(tools, "read_file").execute({ path: "src/api/handler.ts" }, context);
     expect(first.content).toContain("export const handler");
@@ -299,7 +299,7 @@ describe("nested instructions surfaced through the real tool wiring", () => {
   });
 
   it("does not append anything when no instructions exist, or when instructions were not configured", async () => {
-    const withTracker = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const withTracker = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(new LocalWorkspace(root)) });
     const plain = await toolNamed(withTracker, "read_file").execute({ path: "src/app.ts" }, context);
     expect(plain.content).toBe("export const port = 3000;\n");
 
@@ -310,14 +310,14 @@ describe("nested instructions surfaced through the real tool wiring", () => {
 
   it("does not surface instructions for a call that failed", async () => {
     await fs.writeFile(path.join(root, "src", "AGENTS.md"), "src rules");
-    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(new LocalWorkspace(root)) });
     const result = await toolNamed(tools, "read_file").execute({ path: "src/missing.ts" }, context).catch((error: Error) => ({ content: error.message, isError: true }));
     expect(result.content).not.toContain("src rules");
   });
 
   it("leaves list_files, glob_files and grep_files untouched — only path-taking tools carry this", async () => {
     await fs.writeFile(path.join(root, "src", "AGENTS.md"), "src rules");
-    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(root) });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), instructions: new NestedInstructionTracker(new LocalWorkspace(root)) });
     const listed = await toolNamed(tools, "list_files").execute({ path: "src" }, context);
     expect(listed.content).not.toContain("src rules");
   });
@@ -375,7 +375,7 @@ describe("hooks wired through the real tool wrapping", () => {
 
   it("blocks a tool call when a pre-tool-use hook exits non-zero, and the tool body never runs", async () => {
     await writeHookScript(path.join(root, ".nova/hooks/pre-tool-use/deny-writes.sh"), "echo 'writes are frozen' >&2\nexit 1");
-    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(root, new LocalWorkspace(root)) });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(new LocalWorkspace(root)) });
     const result = await toolNamed(tools, "write_file").execute({ path: "new.txt", content: "hi" }, context);
     expect(result.isError).toBe(true);
     expect(result.content).toContain("writes are frozen");
@@ -384,7 +384,7 @@ describe("hooks wired through the real tool wrapping", () => {
 
   it("appends a post-tool-use hook's warning to an otherwise-successful result, without turning it into an error", async () => {
     await writeHookScript(path.join(root, ".nova/hooks/post-tool-use/audit.sh"), "echo 'no test run after this edit' >&2\nexit 1");
-    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(root, new LocalWorkspace(root)) });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(new LocalWorkspace(root)) });
     const result = await toolNamed(tools, "read_file").execute({ path: "src/app.ts" }, context);
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("export const port");
@@ -392,7 +392,7 @@ describe("hooks wired through the real tool wrapping", () => {
   });
 
   it("runs with no hook directory present — behaves exactly as if hooks were never configured", async () => {
-    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(root, new LocalWorkspace(root)) });
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(new LocalWorkspace(root)) });
     const result = await toolNamed(tools, "read_file").execute({ path: "src/app.ts" }, context);
     expect(result.content).toBe("export const port = 3000;\n");
   });

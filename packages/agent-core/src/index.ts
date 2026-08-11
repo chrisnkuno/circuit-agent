@@ -26,7 +26,7 @@ export type {
 export { NovaAgent, DEFAULT_NOVA_BUDGETS } from "./nova-cli/agent";
 export type { NovaAgentOptions, NovaBudgets, NovaEvent, NovaTurnResult } from "./nova-cli/agent";
 
-export { LocalWorkspace, E2BWorkspace, uploadProject, downloadProject } from "./nova-cli/backends";
+export { LocalWorkspace, E2BWorkspace, DockerWorkspace, uploadProject, downloadProject } from "./nova-cli/backends";
 export type { NovaWorkspace } from "./nova-cli/backends";
 
 export { createNovaTools, TodoList } from "./nova-cli/tools";

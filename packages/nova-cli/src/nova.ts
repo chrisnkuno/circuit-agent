@@ -11,7 +11,7 @@ import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nov
 import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
-import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
+import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { EXIT_CODES, HeadlessEmitter, exitCodeForStatus } from "./headless";
@@ -47,6 +47,7 @@ import {
 } from "@circuit-nova/nova-core";
 import { runJobWorkerForever, workerId } from "./job-worker";
 import { parseAttachCommand, parseDetachCommand, parseJobsCommand } from "./jobs-command";
+import { renderTools } from "./tools-command";
 import { removeRecording, startRecording, transcribeAudio } from "./voice";
 import { controlLabel, resolveControlLanguage, type ControlLanguage } from "./i18n";
 
@@ -95,8 +96,14 @@ type ParsedArgs = {
   version: boolean;
   root: string;
   help: boolean;
-  /** Where files are written: this machine, or a throwaway remote sandbox. */
-  backend: "local" | "e2b";
+  /**
+   * Where files are written: this machine, a throwaway remote E2B sandbox, or a local Docker
+   * container — the last being the option for keeping work off the working tree without sending it
+   * to a third party, which is the only isolation some environments will accept.
+   */
+  backend: "local" | "e2b" | "docker";
+  /** Image for `--sandbox docker`. Overridable because no single image suits every project's toolchain. */
+  dockerImage: string;
   /** Seed the sandbox with the local project instead of starting empty. */
   upload: boolean;
   /** Sandbox image to start, by workspace preset id. */
@@ -123,6 +130,13 @@ type ParsedArgs = {
 /** Shape of the ids `newSessionId` mints, e.g. `20260808T001720Z-2ubjpz`. */
 const SESSION_ID = /^\d{8}T\d{6}Z-[a-z0-9]{6}$/;
 
+/**
+ * Image for `--sandbox docker` when neither `--docker-image` nor `DOCKER_CODING_IMAGE` says
+ * otherwise. A plain Debian-slim base rather than a Nova-specific image: it exists on every Docker
+ * install's reach, and a default that silently fails to pull is worse than a plain one that works.
+ */
+const DEFAULT_DOCKER_IMAGE = "debian:stable-slim";
+
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const updateRequested = argv[0] === "update" || argv.includes("--update") || argv.includes("--check-update");
   const settingsRequested = argv[0] === "settings" || argv.includes("--settings");
@@ -130,7 +144,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
     root: process.cwd(), help: false,
-    backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false, json: false,
+    backend: "local", dockerImage: DEFAULT_DOCKER_IMAGE, upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false, json: false,
   };
   const rest: string[] = [];
 
@@ -163,11 +177,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--sandbox") {
       const value = argv[index + 1];
       // `--sandbox` on its own means the obvious thing; a value selects explicitly.
-      if (value === "local" || value === "e2b") { parsed.backend = value; index += 1; } else parsed.backend = "e2b";
+      if (value === "local" || value === "e2b" || value === "docker") { parsed.backend = value; index += 1; } else parsed.backend = "e2b";
     }
     else if (argument === "--upload") parsed.upload = true;
     else if (argument === "--image") { parsed.preset = argv[index + 1]; index += 1; }
     else if (argument === "--sandbox-minutes") { parsed.sandboxMinutes = Number(argv[index + 1] ?? 30); index += 1; }
+    else if (argument === "--docker-image") { parsed.dockerImage = argv[index + 1] ?? DEFAULT_DOCKER_IMAGE; index += 1; }
     else if (argument === "--budget" || argument === "--max-rwf") { parsed.budget = Number(argv[index + 1] ?? 0) || undefined; index += 1; }
     else if (argument === "--provider") { parsed.provider = argv[index + 1]; index += 1; }
     else if (argument === "--model") { parsed.model = argv[index + 1]; index += 1; }
@@ -207,6 +222,8 @@ ${style.bold("nova")} — a coding agent in your terminal
 
 ${style.bold("Where the files go")}
   nova --sandbox            Work in a remote E2B sandbox, not on this machine
+  nova --sandbox docker     Work in a local Docker container instead of a remote one
+  nova --docker-image IMG   Image for --sandbox docker (or set DOCKER_CODING_IMAGE)
   nova --sandbox --upload   ...seeded with a copy of this project
   nova --image <preset>     Sandbox image to use (default: general)
   nova --sandbox-minutes N  Sandbox lifetime (default 30)
@@ -915,6 +932,42 @@ async function main(): Promise<number> {
       onDispose: (id) => sandbox.stopSandbox(id),
     });
     process.stdout.write(style.dim(`  sandbox ${session.sandboxId} — files stay there, not on this machine\n`));
+
+    if (args.upload) {
+      const uploaded = await uploadProject(workspace, args.root);
+      process.stdout.write(style.dim(`  uploaded ${uploaded.uploaded.length} files${uploaded.skipped.length > 0 ? `, skipped ${uploaded.skipped.length}` : ""}\n`));
+    }
+  } else if (args.backend === "docker" && !args.estimateOnly) {
+    // Same late import as E2B above, for the same reason: a local session should not pay to load a
+    // backend it will never use.
+    const { createDockerProvider } = await import("@circuit-nova/nova-core/providers/factory");
+    // The flag wins over the environment variable, but either can name the image.
+    const sandbox = createDockerProvider({ ...environment, DOCKER_CODING_IMAGE: args.dockerImage || environment.DOCKER_CODING_IMAGE });
+    if (!sandbox) {
+      process.stderr.write(`${style.red("Could not start a Docker sandbox.")} Pass --docker-image or set DOCKER_CODING_IMAGE.\n`);
+      exitCleanly();
+      return 1;
+    }
+    const minutes = Math.max(1, Math.min(args.sandboxMinutes, 60));
+    process.stdout.write(style.dim(`Starting a Docker container (${args.dockerImage}, ${minutes}m)…\n`));
+    let session;
+    try {
+      session = await sandbox.createSandbox({ taskId: `nova_${Date.now()}`, template: "coding", maxRuntimeSeconds: minutes * 60 });
+    } catch (error) {
+      // Docker missing, daemon not running, or image not pullable — all of them land here, and all
+      // of them are worth saying plainly rather than as an unhandled rejection stack.
+      process.stderr.write(`${style.red("Docker could not start:")} ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`  ${style.dim("Check that Docker is installed and running, and that the image exists.")}\n`);
+      exitCleanly();
+      return 1;
+    }
+    workspace = new DockerWorkspace({
+      sandbox,
+      sandboxId: session.sandboxId,
+      workspaceRoot: "/workspace/repo",
+      onDispose: (id) => sandbox.stopSandbox(id),
+    });
+    process.stdout.write(style.dim(`  container ${session.sandboxId} — files stay there, not on this machine\n`));
 
     if (args.upload) {
       const uploaded = await uploadProject(workspace, args.root);
@@ -1713,6 +1766,17 @@ async function main(): Promise<number> {
     }
     if (input === "/where") {
       process.stdout.write(`  ${workspace.kind === "e2b" ? style.yellow(workspace.label) : style.dim(workspace.label)}\n`);
+      continue;
+    }
+    if (input === "/tools") {
+      const inspected = await agent.inspectTools();
+      // A provider that loaded but contributed nothing still gets named — see renderTools.
+      const contributing = new Set(inspected.tools.map((tool) => (tool.provenance && tool.provenance.kind !== "built-in" ? `${tool.provenance.kind}:${tool.provenance.providerId}` : "built-in")));
+      process.stdout.write(`${renderTools({
+        tools: inspected.tools,
+        hooks: inspected.hooks,
+        emptyProviders: inspected.providerIds.filter((id) => !contributing.has(id)),
+      }, style)}\n`);
       continue;
     }
     if (input === "/sessions") {

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { InteractiveCodingSandboxProvider, SandboxCommand } from "../providers/contracts";
 import { DockerWorkspace, E2BWorkspace, LocalWorkspace, type NovaWorkspace } from "./backends";
+import { NestedInstructionTracker } from "./nested-instructions";
 
 /**
  * One behavioural contract, checked against every backend that claims to implement it.
@@ -42,7 +43,25 @@ function fakeSandbox(): InteractiveCodingSandboxProvider & { files: Record<strin
     },
     runCommand: async (_id, command) => {
       commands.push(command);
-      if (command.program === "find") return { exitCode: 0, stdout: Object.keys(files).sort().join("\n"), stderr: "" };
+      if (command.program === "find") {
+        // Honours `-not -path <glob>` the way real find does. The fake used to return every file
+        // regardless, which quietly made the ignored-directory filtering untestable on the sandbox
+        // backends: `listSandboxFiles` passes those exclusions and a fake that drops them cannot
+        // tell a backend that filters correctly from one that does not filter at all.
+        const excluded: string[] = [];
+        for (let index = 0; index < command.args.length; index += 1) {
+          if (command.args[index] === "-not" && command.args[index + 1] === "-path") excluded.push(command.args[index + 2]);
+        }
+        const searchRoot = command.args[0];
+        const matches = Object.keys(files)
+          .filter((filePath) => filePath === searchRoot || filePath.startsWith(`${searchRoot}/`))
+          .filter((filePath) => !excluded.some((pattern) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`).test(filePath)))
+          .sort();
+        // Real find exits 1 when the search root does not exist, which is how "nothing configured"
+        // is distinguished from "an empty directory exists".
+        if (!Object.keys(files).some((filePath) => filePath.startsWith(`${searchRoot}/`))) return { exitCode: 1, stdout: "", stderr: "No such file or directory" };
+        return { exitCode: 0, stdout: matches.join("\n"), stderr: "" };
+      }
       if (command.program === "rg") {
         const query = command.args.at(-2) ?? "";
         const lines: string[] = [];
@@ -191,6 +210,55 @@ describe.each(backends.map((factory) => [factory]))("workspace conformance", (fa
     const backend = await factory();
     try {
       await expect(backend.workspace.readFile("../outside.txt")).rejects.toThrow();
+    } finally {
+      await backend.cleanup();
+    }
+  });
+
+  it("finds Nova's own config under .nova, which the agent-facing search deliberately hides", async () => {
+    // The property that makes skills, hooks and plugins work off this machine at all. `.nova` is in
+    // every backend's ignored-directory list so the *agent's* searches are not cluttered by Nova's
+    // bookkeeping — which is right, and which also meant config discovery routed through
+    // `list`/`glob` silently found nothing on every backend. These must disagree, in this exact
+    // direction, on every backend equally.
+    const backend = await factory();
+    try {
+      await backend.seed(".nova/skills/greet/skill.json", "{}");
+      await backend.seed("src/app.ts", "export const port = 3000;");
+
+      const config = await backend.workspace.listConfigFiles(".nova/skills");
+      expect(config).toContain(".nova/skills/greet/skill.json");
+
+      // ...and the agent-facing search still does not see it, on every backend.
+      const globbed = await backend.workspace.glob("**/*.json");
+      expect(globbed).not.toContain(".nova/skills/greet/skill.json");
+    } finally {
+      await backend.cleanup();
+    }
+  });
+
+  it("reports a missing config directory as nothing configured, never as a failure", async () => {
+    const backend = await factory();
+    try {
+      await expect(backend.workspace.listConfigFiles(".nova/skills")).resolves.toEqual([]);
+    } finally {
+      await backend.cleanup();
+    }
+  });
+
+  it("surfaces a subdirectory's own AGENTS.md on every backend, not only locally", async () => {
+    const backend = await factory();
+    try {
+      await backend.seed("src/api/AGENTS.md", "Use snake_case for API field names.");
+      await backend.seed("src/api/handler.ts", "export const handler = 1;");
+      const tracker = new NestedInstructionTracker(backend.workspace);
+
+      const found = await tracker.discover("src/api/handler.ts");
+      expect(found.map((instruction) => instruction.path)).toEqual(["src/api/AGENTS.md"]);
+      expect(found[0].content).toContain("snake_case");
+
+      // Shown once per directory per session, whichever backend is answering.
+      expect(await tracker.discover("src/api/handler.ts")).toEqual([]);
     } finally {
       await backend.cleanup();
     }

@@ -66,21 +66,21 @@ describe("substitutePlaceholders", () => {
 
 describe("discoverSkillManifests", () => {
   it("finds every skill.json under .nova/skills and reports a missing directory as zero skills", async () => {
-    expect(await discoverSkillManifests(root)).toEqual([]);
+    expect(await discoverSkillManifests(new LocalWorkspace(root))).toEqual([]);
 
     await fs.mkdir(path.join(root, ".nova/skills/greet"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/skills/greet/skill.json"), JSON.stringify({ name: "greet", description: "d", command: "echo hi", inputSchema: validSchema }));
     await fs.mkdir(path.join(root, ".nova/skills/count"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/skills/count/skill.json"), JSON.stringify({ name: "count", description: "d2", command: "echo 1", inputSchema: validSchema }));
 
-    const manifests = await discoverSkillManifests(root);
+    const manifests = await discoverSkillManifests(new LocalWorkspace(root));
     expect(manifests.map((manifest) => manifest.name).sort()).toEqual(["count", "greet"]);
   });
 
   it("reports a parse failure for one bad manifest rather than silently skipping it", async () => {
     await fs.mkdir(path.join(root, ".nova/skills/broken"), { recursive: true });
     await fs.writeFile(path.join(root, ".nova/skills/broken/skill.json"), "not json");
-    await expect(discoverSkillManifests(root)).rejects.toThrow(/broken\/skill\.json/);
+    await expect(discoverSkillManifests(new LocalWorkspace(root))).rejects.toThrow(/broken\/skill\.json/);
   });
 });
 
@@ -91,7 +91,7 @@ describe("SkillToolProvider", () => {
       path.join(root, ".nova/skills/greet/skill.json"),
       JSON.stringify({ name: "greet", description: "Greets someone by name.", command: "printf 'hello %s' {{name}}", inputSchema: validSchema }),
     );
-    const provider = new SkillToolProvider("local-skills", path.join(root, ".nova/skills"), new LocalWorkspace(root));
+    const provider = new SkillToolProvider("local-skills", ".nova/skills", new LocalWorkspace(root));
     const tools = await provider.listTools();
     expect(tools).toHaveLength(1);
     const result = await tools[0].invoke({ name: "world" });
@@ -104,7 +104,7 @@ describe("SkillToolProvider", () => {
       path.join(root, ".nova/skills/greet/skill.json"),
       JSON.stringify({ name: "greet", description: "d", command: "printf 'hello %s' {{name}}", inputSchema: validSchema }),
     );
-    const provider = new SkillToolProvider("local-skills", path.join(root, ".nova/skills"), new LocalWorkspace(root));
+    const provider = new SkillToolProvider("local-skills", ".nova/skills", new LocalWorkspace(root));
     const [tool] = await provider.listTools();
     await expect(tool.invoke({})).rejects.toThrow(/requires name/);
   });
