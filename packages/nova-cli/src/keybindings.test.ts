@@ -123,3 +123,53 @@ describe("the registry", () => {
     expect(rendered).toContain("reserved for line editing");
   });
 });
+
+describe("mnemonic letter shortcuts", () => {
+  it("puts the letters on Alt, never bare, so every letter stays typeable at the prompt", () => {
+    // The prompt is where free text is entered. A bare `w` for /wander costs you every message
+    // beginning with "write", and restricting it to an empty line does not help — an empty line is
+    // exactly where "write a test" begins.
+    const { bindings } = resolveBindings();
+    for (const binding of bindings) {
+      if (binding.chord.key.length === 1) {
+        expect(binding.chord.meta || binding.chord.ctrl, `${binding.chord.key} must carry a modifier`).toBe(true);
+      }
+    }
+  });
+
+  it("binds the mnemonics asked for: w wander, m model, a auto", () => {
+    const byCommand = new Map(resolveBindings().bindings.map((b) => [chordId(b.chord), b.command]));
+    expect(byCommand.get("alt+w")).toBe("/wander");
+    expect(byCommand.get("alt+m")).toBe("/model");
+    expect(byCommand.get("alt+a")).toBe("/auto");
+  });
+
+  it("keeps the function keys alongside the letters, so neither is the only route", () => {
+    const chords = resolveBindings().bindings.filter((b) => b.command === "/wander").map((b) => chordId(b.chord));
+    expect(chords).toContain("f4");
+    expect(chords).toContain("alt+w");
+  });
+
+  it("lets an override replace every default chord, rather than adding a third", () => {
+    // "I want /diff on Alt+X" must not leave F8 and Alt+D quietly live as well.
+    const chords = resolveBindings({ "/diff": "alt+x" }).bindings.filter((b) => b.command === "/diff").map((b) => chordId(b.chord));
+    expect(chords).toEqual(["alt+x"]);
+  });
+
+  it("still honours off for a command that has several defaults", () => {
+    expect(resolveBindings({ "/wander": "off" }).bindings.some((b) => b.command === "/wander")).toBe(false);
+  });
+
+  it("assigns no chord twice, across the whole default table", () => {
+    const { bindings, conflicts } = resolveBindings();
+    const ids = bindings.map((b) => chordId(b.chord));
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(conflicts).toEqual([]);
+  });
+
+  it("groups a command's keys onto one line in /keys instead of repeating it", () => {
+    const rendered = new KeyBindingRegistry({}, { TERM: "xterm-256color" }).render();
+    expect(rendered).toContain("F4, Alt+W");
+    expect(rendered.match(/Run a bounded research exploration/g)).toHaveLength(1);
+  });
+});

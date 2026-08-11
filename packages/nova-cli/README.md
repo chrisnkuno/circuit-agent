@@ -109,6 +109,22 @@ Controls are available in English, Mandarin Chinese, Hindi, Spanish, French, Ara
 
 Prompt history is persisted per user, deduplicated, and filters likely credentials. Tab completes commands, `@path` completes project files, arrow keys search history, Ctrl-A/Ctrl-E navigate, Ctrl-W/Ctrl-U delete, Ctrl-L redraws, and Ctrl-C interrupts the active turn.
 
+### Mnemonic keys
+
+The common commands are on Alt plus their first letter, so you rarely have to type one:
+
+| | | | |
+|---|---|---|---|
+| `Alt+W` wander | `Alt+M` model | `Alt+A` auto mode | `Alt+P` plan mode |
+| `Alt+D` diff | `Alt+U` undo | `Alt+C` cost | `Alt+O` tools |
+| `Alt+H` help | `Alt+T` new tab | `Alt+←` `Alt+→` tabs | `Alt+B` detach |
+
+`Ctrl+G` opens the command palette, and the function keys still work for the commands that had them (`F1` help, `F2` mode, `F3` model, `F4` wander, `F6` jobs, `F8` diff, `F9` todos) — two routes to the same command, so a terminal that swallows one does not cost you the feature.
+
+They are on Alt rather than bare letters for a reason worth knowing: this prompt is where you type your request, so a bare `w` for wander would cost you every message beginning with "write". Alt keeps the mnemonic without taking the letter.
+
+`/keys` shows the live table, including anything your terminal is unlikely to deliver. To rebind, set `NOVA_KEYS` (or the key-bindings entry in `nova settings`) to a comma-separated list like `/diff=alt+x, /wander=off`. An override replaces that command's default keys rather than adding to them.
+
 ## Sandbox mode
 
 `--sandbox` runs everything in a disposable E2B container. Files exist only there; `--upload` seeds it with a copy of your project, and `/pull` brings results back.

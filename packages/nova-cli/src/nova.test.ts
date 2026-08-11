@@ -425,6 +425,13 @@ describe("main() — branches that resolve before any interactive input is neede
     for (const key of Object.keys(process.env)) {
       if (/^(ANTHROPIC|OPENAI|CIRCUITNOTION|E2B|NOVA)_/.test(key)) delete process.env[key];
     }
+    // ...and no keys leak in from the developer's own *saved settings* either. Clearing the
+    // environment alone was not enough and was in fact counterproductive: the loop above deletes
+    // `NOVA_CONFIG_DIR`, which sends `loadSettings` to the real per-user config file, so
+    // "unconfigured" meant "unconfigured unless whoever runs this suite actually uses Nova". It
+    // passed on CI and on a fresh checkout and failed for anyone who had run `nova settings` —
+    // the one population most likely to be running the tests.
+    process.env.NOVA_CONFIG_DIR = await mkdtemp(path.join(os.tmpdir(), "nova-main-config-"));
   });
 
   afterEach(async () => {

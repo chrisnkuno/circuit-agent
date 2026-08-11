@@ -111,24 +111,45 @@ export type KeyBinding = {
  * range; `Ctrl+G` is the one Ctrl chord `node:readline` leaves unbound. Nothing here is essential —
  * each is a shortcut to a command that can always be typed.
  */
-export const DEFAULT_BINDINGS: readonly { command: string; chord: string; description: string }[] = [
-  { command: "/palette", chord: "ctrl+g", description: "Open the command palette" },
-  { command: "/help", chord: "f1", description: "Command list" },
-  { command: "/mode", chord: "f2", description: "Show or switch the permission mode" },
-  { command: "/model", chord: "f3", description: "Switch model mid-session" },
-  { command: "/wander", chord: "f4", description: "Run a bounded research exploration" },
-  { command: "/jobs", chord: "f6", description: "Background and detached work" },
-  { command: "/diff", chord: "f8", description: "What changed since the last checkpoint" },
-  { command: "/todos", chord: "f9", description: "The agent's current plan" },
+/**
+ * Why a command may hold several chords, and why the letters are on Alt.
+ *
+ * A bare letter cannot be a shortcut at this prompt. The prompt is where free text is typed, so
+ * binding `w` to `/wander` costs you every message beginning with "write" — and restricting it to
+ * an empty line does not help, because an empty line is exactly where "write a test" starts. Alt
+ * keeps the mnemonic ("w for wander" is Alt+W) while leaving every letter typeable, and it is the
+ * range this file already uses for `/detach` and the tab keys.
+ *
+ * The F-keys stay alongside them rather than being replaced: they are already documented, some
+ * people have learned them, and a terminal that swallows Alt is a different terminal from one that
+ * swallows F4 — two routes to the same command means a terminal has to break both to lose it.
+ */
+export const DEFAULT_BINDINGS: readonly { command: string; chords: readonly string[]; description: string }[] = [
+  { command: "/palette", chords: ["ctrl+g"], description: "Open the command palette" },
+  { command: "/help", chords: ["f1", "alt+h"], description: "Command list" },
+  { command: "/mode", chords: ["f2"], description: "Show or switch the permission mode" },
+  { command: "/model", chords: ["f3", "alt+m"], description: "Switch model mid-session" },
+  { command: "/wander", chords: ["f4", "alt+w"], description: "Run a bounded research exploration" },
+  { command: "/jobs", chords: ["f6"], description: "Background and detached work" },
+  { command: "/diff", chords: ["f8", "alt+d"], description: "What changed since the last checkpoint" },
+  { command: "/todos", chords: ["f9"], description: "The agent's current plan" },
+  { command: "/auto", chords: ["alt+a"], description: "Auto mode: ordinary edits apply" },
+  { command: "/plan", chords: ["alt+p"], description: "Plan mode: read and reason, never write" },
+  { command: "/undo", chords: ["alt+u"], description: "Revert the last turn" },
+  { command: "/cost", chords: ["alt+c"], description: "Token and cost breakdown" },
+  { command: "/tools", chords: ["alt+o"], description: "What the agent can call, and where it came from" },
   // Ctrl+Tab is the conventional tab switcher and is unusable here twice over: terminals rarely
   // transmit it, and Tab itself is completion. Alt+arrows are delivered widely and free.
-  { command: "/tab new", chord: "alt+t", description: "Open another tab" },
-  { command: "/tab next", chord: "alt+right", description: "Next tab" },
-  { command: "/tab prev", chord: "alt+left", description: "Previous tab" },
+  { command: "/tab new", chords: ["alt+t"], description: "Open another tab" },
+  { command: "/tab next", chords: ["alt+right"], description: "Next tab" },
+  { command: "/tab prev", chords: ["alt+left"], description: "Previous tab" },
   // Ctrl+B is line editing (move back one character); Alt+B is free and mnemonic ("background").
   // This is the one binding that does not merely submit its command as typed text — the whole
   // point is firing while a turn is already running, where there is no prompt to submit into.
-  { command: "/detach", chord: "alt+b", description: "Send the running turn to the background" },
+  // It keeps Alt+B for that reason, which is why `/build` has no letter of its own: the mode it
+  // switches to is one keypress away on F2, and a shortcut that can only be reached by typing is
+  // not worth taking the one shortcut that cannot.
+  { command: "/detach", chords: ["alt+b"], description: "Send the running turn to the background" },
 ];
 
 /**
@@ -180,37 +201,43 @@ export function resolveBindings(overrides: BindingOverrides = {}, options: { com
 
   for (const command of commands) {
     const fallback = defaults.get(command);
-    const requested = overrides[command] ?? fallback?.chord;
-    if (requested === undefined) continue;
-    if (requested.trim().toLowerCase() === "off") continue;
+    // An override names one key and means exactly that key: it replaces every default chord for
+    // the command rather than adding to them, so "I want /diff on Alt+X" does not silently leave
+    // F8 live as well.
+    const override = overrides[command];
+    const requestedChords = override !== undefined ? [override] : fallback?.chords ?? [];
+    if (requestedChords.length === 0) continue;
+    if (override !== undefined && override.trim().toLowerCase() === "off") continue;
 
     const description = fallback?.description ?? COMMANDS.find((entry) => entry.name === command)?.description ?? command;
-    const chord = parseChord(requested);
-    if (!chord) {
-      conflicts.push({ command, chord: requested, reason: `not a key I understand — try "f4", "ctrl+g" or "alt+p"` });
-      continue;
+    for (const requested of requestedChords) {
+      const chord = parseChord(requested);
+      if (!chord) {
+        conflicts.push({ command, chord: requested, reason: `not a key I understand — try "f4", "ctrl+g" or "alt+p"` });
+        continue;
+      }
+      // A command that does not exist cannot be bound to. A typo in someone's configuration is worth
+      // reporting at startup rather than on a key that does nothing; a *default* for a feature this
+      // build does not ship is not their mistake, so it is skipped without noise.
+      // A binding may carry arguments ("/tab next"); only the command itself has to exist.
+      if (!known.has(command.split(/\s+/)[0])) {
+        if (override !== undefined) conflicts.push({ command, chord: formatChord(chord), reason: "no such command" });
+        continue;
+      }
+      const id = chordId(chord);
+      const reserved = RESERVED_CHORDS[id];
+      if (reserved) {
+        conflicts.push({ command, chord: formatChord(chord), reason: `reserved for line editing (${reserved})` });
+        continue;
+      }
+      const owner = taken.get(id);
+      if (owner) {
+        conflicts.push({ command, chord: formatChord(chord), reason: `already bound to ${owner}` });
+        continue;
+      }
+      taken.set(id, command);
+      bindings.push({ command, chord, description });
     }
-    // A command that does not exist cannot be bound to. A typo in someone's configuration is worth
-    // reporting at startup rather than on a key that does nothing; a *default* for a feature this
-    // build does not ship is not their mistake, so it is skipped without noise.
-    // A binding may carry arguments ("/tab next"); only the command itself has to exist.
-    if (!known.has(command.split(/\s+/)[0])) {
-      if (overrides[command] !== undefined) conflicts.push({ command, chord: formatChord(chord), reason: "no such command" });
-      continue;
-    }
-    const id = chordId(chord);
-    const reserved = RESERVED_CHORDS[id];
-    if (reserved) {
-      conflicts.push({ command, chord: formatChord(chord), reason: `reserved for line editing (${reserved})` });
-      continue;
-    }
-    const owner = taken.get(id);
-    if (owner) {
-      conflicts.push({ command, chord: formatChord(chord), reason: `already bound to ${owner}` });
-      continue;
-    }
-    taken.set(id, command);
-    bindings.push({ command, chord, description });
   }
 
   return { bindings, conflicts };
@@ -257,10 +284,24 @@ export class KeyBindingRegistry {
    * The `/keys` view: what is bound, what line editing owns, and what this terminal may not deliver.
    */
   render(): string {
-    const rows: [string, string][] = this.bindings.map((binding) => [
-      formatChord(binding.chord),
-      isLikelyDeliverable(binding.chord, this.environment) ? `${binding.description} (${binding.command})` : `${binding.description} — this terminal may not send it; use ${binding.command}`,
-    ]);
+    // One row per command, not per chord: a command with two keys was printing two adjacent lines
+    // with identical text, which reads as a duplicate rather than as a choice. `F1, Alt+H` says the
+    // same thing in half the space and makes the alternative obvious.
+    const byCommand = new Map<string, { chords: Chord[]; description: string }>();
+    for (const binding of this.bindings) {
+      const entry = byCommand.get(binding.command) ?? { chords: [], description: binding.description };
+      entry.chords.push(binding.chord);
+      byCommand.set(binding.command, entry);
+    }
+    const rows: [string, string][] = [...byCommand].map(([command, { chords, description }]) => {
+      // Undeliverable chords are called out only when *every* route to the command is doubtful:
+      // if F4 may not arrive but Alt+W will, the command is reachable and saying otherwise is noise.
+      const deliverable = chords.some((chord) => isLikelyDeliverable(chord, this.environment));
+      return [
+        chords.map(formatChord).join(", "),
+        deliverable ? `${description} (${command})` : `${description} — this terminal may not send it; use ${command}`,
+      ];
+    });
     // Line-editing keys are rendered by `renderKeyboardShortcuts`, which is translated. Repeating
     // them here would put an English-only copy of the same list one line below the translated one.
     const width = Math.max(16, ...rows.map(([key]) => key.length));
