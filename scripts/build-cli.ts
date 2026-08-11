@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
+import { emitCliBundle } from "./cli-bundle";
 
 /**
  * Bundles Nova CLI for Node.
@@ -11,7 +11,7 @@ import path from "node:path";
  * during development.
  */
 
-const OUTPUT = path.join("dist", "nova.js");
+const OUT_DIR = "dist";
 
 // Declared rather than pulled from @types/bun: this build script is the only Bun-specific file in
 // the project, and one narrow declaration is cheaper than a dependency for the whole typecheck.
@@ -20,7 +20,7 @@ declare const Bun: { build(options: Record<string, unknown>): Promise<{ success:
 const built = await Bun.build({
   entrypoints: ["packages/nova-cli/src/nova.ts"],
   target: "node",
-  outdir: "dist",
+  outdir: OUT_DIR,
   naming: "nova.js",
 });
 if (!built.success) {
@@ -28,11 +28,5 @@ if (!built.success) {
   process.exit(1);
 }
 
-const bundle = await fs.readFile(OUTPUT, "utf8");
-// Drop every leading shebang or bundler marker, then add exactly one Node shebang.
-const body = bundle.replace(/^(#![^\n]*\n|\/\/ @bun\n)+/, "");
-await fs.writeFile(OUTPUT, `#!/usr/bin/env node\n${body}`, "utf8");
-await fs.chmod(OUTPUT, 0o755);
-
-const { size } = await fs.stat(OUTPUT);
-console.log(`built ${OUTPUT} (${(size / 1_000_000).toFixed(2)} MB)`);
+const { launcher, main, bytes } = await emitCliBundle(OUT_DIR);
+console.log(`built ${launcher} + ${path.basename(main)} (${(bytes / 1_000_000).toFixed(2)} MB)`);

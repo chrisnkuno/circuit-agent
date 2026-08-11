@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { emitCliBundle } from "./cli-bundle";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -78,8 +79,5 @@ if (!built.success) {
   for (const log of built.logs) console.error(log);
   process.exit(1);
 }
-const output = path.join(CLI, "dist", "nova.js");
-const bundle = await fs.readFile(output, "utf8");
-await fs.writeFile(output, `#!/usr/bin/env node\n${bundle.replace(/^(#![^\n]*\n|\/\/ @bun\n)+/, "")}`, "utf8");
-await fs.chmod(output, 0o755);
-console.log(`nova-cli: built ${output} (${((await fs.stat(output)).size / 1_000_000).toFixed(2)} MB)`);
+const { launcher, main, bytes } = await emitCliBundle(path.join(CLI, "dist"));
+console.log(`nova-cli: built ${launcher} + ${path.basename(main)} (${(bytes / 1_000_000).toFixed(2)} MB)`);

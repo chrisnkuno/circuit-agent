@@ -1,0 +1,37 @@
+{
+  "recordedAt": "2026-08-11T02:37:02.718Z",
+  "node": "v24.3.0",
+  "platform": "linux/x64",
+  "scenarios": {
+    "startup:version": {
+      "median": 87.343113,
+      "p95": 123.431523,
+      "min": 75.217169,
+      "runs": 20
+    },
+    "startup:cold": {
+      "median": 176.941916,
+      "p95": 189.632633,
+      "min": 160.719254,
+      "runs": 6
+    },
+    "startup:help": {
+      "median": 110.26106,
+      "p95": 134.819379,
+      "min": 94.458735,
+      "runs": 20
+    },
+    "startup:providers": {
+      "median": 100.858729,
+      "p95": 191.319025,
+      "min": 82.08599,
+      "runs": 15
+    },
+    "turn:json": {
+      "median": 713.909042,
+      "p95": 1821.048339,
+      "min": 317.870665,
+      "runs": 10
+    }
+  }
+}

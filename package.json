@@ -17,7 +17,8 @@
     "verify:templates": "bun run scripts/verify-templates.ts",
     "nova": "bun run packages/nova-cli/src/nova.ts",
     "build:cli": "bun run scripts/build-cli.ts",
-    "build:packages": "bun run scripts/build-packages.ts"
+    "build:packages": "bun run scripts/build-packages.ts",
+    "bench": "bun run scripts/bench.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
@@ -45,7 +46,7 @@
     "vitest": "^3.0.0"
   },
   "bin": {
-    "nova": "./dist/nova.js"
+    "nova": "./dist/nova.mjs"
   },
   "workspaces": [
     "packages/*",

@@ -115,6 +115,22 @@ bunx convex dev --once
 
 CI builds with placeholder `NEXT_PUBLIC_CONVEX_URL`/`NEXT_PUBLIC_CONVEX_SITE_URL` values, so the build gate never depends on a real deployment being reachable.
 
+### Benchmarking the CLI
+
+```bash
+bun run build:packages          # the benchmark measures the built artifact, not the source
+bun run bench                            # report medians against the committed baseline
+bun run bench -- --baseline bench/baseline.json
+bun run bench -- --save bench/baseline.json    # adopt current numbers as the new baseline
+bun run bench -- --only startup          # one group, while iterating
+```
+
+It times what a person actually waits on: the floor under every invocation, help and provider resolution, a cold first run with an empty V8 compile cache, and a whole turn against a local model stub so the model's own latency is excluded.
+
+Two properties keep it honest. It reports median and p95 rather than a mean, because one GC pause should not become the headline. And it refuses to call a difference an improvement when it is smaller than that run's own spread — a change inside the noise is reported as noise, so "faster" in the output means the machine agreed twice.
+
+Numbers are only comparable within one machine. Commit a baseline when you have deliberately moved it, and re-measure on the same box you intend to compare against.
+
 ## System map
 
 See [docs/architecture.md](docs/architecture.md) for boundaries, lifecycle, pricing invariant, and provider activation gates.
