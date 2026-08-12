@@ -42,6 +42,8 @@ The easiest interactive setup is:
 nova settings
 ```
 
+The menu is navigable with the arrow keys — Up/Down, PageUp/PageDown, Home/End — and Enter opens the highlighted setting. Values with a knowable set of answers (location, language, display currency, default provider) are picked from a list rather than typed, so choosing Rwanda does not require knowing it is `RW`, and each country shows the currency it selects. Typing letters filters a long list. Every row is still numbered and a typed number still jumps to it, which is the path that works with a screen reader; piped and scripted runs keep the plain numbered menu.
+
 Settings use the native per-user config directory on Windows, macOS, and Linux. Secret values are masked in the menu and the file is written with user-only permissions where the operating system supports POSIX modes. Environment variables always override saved settings, which keeps CI and one-off shell configuration predictable.
 
 ```bash

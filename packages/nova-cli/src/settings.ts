@@ -5,12 +5,57 @@ import { controlLabel, resolveControlLanguage } from "./i18n";
 import { SUPPORTED_COUNTRIES, currencyForCountry, normalizeCountryCode } from "./local-currency";
 import { isCurrency } from "@circuit-nova/nova-core/money";
 
-/** Settings Nova may persist. Unknown JSON keys are ignored on read. */
+/** A value that can be picked from a list, with the human name shown beside the stored code. */
+export type SettingChoice = { value: string; label: string };
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: "English", zh: "中文", hi: "हिन्दी", es: "Español", fr: "Français",
+  ar: "العربية", bn: "বাংলা", pt: "Português", ru: "Русский", ur: "اردو",
+};
+
+const COUNTRY_NAMES: Record<string, string> = {
+  RW: "Rwanda", EG: "Egypt", KE: "Kenya", UG: "Uganda", TZ: "Tanzania", NG: "Nigeria", ZA: "South Africa",
+  GH: "Ghana", ET: "Ethiopia", US: "United States", CA: "Canada", GB: "United Kingdom", FR: "France",
+  DE: "Germany", ES: "Spain", IT: "Italy", NL: "Netherlands", BE: "Belgium", CH: "Switzerland",
+  SE: "Sweden", NO: "Norway", DK: "Denmark", PL: "Poland", CZ: "Czechia", TR: "Türkiye", AE: "United Arab Emirates",
+  SA: "Saudi Arabia", IL: "Israel", IN: "India", CN: "China", JP: "Japan", SG: "Singapore",
+  AU: "Australia", NZ: "New Zealand", BR: "Brazil", MX: "Mexico",
+};
+
+const LANGUAGE_CHOICES: readonly SettingChoice[] = Object.entries(LANGUAGE_NAMES).map(([value, label]) => ({ value, label }));
+
+/**
+ * Countries, named, each showing the currency choosing it produces.
+ *
+ * Sorted by name rather than by code, because someone looking for Rwanda is looking for "Rwanda".
+ */
+const COUNTRY_CHOICES: readonly SettingChoice[] = SUPPORTED_COUNTRIES
+  .map((code) => ({ value: code, label: `${COUNTRY_NAMES[code] ?? code} (${code}) — ${currencyForCountry(code)}` }))
+  .sort((left, right) => left.label.localeCompare(right.label));
+
+const CURRENCY_CHOICES: readonly SettingChoice[] = [...new Set(SUPPORTED_COUNTRIES.map((code) => currencyForCountry(code)!))]
+  .sort()
+  .map((value) => ({ value, label: value }));
+
+const PROVIDER_CHOICES: readonly SettingChoice[] = [
+  { value: "anthropic", label: "Anthropic" },
+  { value: "openai", label: "OpenAI" },
+  { value: "circuitnotion", label: "CircuitNotion" },
+];
+
+/**
+ * Settings Nova may persist. Unknown JSON keys are ignored on read.
+ *
+ * A `choices` list means the value is picked, not typed. Every one of these was previously a
+ * free-text box whose valid answers lived only in the label and the validator — you had to know
+ * that Rwanda is `RW` before the field could help you, which is backwards: the list of countries
+ * Nova can price in is a fact it already holds.
+ */
 export const SETTING_FIELDS = [
-  { key: "NOVA_LANGUAGE", label: "Control language (en/zh/hi/es/fr/ar/bn/pt/ru/ur)" },
-  { key: "NOVA_COUNTRY", label: "Location (ISO country code, e.g. RW) — sets your currency" },
-  { key: "NOVA_CURRENCY", label: "Display currency (overrides the one your location implies)" },
-  { key: "NOVA_PROVIDER", label: "Default provider (anthropic/openai/circuitnotion)" },
+  { key: "NOVA_LANGUAGE", label: "Control language", choices: LANGUAGE_CHOICES },
+  { key: "NOVA_COUNTRY", label: "Location — sets the currency costs are shown in", choices: COUNTRY_CHOICES },
+  { key: "NOVA_CURRENCY", label: "Display currency (overrides the one your location implies)", choices: CURRENCY_CHOICES },
+  { key: "NOVA_PROVIDER", label: "Default provider", choices: PROVIDER_CHOICES },
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true },
   { key: "ANTHROPIC_BASE_URL", label: "Anthropic base URL", url: true },
   { key: "ANTHROPIC_MODEL", label: "Anthropic model" },
@@ -135,6 +180,19 @@ export type SettingsPrompts = {
   ask(question: string): Promise<string>;
   askSecret(question: string): Promise<string>;
   write(text: string): void;
+  /**
+   * Renders an arrow-navigable list and resolves to the chosen value, or undefined if dismissed.
+   *
+   * Optional, and the menu is written to work without it. Borrowing the keyboard needs a real TTY
+   * and a readline to borrow from, which a piped run, a first-run script and every test in this
+   * file do not have — so the typed numbered menu remains the base case rather than a degraded one.
+   */
+  choose?<T>(request: {
+    title: string;
+    items: readonly { value: T; label: string; description?: string; hint?: string; pinned?: boolean }[];
+    filter?: boolean;
+    initialIndex?: number;
+  }): Promise<T | undefined>;
 };
 
 /** Numbered, screen-reader-friendly settings menu. Secrets are never printed back to the terminal. */
@@ -159,26 +217,98 @@ export type SettingsMenuOptions = {
   focus?: "providers";
 };
 
+/** What the menu is asking for, when a caller can render a real chooser. */
+export type SettingsSelection =
+  | { kind: "field"; key: SettingKey }
+  | { kind: "expand" }
+  | { kind: "done" };
+
 export async function runSettingsMenu(current: NovaSettings, prompts: SettingsPrompts, options: SettingsMenuOptions = {}): Promise<NovaSettings> {
   const settings = { ...current };
   let focused = options.focus === "providers";
+  /** Where the field list reopens after editing something. */
+  let cursor = 0;
   for (;;) {
     const language = resolveControlLanguage(settings.NOVA_LANGUAGE);
     const fields = focused ? PROVIDER_KEY_FIELDS : SETTING_FIELDS;
-    prompts.write(`\nNova ${controlLabel(language, "settings")}\n`);
-    fields.forEach((field, index) => {
+    const describe = (field: typeof SETTING_FIELDS[number]) => {
       const value = settings[field.key];
-      const shown = "secret" in field && field.secret ? maskSetting(value) : value || "not set";
-      prompts.write(`  ${String(index + 1).padStart(2)}. ${field.label}: ${shown}\n`);
-    });
-    if (focused) prompts.write("   a. everything else (base URLs, models, pricing, voice, keys)\n");
-    prompts.write(`   q. ${controlLabel(language, "saved")} / ${controlLabel(language, "exit")}\n`);
-    const choice = (await prompts.ask(`${controlLabel(language, "choose")}: `)).trim().toLowerCase();
-    if (choice === "q" || choice === "done" || choice === "exit") return settings;
-    if (focused && choice === "a") { focused = false; continue; }
-    const index = Number(choice) - 1;
-    const field = fields[index];
-    if (!field) { prompts.write(`Choose a number from the menu${focused ? ", a for the full list" : ""}, or q to save.\n`); continue; }
+      return "secret" in field && field.secret ? maskSetting(value) : value || "not set";
+    };
+
+    let selection: SettingsSelection;
+    if (prompts.choose) {
+      // Arrow-driven when the caller can borrow the keyboard. The rows carry their current values
+      // so the menu answers "what is set?" without anyone having to open each field to find out.
+      const items = [
+        ...fields.map((field) => ({ value: { kind: "field", key: field.key } as SettingsSelection, label: field.label, hint: describe(field) })),
+        ...(focused ? [{ value: { kind: "expand" } as SettingsSelection, label: "Everything else", description: "base URLs, models, pricing, voice, keys", pinned: true }] : []),
+        { value: { kind: "done" } as SettingsSelection, label: `${controlLabel(language, "saved")} / ${controlLabel(language, "exit")}`, pinned: true },
+      ];
+      const chosen = await prompts.choose({
+        title: `Nova ${controlLabel(language, "settings")}`,
+        items,
+        // Reopens where the user was, not at the top. Setting three things in a row otherwise means
+        // scrolling back down twice, and the list is long enough for that to be the whole cost of
+        // using it.
+        initialIndex: cursor,
+      });
+      // Escape means "leave the menu", the same as choosing the exit row.
+      selection = chosen ?? { kind: "done" };
+      const chosenIndex = items.findIndex((item) => item.value === chosen);
+      if (chosenIndex >= 0) cursor = chosenIndex;
+    } else {
+      // The typed path stays, and stays first-class. It is what a pipe, a test and a terminal too
+      // small to paint into all use, and it is the accessible reading of the same menu.
+      prompts.write(`\nNova ${controlLabel(language, "settings")}\n`);
+      fields.forEach((field, index) => prompts.write(`  ${String(index + 1).padStart(2)}. ${field.label}: ${describe(field)}\n`));
+      if (focused) prompts.write("   a. everything else (base URLs, models, pricing, voice, keys)\n");
+      prompts.write(`   q. ${controlLabel(language, "saved")} / ${controlLabel(language, "exit")}\n`);
+      const choice = (await prompts.ask(`${controlLabel(language, "choose")}: `)).trim().toLowerCase();
+      if (choice === "q" || choice === "done" || choice === "exit") selection = { kind: "done" };
+      else if (focused && choice === "a") selection = { kind: "expand" };
+      else {
+        const field = fields[Number(choice) - 1];
+        if (!field) {
+          prompts.write(`Choose a number from the menu${focused ? ", a for the full list" : ""}, or q to save.\n`);
+          continue;
+        }
+        selection = { kind: "field", key: field.key };
+      }
+    }
+
+    if (selection.kind === "done") return settings;
+    // The full list is a different list; a position in the short one means nothing in it.
+    if (selection.kind === "expand") { focused = false; cursor = 0; continue; }
+    const field = SETTING_FIELDS.find((candidate) => candidate.key === selection.key)!;
+
+    // A field with a fixed set of answers is picked, not typed — but only when there is a chooser
+    // to pick with. Without one it falls back to the same free-text prompt it always had.
+    if ("choices" in field && field.choices && prompts.choose) {
+      const picked = await prompts.choose({
+        title: field.label,
+        filter: true,
+        items: [
+          ...field.choices.map((choice) => ({
+            value: choice.value,
+            label: choice.label,
+            ...(settings[field.key] === choice.value ? { hint: "current" } : {}),
+          })),
+          { value: "-", label: "Clear this setting", pinned: true },
+        ],
+        initialIndex: Math.max(0, field.choices.findIndex((choice) => choice.value === settings[field.key])),
+      });
+      if (picked === undefined) continue;
+      if (picked === "-") {
+        delete settings[field.key];
+        prompts.write(`${field.label} cleared.\n`);
+        continue;
+      }
+      settings[field.key] = validateSetting(field.key, picked);
+      prompts.write(`${field.label} saved in this menu.\n`);
+      continue;
+    }
+
     const raw = await ("secret" in field && field.secret ? prompts.askSecret(`${field.label} (paste hidden; - clears): `) : prompts.ask(`${field.label} (- clears): `));
     if (raw.trim() === "-") {
       delete settings[field.key];

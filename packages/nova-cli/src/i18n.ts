@@ -53,18 +53,26 @@ export function commandDescription(language: ControlLanguage, command: string, f
   return COMMANDS[language]?.[command] ?? fallback;
 }
 
-const KEYBOARD: Partial<Record<ControlLanguage, string[]>> = {
-  zh: ["补全斜杠命令", "补全项目文件路径", "搜索历史输入", "移到输入开头 / 结尾", "删除前一词 / 全部输入", "清屏并重绘", "中断当前任务", "从麦克风录入提示"],
-  hi: ["स्लैश कमांड पूरा करें", "प्रोजेक्ट फ़ाइल पथ पूरा करें", "पुराना इनपुट खोजें", "इनपुट की शुरुआत / अंत", "पिछला शब्द / पूरा इनपुट मिटाएँ", "टर्मिनल साफ़ करें", "वर्तमान काम रोकें", "माइक्रोफ़ोन से प्रॉम्प्ट रिकॉर्ड करें"],
-  es: ["Completar un comando", "Completar una ruta del proyecto", "Buscar en el historial", "Ir al inicio / final", "Borrar palabra / entrada completa", "Limpiar la terminal", "Interrumpir la tarea actual", "Grabar desde el micrófono"],
-  fr: ["Compléter une commande", "Compléter un chemin du projet", "Rechercher dans l’historique", "Début / fin de la saisie", "Effacer le mot / toute la saisie", "Effacer le terminal", "Interrompre la tâche", "Enregistrer avec le microphone"],
-  ar: ["إكمال أمر", "إكمال مسار ملف المشروع", "البحث في السجل", "بداية / نهاية الإدخال", "حذف الكلمة / كامل الإدخال", "مسح الطرفية", "إيقاف المهمة الحالية", "تسجيل الطلب من الميكروفون"],
-  bn: ["স্ল্যাশ কমান্ড পূরণ", "প্রজেক্ট ফাইল পথ পূরণ", "ইতিহাস খুঁজুন", "ইনপুটের শুরু / শেষ", "আগের শব্দ / সব ইনপুট মুছুন", "টার্মিনাল পরিষ্কার", "বর্তমান কাজ থামান", "মাইক্রোফোন থেকে রেকর্ড"],
-  pt: ["Completar um comando", "Completar caminho do projeto", "Pesquisar histórico", "Ir ao início / fim", "Apagar palavra / entrada inteira", "Limpar o terminal", "Interromper a tarefa", "Gravar pelo microfone"],
-  ru: ["Дополнить команду", "Дополнить путь к файлу", "Искать в истории", "В начало / конец строки", "Удалить слово / всю строку", "Очистить терминал", "Прервать задачу", "Записать запрос с микрофона"],
-  ur: ["سلیش کمانڈ مکمل کریں", "پروجیکٹ فائل کا راستہ مکمل کریں", "تاریخ تلاش کریں", "ان پٹ کے شروع / آخر جائیں", "پچھلا لفظ / پوری سطر مٹائیں", "ٹرمینل صاف کریں", "موجودہ کام روکیں", "مائیکروفون سے ریکارڈ کریں"],
+/**
+ * Keyed by shortcut id, not by position.
+ *
+ * These were positional arrays, which made the row order load-bearing for every language at
+ * once: inserting a shortcut at the top silently moved every translation onto the wrong row, and
+ * nothing in English would have shown it. An id costs a word and makes that impossible.
+ * A missing id falls back to English, so a new shortcut is untranslated rather than mislabelled.
+ */
+export const TRANSLATED_KEYBOARD_IDS: Partial<Record<ControlLanguage, Record<string, string>>> = {
+  zh: { "complete-command": "补全斜杠命令", "complete-path": "补全项目文件路径", "history": "搜索历史输入", "line-ends": "移到输入开头 / 结尾", "delete": "删除前一词 / 全部输入", "clear": "清屏并重绘", "interrupt": "中断当前任务", "voice": "从麦克风录入提示" },
+  hi: { "complete-command": "स्लैश कमांड पूरा करें", "complete-path": "प्रोजेक्ट फ़ाइल पथ पूरा करें", "history": "पुराना इनपुट खोजें", "line-ends": "इनपुट की शुरुआत / अंत", "delete": "पिछला शब्द / पूरा इनपुट मिटाएँ", "clear": "टर्मिनल साफ़ करें", "interrupt": "वर्तमान काम रोकें", "voice": "माइक्रोफ़ोन से प्रॉम्प्ट रिकॉर्ड करें" },
+  es: { "complete-command": "Completar un comando", "complete-path": "Completar una ruta del proyecto", "history": "Buscar en el historial", "line-ends": "Ir al inicio / final", "delete": "Borrar palabra / entrada completa", "clear": "Limpiar la terminal", "interrupt": "Interrumpir la tarea actual", "voice": "Grabar desde el micrófono" },
+  fr: { "complete-command": "Compléter une commande", "complete-path": "Compléter un chemin du projet", "history": "Rechercher dans l’historique", "line-ends": "Début / fin de la saisie", "delete": "Effacer le mot / toute la saisie", "clear": "Effacer le terminal", "interrupt": "Interrompre la tâche", "voice": "Enregistrer avec le microphone" },
+  ar: { "complete-command": "إكمال أمر", "complete-path": "إكمال مسار ملف المشروع", "history": "البحث في السجل", "line-ends": "بداية / نهاية الإدخال", "delete": "حذف الكلمة / كامل الإدخال", "clear": "مسح الطرفية", "interrupt": "إيقاف المهمة الحالية", "voice": "تسجيل الطلب من الميكروفون" },
+  bn: { "complete-command": "স্ল্যাশ কমান্ড পূরণ", "complete-path": "প্রজেক্ট ফাইল পথ পূরণ", "history": "ইতিহাস খুঁজুন", "line-ends": "ইনপুটের শুরু / শেষ", "delete": "আগের শব্দ / সব ইনপুট মুছুন", "clear": "টার্মিনাল পরিষ্কার", "interrupt": "বর্তমান কাজ থামান", "voice": "মাইক্রোফোন থেকে রেকর্ড" },
+  pt: { "complete-command": "Completar um comando", "complete-path": "Completar caminho do projeto", "history": "Pesquisar histórico", "line-ends": "Ir ao início / fim", "delete": "Apagar palavra / entrada inteira", "clear": "Limpar o terminal", "interrupt": "Interromper a tarefa", "voice": "Gravar pelo microfone" },
+  ru: { "complete-command": "Дополнить команду", "complete-path": "Дополнить путь к файлу", "history": "Искать в истории", "line-ends": "В начало / конец строки", "delete": "Удалить слово / всю строку", "clear": "Очистить терминал", "interrupt": "Прервать задачу", "voice": "Записать запрос с микрофона" },
+  ur: { "complete-command": "سلیش کمانڈ مکمل کریں", "complete-path": "پروجیکٹ فائل کا راستہ مکمل کریں", "history": "تاریخ تلاش کریں", "line-ends": "ان پٹ کے شروع / آخر جائیں", "delete": "پچھلا لفظ / پوری سطر مٹائیں", "clear": "ٹرمینل صاف کریں", "interrupt": "موجودہ کام روکیں", "voice": "مائیکروفون سے ریکارڈ کریں" },
 };
 
-export function keyboardDescription(language: ControlLanguage, index: number, fallback: string): string {
-  return KEYBOARD[language]?.[index] ?? fallback;
+export function keyboardDescription(language: ControlLanguage, id: string, fallback: string): string {
+  return TRANSLATED_KEYBOARD_IDS[language]?.[id] ?? fallback;
 }

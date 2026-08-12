@@ -74,6 +74,100 @@ describe("Nova settings", () => {
   });
 });
 
+describe("the settings menu with a chooser", () => {
+  /** Records what the menu offered, and answers by picking the row matching `pick`. */
+  function scriptedChooser(picks: (string | undefined)[]) {
+    const seen: { title: string; labels: string[] }[] = [];
+    const choose = async <T>(request: { title: string; items: readonly { value: T; label: string }[] }): Promise<T | undefined> => {
+      seen.push({ title: request.title, labels: request.items.map((item) => item.label) });
+      const pick = picks.shift();
+      if (pick === undefined) return undefined;
+      return request.items.find((item) => item.label.includes(pick))?.value;
+    };
+    return { choose, seen };
+  }
+
+  const silent = { ask: async () => "", askSecret: async () => "", write: () => {} };
+
+  it("offers every field as a row, each showing what it is currently set to", async () => {
+    const { choose, seen } = scriptedChooser([undefined]);
+    await runSettingsMenu({ NOVA_COUNTRY: "RW" }, { ...silent, choose });
+    expect(seen[0].title).toContain("settings");
+    expect(seen[0].labels.some((label) => label.includes("Location"))).toBe(true);
+  });
+
+  it("picks an enumerated value from a list instead of asking it to be typed", async () => {
+    // The point: choosing Rwanda should not require already knowing it is "RW".
+    const { choose, seen } = scriptedChooser(["Location", "Rwanda", undefined]);
+    const result = await runSettingsMenu({}, { ...silent, choose });
+    expect(result.NOVA_COUNTRY).toBe("RW");
+    expect(seen[1].labels.some((label) => label.includes("Rwanda (RW) — RWF"))).toBe(true);
+  });
+
+  it("shows the currency each country implies, since that is why you are choosing one", async () => {
+    const { choose, seen } = scriptedChooser(["Location", undefined, undefined]);
+    await runSettingsMenu({}, { ...silent, choose });
+    expect(seen[1].labels.some((label) => label.includes("Kenya (KE) — KES"))).toBe(true);
+  });
+
+  it("offers a way to clear an enumerated setting, and clearing it works", async () => {
+    const { choose } = scriptedChooser(["Location", "Clear this setting", undefined]);
+    const result = await runSettingsMenu({ NOVA_COUNTRY: "RW" }, { ...silent, choose });
+    expect(result.NOVA_COUNTRY).toBeUndefined();
+  });
+
+  it("leaves a value alone when the value list is dismissed", async () => {
+    // Escape out of the inner list must mean "not this one", not "clear what was there".
+    const { choose } = scriptedChooser(["Location", undefined, undefined]);
+    const result = await runSettingsMenu({ NOVA_COUNTRY: "RW" }, { ...silent, choose });
+    expect(result.NOVA_COUNTRY).toBe("RW");
+  });
+
+  it("treats dismissing the top menu as leaving it, saving what was already changed", async () => {
+    const { choose } = scriptedChooser(["Default provider", "OpenAI", undefined]);
+    const result = await runSettingsMenu({}, { ...silent, choose });
+    expect(result.NOVA_PROVIDER).toBe("openai");
+  });
+
+  it("reopens the field list where the user was, not back at the top", async () => {
+    // Setting three things in a row would otherwise mean scrolling back down twice, which on a
+    // list this long is most of the cost of using it.
+    const opened: (number | undefined)[] = [];
+    const choose = async <T>(request: { items: readonly { value: T; label: string }[]; initialIndex?: number }): Promise<T | undefined> => {
+      opened.push(request.initialIndex);
+      // Pick "Default provider" the first time, then dismiss everything after.
+      return opened.length === 1 ? request.items.find((item) => item.label.includes("Default provider"))?.value : undefined;
+    };
+    await runSettingsMenu({}, { ...silent, choose });
+    const providerRow = SETTING_FIELDS.findIndex((field) => field.key === "NOVA_PROVIDER");
+    // First open starts at the top; the one after editing comes back to the row just edited.
+    expect(opened[0]).toBe(0);
+    expect(opened.at(-1)).toBe(providerRow);
+  });
+
+  it("still asks for free-text and secret fields the typed way", async () => {
+    // Arrows are for fields with a knowable set of answers. An API key has none.
+    const asked: string[] = [];
+    const { choose } = scriptedChooser(["Anthropic API key", undefined]);
+    const result = await runSettingsMenu({}, {
+      ask: async () => "", write: () => {}, choose,
+      askSecret: async (question) => { asked.push(question); return "sk-ant-typed"; },
+    });
+    expect(asked[0]).toContain("Anthropic API key");
+    expect(result.ANTHROPIC_API_KEY).toBe("sk-ant-typed");
+  });
+
+  it("keeps the typed numbered menu when no chooser is available", async () => {
+    // A pipe, a script and a terminal too small to paint into all take this path, so it stays
+    // first-class rather than becoming a degraded fallback.
+    const written: string[] = [];
+    const answers = ["q"];
+    await runSettingsMenu({}, { ask: async () => answers.shift()!, askSecret: async () => "", write: (text) => written.push(text) });
+    expect(written.join("")).toContain("1. Control language");
+    expect(written.join("")).toContain("q.");
+  });
+});
+
 describe("the first run someone actually sees", () => {
   function scriptedPrompts(answers: string[]) {
     const written: string[] = [];

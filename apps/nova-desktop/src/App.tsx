@@ -86,19 +86,11 @@ export default function App() {
   }
 
   if (showSettings) {
-    return (
-      <>
-        {bootError ? (
-          <div className="settings-hero" style={{ paddingBottom: 0 }}>
-            <div className="settings-card">
-              <p className="error-banner">{bootError}</p>
-              <p className="lede">You can still enter settings — Save will retry the agent runtime.</p>
-            </div>
-          </div>
-        ) : null}
-        <SettingsScreen initial={settings} onSave={handleSave} />
-      </>
-    );
+    // The boot error is passed *into* the form rather than stacked above it. As its own
+    // `settings-hero` it claimed a full viewport of its own, which put the form a whole screen
+    // below the fold — a message reading "you can still enter settings" with the settings
+    // scrolled out of sight is worse than no message.
+    return <SettingsScreen initial={settings} onSave={handleSave} notice={bootError} />;
   }
 
   if (bootError && !sidecarReady) {

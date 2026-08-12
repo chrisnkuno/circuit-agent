@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelCatalog, matchModelQuery, modelsForProvider, parseModelCommand, renderModelList } from "./models";
+import { buildModelCatalog, describePrice, matchModelQuery, modelsForProvider, parseModelCommand, renderModelList } from "./models";
 
 const paint = { dim: (text: string) => text, cyan: (text: string) => text, green: (text: string) => text, yellow: (text: string) => text };
 const configured = { ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k", CIRCUITNOTION_API_KEY: "k" };
@@ -129,6 +129,29 @@ describe("matching a model by partial name", () => {
   it("reports no match for a name nothing has, rather than picking something close", () => {
     expect(matchModelQuery(catalog, "llama-3")).toEqual({ kind: "none" });
     expect(matchModelQuery(catalog, "   ")).toEqual({ kind: "none" });
+  });
+});
+
+describe("pricing a model for display", () => {
+  const prices = { currency: "RWF" as const, inputPerMillion: 1_610_000_000, outputPerMillion: 9_660_000_000 };
+
+  it("falls back to the provider's own currency when no rate can convert it", () => {
+    // The bug this closes: the fallback used `fromUnits`, which multiplies by a million — but these
+    // are already micros. A 1,610 RWF rate rendered as "RWF 1,610,000,000", wrong by six orders of
+    // magnitude, on the one path that only appears when an exchange rate is missing.
+    const rendered = describePrice(prices, "USD", () => undefined);
+    expect(rendered).toContain("1,610");
+    expect(rendered).not.toContain("1,610,000,000");
+    expect(rendered).toContain("per Mtok");
+  });
+
+  it("uses the converted amount when a rate is available", () => {
+    const rendered = describePrice(prices, "USD", (value) => ({ currency: "USD", micros: value.micros / 1_320 }));
+    expect(rendered).toContain("$");
+  });
+
+  it("says so plainly when there is no price at all", () => {
+    expect(describePrice(undefined, "USD", () => undefined)).toBe("unpriced");
   });
 });
 

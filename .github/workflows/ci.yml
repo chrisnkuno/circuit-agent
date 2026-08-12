@@ -62,8 +62,11 @@ jobs:
 
       - run: bun run build:packages
 
+      # The bundle is ESM and named .mjs, which is also what package.json `bin` points at. This
+      # step asserted `dist/nova.js` — a file the build has never produced — so the one check that
+      # proves the published binary actually starts was failing on every run of this job.
       - name: Smoke-test the Node executable
-        run: node packages/nova-cli/dist/nova.js --help
+        run: node packages/nova-cli/dist/nova.mjs --help
 
       - name: Verify publish contents
         working-directory: packages/nova-cli

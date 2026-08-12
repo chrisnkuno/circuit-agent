@@ -3,6 +3,10 @@ import { ApprovalModal, type ApprovalState } from "../components/ApprovalModal";
 import { CostPanel } from "../components/CostPanel";
 import { ModeBar } from "../components/ModeBar";
 import { SessionList, type SessionSummary } from "../components/SessionList";
+import { Message } from "../components/Message";
+import { ModelPicker } from "../components/ModelPicker";
+import { DiffPanel } from "../components/DiffPanel";
+import { shouldFollow } from "../lib/transcript";
 import {
   cancelTurn,
   ensureSidecar,
@@ -16,10 +20,11 @@ import {
   resumeSession,
   sendTurn,
   setMode,
+  setModel,
   setSettings,
   undoTurn,
 } from "../lib/ipc";
-import type { NovaMode, NovaSettings, PermissionDecision } from "../lib/settings";
+import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../lib/settings";
 
 type ChatMessage =
   | { id: string; role: "user" | "assistant" | "system" | "tool"; content: string };
@@ -47,9 +52,14 @@ export function ChatScreen(props: {
   const [warning, setWarning] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [todos, setTodos] = useState<Array<{ id: string; content: string; status: string }>>([]);
+  const [pinned, setPinned] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
+  const [active, setActive] = useState<{ provider: ProviderId; model: string }>({ provider: props.settings.provider, model: props.settings.model });
   const transcriptRef = useRef<HTMLDivElement>(null);
   const assistantBuffer = useRef("");
   const openingRef = useRef(false);
+  /** Whether new output should scroll into view. A ref, so streaming does not re-render on it. */
+  const followRef = useRef(true);
 
   useEffect(() => {
     for (const event of props.events) {
@@ -106,9 +116,29 @@ export function ChatScreen(props: {
     if (props.events.length) props.clearEvents();
   }, [props.events, props.clearEvents]);
 
+  // Follow new output only when the reader is already at the bottom. Scrolling up is an explicit
+  // act; yanking them back on the next token makes reading during a turn impossible.
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight });
+    const view = transcriptRef.current;
+    if (!view || !followRef.current) return;
+    view.scrollTo({ top: view.scrollHeight });
   }, [messages]);
+
+  function handleTranscriptScroll() {
+    const view = transcriptRef.current;
+    if (!view) return;
+    const following = shouldFollow(view);
+    followRef.current = following;
+    setPinned(!following);
+  }
+
+  function jumpToLatest() {
+    const view = transcriptRef.current;
+    if (!view) return;
+    view.scrollTo({ top: view.scrollHeight, behavior: "smooth" });
+    followRef.current = true;
+    setPinned(false);
+  }
 
   async function refreshSessions(projectRoot: string) {
     const listed = await listSessions(projectRoot);
@@ -128,6 +158,10 @@ export function ChatScreen(props: {
       setRoot(trimmed);
       setPathDraft(trimmed);
       setSessionId(opened.sessionId);
+      // The session reports what it actually resolved, which is not always what settings asked for
+      // — a saved model can be absent, and the provider falls back. Trusting settings here made the
+      // picker claim "gpt-5.6-luna · current" while the session ran on claude-sonnet-5.
+      if (opened.provider && opened.model) setActive({ provider: opened.provider as ProviderId, model: opened.model });
       setMessages([{ id: "sys", role: "system", content: `Opened ${opened.workspace} · ${opened.provider}/${opened.model}` }]);
       await refreshSessions(trimmed);
     } catch (err) {
@@ -196,6 +230,22 @@ export function ChatScreen(props: {
     }
   }
 
+  async function handleModel(provider: ProviderId, model: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await setModel(model, provider);
+      setActive({ provider, model });
+      // Said in the transcript rather than only in the header: a model change alters what every
+      // later answer costs and how it reasons, so it belongs in the record of the conversation.
+      setMessages((prev) => [...prev, { id: `model-${Date.now()}`, role: "system", content: `Model → ${provider}/${model}` }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleApproval(decision: PermissionDecision) {
     if (!approval) return;
     const requestId = approval.requestId;
@@ -256,6 +306,7 @@ export function ChatScreen(props: {
           <button className="btn" type="button" onClick={() => void chooseProject()} disabled={busy}>
             Browse…
           </button>
+          <ModelPicker provider={active.provider} model={active.model} busy={busy} onPick={handleModel} />
           <button className="btn ghost" type="button" onClick={props.onOpenSettings}>
             Settings
           </button>
@@ -285,6 +336,7 @@ export function ChatScreen(props: {
               }
             }}
             onCancel={() => cancelTurn()}
+            onShowDiff={() => setShowDiff(true)}
             onToggleSandbox={() => {
               setSandbox((v) => !v);
               setUpload(true);
@@ -299,39 +351,44 @@ export function ChatScreen(props: {
             }}
           />
 
-          <div className="transcript" ref={transcriptRef}>
-            {!root ? (
-              <div className="msg system">Open a project folder to start a Nova session.</div>
-            ) : null}
-            {messages.map((message) => (
-              <div key={message.id} className={`msg ${message.role}`}>
-                {message.content}
-              </div>
-            ))}
-            {todos.length > 0 ? (
-              <div className="msg system">
-                Todos:
-                {todos.map((todo) => (
-                  <div key={todo.id} className="todo-item">
-                    [{todo.status}] {todo.content}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {error ? <div className="error-banner">{error}</div> : null}
-            {sandbox ? (
-              <div className="msg system">
-                Sandbox mode {upload ? "with project upload" : "without upload"}.{" "}
-                <button className="btn ghost" type="button" onClick={() => setUpload((v) => !v)}>
-                  Toggle upload
-                </button>
-              </div>
+          <div className="transcript-wrap">
+            <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
+              {!root ? (
+                <div className="empty-state">
+                  <h2>No project open</h2>
+                  <p>Nova works inside a folder on this machine. Choose one to start a session.</p>
+                  <button className="btn primary" type="button" onClick={() => void chooseProject()} disabled={busy}>
+                    Browse for a folder…
+                  </button>
+                </div>
+              ) : null}
+              {messages.map((message) => (
+                <Message key={message.id} role={message.role} content={message.content} streaming={message.id === "streaming"} />
+              ))}
+              {error ? (
+                <div className="notice danger" role="alert">
+                  <strong>Something went wrong</strong>
+                  <span>{error}</span>
+                  <button className="btn ghost" type="button" onClick={() => setError(null)}>Dismiss</button>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Announced to assistive tech without being shown twice: the transcript itself is not a
+                live region, because re-announcing the whole thing on every streamed token is noise. */}
+            <p className="sr-only" aria-live="polite">{busy ? "Nova is working." : "Ready."}</p>
+
+            {pinned ? (
+              <button className="btn jump-latest" type="button" onClick={jumpToLatest}>
+                Jump to latest ↓
+              </button>
             ) : null}
           </div>
 
           <div className="composer">
             <textarea
               value={draft}
+              aria-label="Message to Nova"
               placeholder={root ? "Ask Nova to work in this project…" : "Type here — open a project to send"}
               disabled={busy}
               onChange={(e) => setDraft(e.target.value)}
@@ -342,15 +399,53 @@ export function ChatScreen(props: {
                 }
               }}
             />
-            <button className="btn primary" type="button" disabled={busy || !draft.trim()} onClick={handleSend}>
-              Send
-            </button>
+            <div className="composer-side">
+              <button className="btn primary" type="button" disabled={busy || !draft.trim()} onClick={handleSend}>
+                {busy ? "Working…" : "Send"}
+              </button>
+              <kbd className="composer-hint">Ctrl ↵</kbd>
+            </div>
           </div>
         </section>
 
-        <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} />
+        <aside className="side-panel">
+          {/* Todos are the agent's own plan — the answer to "what is it doing?" — so they belong in
+              a fixed place you can watch, not appended to the bottom of a scrolling log where they
+              slide away as output arrives. */}
+          <div className="panel">
+            <div className="panel-header">Plan</div>
+            <div className="panel-body">
+              {todos.length === 0 ? (
+                <p className="panel-empty">No plan yet. Nova writes one for work that takes several steps.</p>
+              ) : (
+                <ol className="todo-list">
+                  {todos.map((todo) => (
+                    <li key={todo.id} className={`todo ${todo.status}`}>
+                      <span className="todo-mark" aria-hidden="true">
+                        {todo.status === "done" ? "●" : todo.status === "in_progress" ? "◐" : "○"}
+                      </span>
+                      <span>{todo.content}</span>
+                      <span className="sr-only">{todo.status}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {sandbox ? (
+                <div className="sandbox-note">
+                  <strong>Sandbox</strong>
+                  <span>{upload ? "Project uploaded to a remote machine." : "Starting empty — nothing uploaded."}</span>
+                  <button className="btn ghost" type="button" onClick={() => setUpload((v) => !v)}>
+                    {upload ? "Start empty instead" : "Upload the project"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} />
+        </aside>
       </div>
 
+      <DiffPanel open={showDiff} onClose={() => setShowDiff(false)} />
       {approval ? <ApprovalModal approval={approval} onRespond={handleApproval} /> : null}
     </div>
   );

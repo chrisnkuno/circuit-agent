@@ -188,18 +188,22 @@ export function suggestCommand(name: string): string | undefined {
   return best && best.distance <= 2 ? best.name : undefined;
 }
 
+/** Each row carries the id its translation is looked up by, so the order here is free to change. */
 export const KEYBOARD_SHORTCUTS = [
-  ["Tab", "Complete a slash command"],
-  ["@ + path", "Complete a project file mention"],
-  ["Up / Down", "Search persistent prompt history"],
-  ["Ctrl-A / Ctrl-E", "Move to the start / end of the input"],
-  ["Ctrl-W / Ctrl-U", "Delete the previous word / whole input"],
-  ["Ctrl-L", "Clear and redraw the terminal"],
-  ["Ctrl-C", "Interrupt the current turn"],
-  ["/voice", "Record a prompt from the microphone"],
+  ["menu-move", "↑ / ↓", "Move through any menu — settings, models, the palette"],
+  ["menu-number", "1-9", "Jump straight to a numbered row in a menu"],
+  ["menu-take", "Enter / Esc", "Take the highlighted row / leave the menu"],
+  ["complete-command", "Tab", "Complete a slash command"],
+  ["complete-path", "@ + path", "Complete a project file mention"],
+  ["history", "Up / Down", "Search persistent prompt history"],
+  ["line-ends", "Ctrl-A / Ctrl-E", "Move to the start / end of the input"],
+  ["delete", "Ctrl-W / Ctrl-U", "Delete the previous word / whole input"],
+  ["clear", "Ctrl-L", "Clear and redraw the terminal"],
+  ["interrupt", "Ctrl-C", "Interrupt the current turn"],
+  ["voice", "/voice", "Record a prompt from the microphone"],
 ] as const;
 
 export function renderKeyboardShortcuts(language: ControlLanguage = "en"): string {
-  const width = Math.max(...KEYBOARD_SHORTCUTS.map(([key]) => key.length));
-  return KEYBOARD_SHORTCUTS.map(([key, description], index) => `  ${key.padEnd(width + 2)}${keyboardDescription(language, index, description)}`).join("\n");
+  const width = Math.max(...KEYBOARD_SHORTCUTS.map(([, key]) => key.length));
+  return KEYBOARD_SHORTCUTS.map(([id, key, description]) => `  ${key.padEnd(width + 2)}${keyboardDescription(language, id, description)}`).join("\n");
 }

@@ -1,6 +1,6 @@
 import { PROVIDER_IDS, PROVIDERS, catalogPrices, isProviderId, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
-import { formatMoney, fromUnits, type Currency, type TokenPrices } from "@circuit-nova/nova-core/money";
+import { formatMoney, money, type Currency, type TokenPrices } from "@circuit-nova/nova-core/money";
 
 /**
  * The models a session can actually switch to, and what each costs.
@@ -83,7 +83,11 @@ export function describePrice(prices: TokenPrices | undefined, display: Currency
   const input = convert({ currency: prices.currency, micros: prices.inputPerMillion });
   const output = convert({ currency: prices.currency, micros: prices.outputPerMillion });
   if (!input || !output) {
-    return `${formatMoney(fromUnits(prices.inputPerMillion, prices.currency))}/${formatMoney(fromUnits(prices.outputPerMillion, prices.currency))} per Mtok`;
+    // Unconverted, in the provider's own currency. `money()` and not `fromUnits()`: these are
+    // already micros, and multiplying them by a million again renders a 1,610 RWF rate as
+    // "RWF 1,610,000,000" — a number wrong by six orders of magnitude on the fallback path nobody
+    // sees until an exchange rate is missing.
+    return `${formatMoney(money(prices.inputPerMillion, prices.currency))}/${formatMoney(money(prices.outputPerMillion, prices.currency))} per Mtok`;
   }
   void display;
   return `${formatMoney(input)}/${formatMoney(output)} per Mtok`;

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.circuitnotion.nova",
   "build": {
-    "beforeDevCommand": "npm run sidecar:build && npm run dev",
+    "beforeDevCommand": "npm run sidecar:bundle && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build && npm run sidecar:bundle",
     "frontendDist": "../dist"
@@ -22,12 +22,15 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -35,7 +38,9 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/nova-sidecar"],
+    "externalBin": [
+      "binaries/nova-sidecar"
+    ],
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"

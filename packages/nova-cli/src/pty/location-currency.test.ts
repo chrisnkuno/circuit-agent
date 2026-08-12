@@ -39,23 +39,32 @@ async function boot(extraEnv: Record<string, string> = {}) {
   return { p, configDir };
 }
 
-/** Walks the settings menu to one field, sets it, and quits back to the prompt. */
-async function setField(p: Awaited<ReturnType<typeof boot>>["p"], key: string, value: string) {
+const ESCAPE = String.fromCharCode(27);
+
+/**
+ * Opens settings, picks one enumerated field's value from its list, and leaves.
+ *
+ * Driven the way a person does it now: jump to the row by its number, Enter to open the value list,
+ * type enough to narrow it, Enter to take it, Escape to close the menu.
+ */
+async function setField(p: Awaited<ReturnType<typeof boot>>["p"], key: string, filter: string) {
   p.write(`/settings${ENTER}`);
-  await p.waitFor(/Nova settings/, { timeoutMs: 15_000 });
+  await p.waitFor(/Enter choose/, { timeoutMs: 15_000 });
   const mark = p.output().length;
   p.write(`${position(key)}${ENTER}`);
-  await p.waitFor(/clears/, { timeoutMs: 15_000, since: mark });
-  p.write(`${value}${ENTER}`);
-  await p.waitFor(/saved in this menu/, { timeoutMs: 15_000 });
-  p.write(`q${ENTER}`);
+  await p.waitFor(/type to filter/, { timeoutMs: 15_000, since: mark });
+  p.write(filter);
+  const narrowed = p.output().length;
+  p.write(ENTER);
+  await p.waitFor(/Enter choose/, { timeoutMs: 15_000, since: narrowed });
+  p.write(ESCAPE);
 }
 
 describe("choosing a location under a real pty", () => {
   it("changes the currency costs are shown in, without a restart", async () => {
     const { p } = await boot();
     const mark = p.output().length;
-    await setField(p, "NOVA_COUNTRY", "RW");
+    await setField(p, "NOVA_COUNTRY", "rwanda");
     const seen = await p.waitFor(/costs now shown in RWF/, { timeoutMs: 20_000, since: mark });
     expect(seen.slice(mark)).toContain("location RW");
     p.kill();
@@ -63,7 +72,7 @@ describe("choosing a location under a real pty", () => {
 
   it("persists it, so the next launch already reads in that currency", async () => {
     const { p, configDir } = await boot();
-    await setField(p, "NOVA_COUNTRY", "RW");
+    await setField(p, "NOVA_COUNTRY", "rwanda");
     await p.waitFor(/costs now shown in RWF/, { timeoutMs: 20_000 });
     p.kill();
 
@@ -83,7 +92,7 @@ describe("choosing a location under a real pty", () => {
     // The number on screen is the point of the setting, so this asserts on a priced turn rather
     // than on the confirmation message.
     const { p } = await boot();
-    await setField(p, "NOVA_COUNTRY", "RW");
+    await setField(p, "NOVA_COUNTRY", "rwanda");
     await p.waitFor(/costs now shown in RWF/, { timeoutMs: 20_000 });
 
     stub.enqueue({ kind: "text", text: "Hello there." });
@@ -98,16 +107,21 @@ describe("choosing a location under a real pty", () => {
     p.kill();
   }, 120_000);
 
-  it("refuses a country it cannot price in, and says what to do instead", async () => {
+  it("offers only countries it can price in, so an unpriceable one cannot be entered", async () => {
+    // This used to be a validation error you could earn by typing `ZZ`. Picking from a list makes
+    // the invalid input unreachable instead of merely rejected, which is the better fix; the
+    // validator still guards the typed path and is covered in settings.test.ts.
     const { p } = await boot();
     p.write(`/settings${ENTER}`);
-    await p.waitFor(/Nova settings/, { timeoutMs: 15_000 });
+    await p.waitFor(/Enter choose/, { timeoutMs: 15_000 });
     const mark = p.output().length;
     p.write(`${position("NOVA_COUNTRY")}${ENTER}`);
-    await p.waitFor(/clears/, { timeoutMs: 15_000, since: mark });
-    p.write(`ZZ${ENTER}`);
-    const seen = await p.waitFor(/No local currency is known/, { timeoutMs: 15_000, since: mark });
-    expect(seen.slice(mark)).toContain("display currency directly");
+    await p.waitFor(/type to filter/, { timeoutMs: 15_000, since: mark });
+
+    const searched = p.output().length;
+    p.write("zz");
+    const seen = await p.waitFor(/no match/, { timeoutMs: 15_000, since: searched });
+    expect(seen.slice(searched)).toContain("no match");
     p.kill();
   }, 90_000);
 
@@ -116,7 +130,7 @@ describe("choosing a location under a real pty", () => {
     // reporting nothing; staying put and saying so is the honest outcome.
     const { p } = await boot({ NOVA_FX_RWF_PER_USD: "" });
     const mark = p.output().length;
-    await setField(p, "NOVA_COUNTRY", "RW");
+    await setField(p, "NOVA_COUNTRY", "rwanda");
     const seen = await p.waitFor(/No USD→RWF rate is available/, { timeoutMs: 20_000, since: mark });
     expect(seen.slice(mark)).toContain("costs stay in USD");
     p.kill();

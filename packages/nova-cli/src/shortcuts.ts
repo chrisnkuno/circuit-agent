@@ -2,6 +2,7 @@ import type { Interface } from "node:readline/promises";
 import { KeyBindingRegistry, type KeypressEvent } from "./keybindings";
 import { paletteEntries, runCommandPalette, type PaletteKey, type RunPaletteOptions } from "./palette";
 import { runModelPicker, type PickerResult, type RunModelPickerOptions } from "./model-picker";
+import { runChooser, type ChooserItem, type ChooserPaint, type RunChooserOptions } from "./chooser";
 
 /**
  * Where feature keys meet the terminal.
@@ -12,10 +13,18 @@ import { runModelPicker, type PickerResult, type RunModelPickerOptions } from ".
  * only the shortcut.
  */
 
-export type ShortcutHost = {
+/**
+ * The minimum needed to take the keyboard for a moment: something to read, something to paint on,
+ * and the readline to hand control back to. A plain menu needs no keybinding registry, and asking
+ * for one would mean the settings menu could not open before shortcuts are installed.
+ */
+export type KeyboardHost = {
   readline: Interface;
   input: NodeJS.ReadStream;
   output: NodeJS.WriteStream;
+};
+
+export type ShortcutHost = KeyboardHost & {
   registry: KeyBindingRegistry;
   /**
    * First refusal on a matched command, for the one case plain submission cannot cover: a turn is
@@ -72,7 +81,7 @@ function painter(output: NodeJS.WriteStream): (frame: string) => void {
  * responding, so there is one copy of it to be correct.
  */
 export async function withBorrowedKeyboard<T>(
-  host: ShortcutHost,
+  host: KeyboardHost,
   self: unknown,
   body: (keys: AsyncIterable<PaletteKey>, paint: (frame: string) => void) => Promise<T>,
 ): Promise<T> {
@@ -108,8 +117,23 @@ export async function openPalette(host: ShortcutHost, self?: unknown, options: R
   return withBorrowedKeyboard(host, self, (keys, paint) => runCommandPalette(keys, paletteEntries(chords), paint, options));
 }
 
+/**
+ * A generic list chooser over the borrowed keyboard — what `SettingsPrompts.choose` is wired to.
+ *
+ * Takes the host rather than a readline so every menu in the CLI reaches the terminal the same
+ * way, and so a caller cannot accidentally leave readline listening underneath an open menu.
+ */
+export async function openChooser<T>(
+  host: KeyboardHost,
+  items: readonly ChooserItem<T>[],
+  options: Omit<RunChooserOptions, "paint"> & { paint: ChooserPaint },
+  self?: unknown,
+): Promise<T | undefined> {
+  return withBorrowedKeyboard(host, self, (keys, paint) => runChooser(keys, items, paint, options));
+}
+
 /** The model chooser, over the same borrowed keyboard the palette uses. */
-export async function openModelPicker(host: ShortcutHost, options: RunModelPickerOptions, self?: unknown): Promise<PickerResult | undefined> {
+export async function openModelPicker(host: KeyboardHost, options: RunModelPickerOptions, self?: unknown): Promise<PickerResult | undefined> {
   return withBorrowedKeyboard(host, self, (keys, paint) => runModelPicker(keys, paint, options));
 }
 

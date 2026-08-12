@@ -25,10 +25,10 @@ import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
-import { installShortcuts, openModelPicker, openPalette } from "./shortcuts";
+import { installShortcuts, openChooser, openModelPicker, openPalette } from "./shortcuts";
 import { fetchDailyFxRate, resolveCurrencyPreference } from "./local-currency";
 import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
-import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingKey } from "./settings";
+import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingKey, type SettingsPrompts } from "./settings";
 import { loadHistory, saveHistory } from "./history";
 import { renderTabStrip, parseTabCommand, WorkspaceController } from "./tabs";
 import { buildWanderPrompt, gatherWanderEvidence, parseWanderCommand, wanderJobObjective } from "./wander";
@@ -462,6 +462,27 @@ export function renderProviders(environment: Record<string, string | undefined>,
  * `NOVA_FX_RWF_PER_USD=1320` is the whole interface, and the rate's date is recorded beside it so
  * a historical figure can be reconciled later.
  */
+/**
+ * Builds the `choose` half of `SettingsPrompts` from a readline.
+ *
+ * Defined once and used by all three ways into settings — first run, `nova settings`, `/settings` —
+ * because a menu that navigates differently depending on how you opened it is the specific thing
+ * this is meant to stop.
+ */
+function settingsChooser(readline: Interface): NonNullable<SettingsPrompts["choose"]> {
+  return (request) => openChooser(
+    { readline, input: process.stdin, output: process.stdout },
+    request.items.map((item) => ({ ...item })),
+    {
+      title: request.title,
+      ...(request.filter ? { filter: true } : {}),
+      ...(request.initialIndex === undefined ? {} : { initialIndex: request.initialIndex }),
+      height: 12,
+      paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
+    },
+  );
+}
+
 export function readFxRates(environment: Record<string, string | undefined>): FxRate[] {
   const genericRate = Number(environment.NOVA_FX_RATE);
   const genericFrom = environment.NOVA_FX_FROM?.trim().toUpperCase();
@@ -730,6 +751,7 @@ async function main(): Promise<number> {
         ask: (question) => settingsReadline.question(question),
         askSecret: (question) => hiddenQuestion(settingsReadline, question),
         write: (text) => process.stdout.write(text),
+        choose: settingsChooser(settingsReadline),
       });
     } catch (error) {
       settingsReadline.close();
@@ -796,6 +818,7 @@ async function main(): Promise<number> {
         ask: (question) => setupReadline.question(question),
         askSecret: (question) => hiddenQuestion(setupReadline, question),
         write: (text) => process.stdout.write(text),
+        choose: settingsChooser(setupReadline),
       }, { focus: "providers" });
       const file = await saveSettings(savedSettings, processEnvironment);
       process.stdout.write(style.dim(`Settings saved to ${file}.\n`));
@@ -1426,6 +1449,7 @@ async function main(): Promise<number> {
         ask: (question) => readline.question(question),
         askSecret: (question) => hiddenQuestion(readline, question),
         write: (text) => process.stdout.write(text),
+        ...(interactive ? { choose: settingsChooser(readline) } : {}),
       });
     } catch (error) {
       if (!isReadlineExit(error)) throw error;
@@ -1526,7 +1550,7 @@ async function main(): Promise<number> {
           process.stdout.write(`${renderModelList(catalog, { current: { provider: spec.id, model: resolvedModelId }, price, paint })}\n`);
           continue;
         }
-        const chosen = await openModelPicker({ readline, input: process.stdin, output: process.stdout, registry: keys }, {
+        const chosen = await openModelPicker({ readline, input: process.stdin, output: process.stdout }, {
           rows: buildPickerRows(catalog),
           current: { provider: spec.id, model: resolvedModelId },
           price,
