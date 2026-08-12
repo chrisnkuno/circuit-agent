@@ -57,16 +57,15 @@ export default function DownloadPage() {
             </div>
             <p className="dl-note">
               Then run <code>nova "build me an app"</code>. Install command is a placeholder until the
-              CLI package is published; the live web terminal is ready now.
+              CLI package is published.
             </p>
-            <Link className="dl-link" href="/terminal">Open the web terminal →</Link>
           </section>
 
           <section className="dl-sec" id="avx2">
             <h2>Older PC without AVX2?</h2>
             <p>
               The native desktop binary requires an AVX2-capable CPU. Older machines can still run
-              the full agent — the web app works in any modern browser, with the terminal, quotes
+              the full agent — the web app works in any modern browser, with quotes
               and approval gates all intact.
             </p>
             <Link className="dl-link" href="/">Use the web app →</Link>

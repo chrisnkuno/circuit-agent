@@ -9,8 +9,6 @@
    The functional core (quote builder, auth, both boards) is untouched; every
    class name the e2e contract pins (heading, .range, task cards, labels,
    connector cards, run cards) still exists in the markup and is styled here.
-   The terminal page is styled by components/terminal.css and does not depend
-   on anything in this file except the shared font import and tokens.
    ========================================================================== */
 
 @import "../components/kage-fonts.css";
@@ -18,7 +16,7 @@
 @import "../components/integration-board.css";
 
 :root {
-  --ink: #05070d;          /* deep blue-black — matches the terminal */
+  --ink: #05070d;          /* deep blue-black */
   --ink-2: #0a0f18;        /* raised panel */
   --bone: #d8e2f2;         /* cool ivory — no light-mode brightness */
   --bone-dim: #9aa8c0;

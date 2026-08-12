@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { estimateTaskCost, formatRwf, type QualityTier, type TaskKind } from "@/lib/task-cost";
@@ -131,7 +129,6 @@ function CircuitFurniture({ seed = 0 }: { seed?: number }) {
 }
 
 export default function Home() {
-  const router = useRouter();
   const [request, setRequest] = useState("");
   const [engaged, setEngaged] = useState(false); // input focus — wakes the core visualization
   const commandRef = useRef<HTMLTextAreaElement | null>(null);
@@ -169,11 +166,32 @@ export default function Home() {
   // has the new text, not before, so a chip-filled input never clips its first line.
   useEffect(() => { growCommandInput(); }, [request]);
 
-  /** The command center's one real action: hand the request to the live agent terminal. */
-  function launchBuild() {
+  /** The command center's one real action: reserve a quoted task cap for the request. */
+  async function launchBuild() {
     const objective = request.trim();
     if (!objective) return;
-    router.push(`/terminal?cmd=${encodeURIComponent(objective)}`);
+    if (!session.data) { setStatus("error"); setError("Sign in to start a build."); return; }
+    if (!organization) { setStatus("error"); setError("Your workspace is still being set up. Try again in a moment."); return; }
+    setStatus("pending");
+    setError(null);
+    try {
+      await createQuotedTask({
+        organizationId: organization._id,
+        title: objective,
+        kind,
+        quality,
+        estimateLowRwf: BigInt(quote.estimateLowRwf),
+        estimateHighRwf: BigInt(quote.estimateHighRwf),
+        maxRwf: BigInt(quote.maxRwf),
+        confidence: quote.confidence,
+        assumptions: quote.assumptions,
+        idempotencyKey,
+      });
+      setStatus("done");
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Could not reserve the task cap.");
+    }
   }
 
   async function reserve() {
@@ -215,7 +233,6 @@ export default function Home() {
       </a>
       <nav className="nav-links">
         {chapters.map((chapter) => <a className="nav-link" key={chapter.id} href={`#${chapter.id}`}><span>{chapter.b}</span><span className="alt">{chapter.num} — {chapter.b}</span></a>)}
-        <Link className="nav-link" href="/terminal"><span>Terminal</span><span className="alt">Agent terminal ↗</span></Link>
       </nav>
       <div className="nav-auth"><AuthPanel /></div>
       <button className="nav-burger" aria-label="Open menu"><i /><i /></button>
@@ -285,7 +302,6 @@ export default function Home() {
               <div className="cli-snippet" id="cli-snippet">
                 <span className="cli-snippet-label">Install the CLI</span>
                 <CopyCommand command={CLI_COMMAND} />
-                <span className="cli-snippet-hint">or <Link href="/terminal">open the web terminal</Link></span>
               </div>
             )}
           </div>
@@ -376,15 +392,6 @@ export default function Home() {
         <div className="sec-head" data-rv="up"><span className="k"><b>Agents</b></span><span className="rule" /></div>
         <AgentBoard taskKind={kind} />
       </section>
-
-      {/* Closing statement. */}
-      <section className="sec fin" data-rv="up">
-        <CircuitFurniture seed={5} />
-        <p className="eyebrow">The agent terminal</p>
-        <WordReveal text="See the work. Run it live." />
-        <p>A real command line for real agent runs — live sandbox, live events, live approval gates. Watch the work price itself before anything moves.</p>
-        <Link className="cta" href="/terminal"><i /><span>Open the agent terminal</span> <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M2 11L11 2M11 2H4M11 2V9" stroke="currentColor" strokeWidth="1.2" /></svg></Link>
-      </section>
     </main>
 
     {/* Manifesto footer. */}
@@ -396,7 +403,6 @@ export default function Home() {
         </div>
         <div><h4>Work</h4><ul><li><a href="#work">Define the work</a></li><li><a href="#principles">Principles</a></li></ul></div>
         <div><h4>Connect</h4><ul><li><a href="#integrations">Integrations</a></li><li><a href="#agents">Agents</a></li></ul></div>
-        <div><h4>Run</h4><ul><li><Link href="/terminal">Agent terminal</Link></li></ul></div>
       </div>
       <div className="foot-base"><span>© 2026 Circuit-Nova</span><span>Quoted before work · Capped by approval</span><span>Interface: Circuit Core</span></div>
     </footer>
