@@ -2,6 +2,8 @@ node_modules/
 dist/
 sidecar/dist/
 src-tauri/target/
-src-tauri/binaries/nova-sidecar-*
+# Compiled sidecar executables: ~90 MB each, reproducible from source by
+# `npm run sidecar:binary`. Never committed.
+src-tauri/binaries/
 *.log
 .DS_Store

@@ -9,12 +9,12 @@
     "preview": "vite preview",
     "sidecar:build": "tsc -p sidecar/tsconfig.json",
     "sidecar:dev": "tsx sidecar/src/index.ts",
-    "sidecar:bundle": "tsx scripts/bundle-sidecar.ts",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "package:windows": "node scripts/package-windows.mjs",
     "tauri:build": "tauri build",
-    "typecheck": "tsc -b && tsc -p sidecar/tsconfig.json --noEmit"
+    "typecheck": "tsc -b && tsc -p sidecar/tsconfig.json --noEmit",
+    "sidecar:binary": "bun run scripts/build-sidecar-binary.ts"
   },
   "dependencies": {
     "@circuit-nova/nova-core": "workspace:*",

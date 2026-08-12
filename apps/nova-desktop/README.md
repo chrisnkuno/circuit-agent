@@ -57,7 +57,6 @@ sudo apt install -y \
 ```bash
 cd apps/nova-desktop
 npm install
-npm run sidecar:build
 ```
 
 ## Development
@@ -72,18 +71,36 @@ source "$HOME/.cargo/env"   # if needed
 npm run tauri:dev
 ```
 
-On first launch, enter a CircuitNotion (or other) API key. The base URL defaults to CircuitNotion’s API.
+`beforeDevCommand` compiles the sidecar binary and starts Vite, so dev and release run the *same*
+artifact. They deliberately did not before: dev used a shell script and release was supposed to use
+something else that nobody built, which is how a broken Windows package went unnoticed.
+
+On first launch, enter a CircuitNotion (or other) API key. The base URL defaults to CircuitNotion's API.
+
+## The sidecar binary
+
+`npm run sidecar:binary` compiles `sidecar/src/index.ts` into a single self-contained executable
+named for the Tauri target triple. It embeds its own runtime — **the machine running the installed
+app needs no Node** — and `bun build --compile` cross-compiles, so a Windows `.exe` can be produced
+from Linux or macOS:
+
+```bash
+npm run sidecar:binary                              # this machine
+npm run sidecar:binary -- x86_64-pc-windows-msvc    # a real Windows PE, from any host
+```
+
+The output is ~95 MB and is never committed; it is reproducible from source in about a second.
 
 ## Production / Windows packaging
 
 ```bash
-npm run sidecar:bundle
-npm run tauri:build
+npm run package:windows
 ```
 
-`beforeBuildCommand` runs the frontend build and sidecar bundle. Tauri emits `.msi` / NSIS targets from `src-tauri/tauri.conf.json`.
-
-For a self-contained Windows binary that does **not** require Node on the user machine, replace `src-tauri/binaries/nova-sidecar-x86_64-pc-windows-msvc.exe` with a packaged Node binary (e.g. [`pkg`](https://github.com/vercel/pkg) / Node SEA) built from `sidecar/dist/index.js`, then re-run `tauri build`.
+This compiles the Windows sidecar and verifies it is a real executable rather than a wrapper, then
+builds the installers — but only when run on Windows, since Tauri's MSI and NSIS targets need the
+MSVC toolchain and cannot be cross-compiled. On other platforms it prepares and checks the artifact
+and prints the one remaining command. CI builds both halves on every push.
 
 ## Architecture
 
