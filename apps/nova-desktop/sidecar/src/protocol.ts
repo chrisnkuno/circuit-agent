@@ -29,6 +29,7 @@ export type IpcRequest =
   | { id: string; type: "ping" }
   | { id: string; type: "settings.set"; settings: NovaSettings }
   | { id: string; type: "providers.describe" }
+  | { id: string; type: "providers.verify"; settings: NovaSettings }
   | { id: string; type: "session.open"; root: string; mode?: NovaMode; sandbox?: boolean; upload?: boolean }
   | { id: string; type: "session.list"; root: string }
   | { id: string; type: "session.resume"; root: string; sessionId: string; mode?: NovaMode; sandbox?: boolean; upload?: boolean }

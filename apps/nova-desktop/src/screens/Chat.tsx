@@ -7,6 +7,7 @@ import { Message } from "../components/Message";
 import { ModelPicker } from "../components/ModelPicker";
 import { DiffPanel } from "../components/DiffPanel";
 import { shouldFollow } from "../lib/transcript";
+import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
 import {
   cancelTurn,
   ensureSidecar,
@@ -54,12 +55,14 @@ export function ChatScreen(props: {
   const [todos, setTodos] = useState<Array<{ id: string; content: string; status: string }>>([]);
   const [pinned, setPinned] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [active, setActive] = useState<{ provider: ProviderId; model: string }>({ provider: props.settings.provider, model: props.settings.model });
   const transcriptRef = useRef<HTMLDivElement>(null);
   const assistantBuffer = useRef("");
   const openingRef = useRef(false);
   /** Whether new output should scroll into view. A ref, so streaming does not re-render on it. */
   const followRef = useRef(true);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     for (const event of props.events) {
@@ -139,6 +142,45 @@ export function ChatScreen(props: {
     followRef.current = true;
     setPinned(false);
   }
+
+  /**
+   * Window-level shortcuts.
+   *
+   * Attached to the window rather than to a container so they work wherever focus happens to be —
+   * a panel, a button, nothing at all. `isTypingTarget` is read from the event, not tracked, since
+   * focus moves for reasons this component never sees.
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      // A modal owns the keyboard while it is open; the approval dialog in particular must not
+      // have Escape mean two different things at once.
+      if (approval || showDiff) return;
+      const action = matchShortcut({
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        typing: isTypingTarget(event.target),
+      });
+      if (!action) return;
+      event.preventDefault();
+      switch (action) {
+        case "send": void handleSend(); break;
+        case "stop": if (busy) void cancelTurn(); break;
+        case "undo": void handleUndo(); break;
+        case "diff": setShowDiff(true); break;
+        case "settings": props.onOpenSettings(); break;
+        case "models": setModelMenuOpen((open) => !open); break;
+        case "plan": void handleMode("plan"); break;
+        case "build": void handleMode("build"); break;
+        case "auto": void handleMode("auto"); break;
+        case "focus-composer": composerRef.current?.focus(); break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   async function refreshSessions(projectRoot: string) {
     const listed = await listSessions(projectRoot);
@@ -230,6 +272,15 @@ export function ChatScreen(props: {
     }
   }
 
+  async function handleUndo() {
+    try {
+      await undoTurn();
+      setMessages((prev) => [...prev, { id: `undo-${Date.now()}`, role: "system", content: "Undid last turn checkpoint." }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function handleModel(provider: ProviderId, model: string) {
     setBusy(true);
     setError(null);
@@ -306,7 +357,7 @@ export function ChatScreen(props: {
           <button className="btn" type="button" onClick={() => void chooseProject()} disabled={busy}>
             Browse…
           </button>
-          <ModelPicker provider={active.provider} model={active.model} busy={busy} onPick={handleModel} />
+          <ModelPicker provider={active.provider} model={active.model} busy={busy} onPick={handleModel} open={modelMenuOpen} onOpenChange={setModelMenuOpen} />
           <button className="btn ghost" type="button" onClick={props.onOpenSettings}>
             Settings
           </button>
@@ -327,14 +378,7 @@ export function ChatScreen(props: {
             busy={busy}
             sandbox={sandbox}
             onMode={handleMode}
-            onUndo={async () => {
-              try {
-                await undoTurn();
-                setMessages((prev) => [...prev, { id: `undo-${Date.now()}`, role: "system", content: "Undid last turn checkpoint." }]);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-              }
-            }}
+            onUndo={handleUndo}
             onCancel={() => cancelTurn()}
             onShowDiff={() => setShowDiff(true)}
             onToggleSandbox={() => {
@@ -387,6 +431,7 @@ export function ChatScreen(props: {
 
           <div className="composer">
             <textarea
+              ref={composerRef}
               value={draft}
               aria-label="Message to Nova"
               placeholder={root ? "Ask Nova to work in this project…" : "Type here — open a project to send"}
@@ -442,6 +487,20 @@ export function ChatScreen(props: {
             </div>
           </div>
           <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} />
+
+          {/* Shortcuts that exist but are undocumented are shortcuts nobody finds. Collapsed, so
+              they teach without taking room from the panels people actually watch. */}
+          <details className="keys-help">
+            <summary>Keyboard</summary>
+            <dl>
+              {SHORTCUTS.map((binding) => (
+                <div key={binding.action}>
+                  <dt><kbd>{binding.keys}</kbd></dt>
+                  <dd>{binding.label}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
         </aside>
       </div>
 
