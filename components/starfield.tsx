@@ -50,7 +50,7 @@ export function Starfield() {
         const alpha = reducedMotion ? star.baseAlpha : star.baseAlpha * (0.55 + 0.45 * Math.sin(time * star.twinkleSpeed + star.phase));
         context!.beginPath();
         context!.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
-        context!.fillStyle = `rgba(255, 226, 180, ${Math.max(0, alpha).toFixed(3)})`;
+        context!.fillStyle = `rgba(188, 214, 255, ${Math.max(0, alpha).toFixed(3)})`;
         context!.fill();
       }
 
@@ -69,7 +69,7 @@ export function Starfield() {
         context!.beginPath();
         context!.moveTo(shot.x, shot.y);
         context!.lineTo(shot.x - shot.vx * 26, shot.y - shot.vy * 26);
-        context!.strokeStyle = `rgba(255, 214, 160, ${Math.max(0, fade * 0.85).toFixed(3)})`;
+        context!.strokeStyle = `rgba(160, 198, 255, ${Math.max(0, fade * 0.85).toFixed(3)})`;
         context!.lineWidth = 1.4;
         context!.stroke();
       }

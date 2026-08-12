@@ -39,19 +39,16 @@ const chapters = [
 
 const principles = [
   {
-    num: "01", code: "DRB", b: "Durable by default", p: "Convex persists task plans, quotes, approvals, events, and payment holds.", scene: "grid",
+    num: "01", code: "DRB", b: "Durable by default", p: "Convex persists task plans, quotes, approvals, events, and payment holds.",
     detail: "Every stage of a run is written down before and after it happens, so a crash, a closed tab, or a new device never loses the state of your work.",
-    itemsLabel: "Persisted records", items: ["Task plans", "Quotes", "Approvals", "Events", "Payment holds"],
   },
   {
-    num: "02", code: "ISO", b: "Isolated execution", p: "E2B runs code and browser work away from the user's device.", scene: "traces",
+    num: "02", code: "ISO", b: "Isolated execution", p: "E2B runs code and browser work away from the user's device.",
     detail: "Code and browser work execute inside disposable E2B sandboxes, never on your laptop, so a run can explore, compile, and fail without touching your machine or credentials.",
-    itemsLabel: "Isolated surfaces", items: ["Code sandboxes", "Browser sessions", "Network egress", "Runtime secrets"],
   },
   {
-    num: "03", code: "AUTH", b: "Human authority", p: "No overage, send, merge, or payment action happens silently.", scene: "core",
+    num: "03", code: "AUTH", b: "Human authority", p: "No overage, send, merge, or payment action happens silently.",
     detail: "Anything consequential — spending past a cap, sending a message, merging code, or moving money — stops at an approval gate that names the action and the amount before it runs.",
-    itemsLabel: "Silent actions blocked", items: ["Spend overage", "Message sends", "Code merges", "Payment holds"],
   },
 ] as const;
 
@@ -64,14 +61,14 @@ function normalizeAttachmentCount(value: string): number {
 function BrandMark({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" fill="#070503" />
+      <rect width="32" height="32" fill="#04070e" />
       {/* circuit traces */}
-      <path d="M6 20h7l3-6h10" fill="none" stroke="#ffb454" strokeWidth="1.3" />
-      <path d="M6 12h6l3 4h11" fill="none" stroke="#ff4fd8" strokeWidth="1.3" />
-      <circle cx="26" cy="6" r="2.4" fill="#ffb454" />
-      <circle cx="26" cy="26" r="2.4" fill="#ff4fd8" />
-      <circle cx="6" cy="16" r="3" fill="#070503" stroke="#ffb454" strokeWidth="1.3" />
-      <circle cx="6" cy="16" r="1.4" fill="#ffb454" />
+      <path d="M6 20h7l3-6h10" fill="none" stroke="#4f9dff" strokeWidth="1.3" />
+      <path d="M6 12h6l3 4h11" fill="none" stroke="#4fd8ff" strokeWidth="1.3" />
+      <circle cx="26" cy="6" r="2.4" fill="#4f9dff" />
+      <circle cx="26" cy="26" r="2.4" fill="#4fd8ff" />
+      <circle cx="6" cy="16" r="3" fill="#04070e" stroke="#4f9dff" strokeWidth="1.3" />
+      <circle cx="6" cy="16" r="1.4" fill="#4f9dff" />
     </svg>
   );
 }
@@ -145,7 +142,6 @@ export default function Home() {
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState<"idle" | "pending" | "done" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
-  const [focused, setFocused] = useState(0); // selected principle in the Chapter II inspector
   const [cliOpen, setCliOpen] = useState(false); // CLI platform option reveals a copyable install command
   const quote = useMemo(() => estimateTaskCost({ kind, quality, attachmentCount: attachments, requiresBrowser: browser, requiresSandbox: kind !== "writing" }), [attachments, browser, kind, quality]);
   const selected = taskKinds.find((item) => item.value === kind)!;
@@ -155,7 +151,6 @@ export default function Home() {
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
   const createQuotedTask = useMutation(api.tasks.createQuotedTask);
-  const focusedPrinciple = principles[focused];
 
   function resetStatus() {
     setStatus("idle");
@@ -349,68 +344,22 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Chapter II — principles as framed cards. */}
+      {/* Chapter II — principles. */}
       <section className="sec" id="principles">
         <CircuitFurniture seed={2} />
         <div className="sec-head" data-rv="up"><span className="k"><b>Principles</b></span><span className="rule" /></div>
-        <div className="cards" data-rv="up">
-          {principles.map((principle, index) => <article
-            className={`card${focused === index ? " focus" : ""}`}
-            key={principle.num}
-            role="button"
-            tabIndex={0}
-            aria-pressed={focused === index}
-            onClick={() => setFocused(index)}
-            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setFocused(index); } }}
-          >
-            <div className={`card-fr scene-${principle.scene}`}>
-              <span className="frame-in">
-                <span className="glow" />
-                {principle.scene === "grid" && <span className="scan" />}
-                {principle.scene === "traces" && <span className="pulse" />}
-                {principle.scene === "core" && <span className="orbit" />}
-                <span className="br br--tl" />
-                <span className="br br--tr" />
-                <span className="card-ar"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 12L12 2M12 2H5M12 2V9" stroke="currentColor" strokeWidth="1.2" /></svg></span>
-                <span className="card-lab"><b>{principle.b}</b><span className="glyph">{principle.code}</span></span>
-              </span>
-            </div>
-            <div className="card-meta"><span>{principle.num} / Core</span><span>{principle.p}</span></div>
-          </article>)}
-        </div>
-        <div className="principle-detail" data-rv="up">
-          <div className="pd-vis" key={`vis-${focused}`}>
-            {focusedPrinciple.scene === "grid" && <>
-              <span className="pd-label l1">Plan</span>
-              <span className="pd-label l2">Quote</span>
-              <span className="pd-label l3">Approval</span>
-              <span className="pd-label l4">Hold</span>
-              <span className="pd-wire w1" />
-              <span className="pd-wire w2" />
-              <span className="pd-wire w3" />
-              <span className="pd-core" />
-            </>}
-            {focusedPrinciple.scene === "traces" && <>
-              <span className="pd-trace t1" />
-              <span className="pd-trace t2" />
-              <span className="pd-trace t3" />
-              <span className="pd-packet p1" />
-              <span className="pd-packet p2" />
-            </>}
-            {focusedPrinciple.scene === "core" && <>
-              <span className="pd-ring" />
-              <span className="pd-nucleus" />
-            </>}
-          </div>
-          <div className="pd-body" key={`body-${focused}`}>
-            <span className="k">{focusedPrinciple.code} — {focusedPrinciple.num} / Core</span>
-            <h3>{focusedPrinciple.b}</h3>
-            <p>{focusedPrinciple.detail}</p>
-            <div className="pd-items">
-              <span>{focusedPrinciple.itemsLabel}</span>
-              <ul>{focusedPrinciple.items.map((item) => <li key={item}>{item}</li>)}</ul>
-            </div>
-          </div>
+        <div className="principles" data-rv="up">
+          {principles.map((principle) => (
+            <article className="principle" key={principle.num}>
+              <span className="principle-num">{principle.num}</span>
+              <div className="principle-body">
+                <span className="principle-code">{principle.code}</span>
+                <h3>{principle.b}</h3>
+                <p className="principle-lead">{principle.p}</p>
+                <p className="principle-detail">{principle.detail}</p>
+              </div>
+            </article>
+          ))}
         </div>
       </section>
 

@@ -3,8 +3,8 @@
 import { useEffect, useRef } from "react";
 
 /* The Gyroscope Core — the Circuit-Nova landing background.
-   A dark, perfectly balanced AI nucleus held in slowly precessing amber and
-   magenta rings, floating in deep fog under a pale moon. The craft is the same
+   A dark, perfectly balanced AI nucleus held in slowly precessing blue and
+   cyan rings, floating in deep fog under a pale moon. The craft is the same
    as Kage's: near-black night, one glowing source, layered mist, a restrained
    slow camera. No scattered star dust or ember rain — the sky stays empty so
    the engine is the only light. The subject is deliberately different — no
@@ -154,10 +154,10 @@ type PacketWorld = {
 };
 type Wave = { mesh: Object3DLike; material: MaterialLike; t: number; duration: number; base: number };
 
-const AMBER = 0xffb454;
-const MAGENTA = 0xff4fd8;
+const BLUE = 0x4f9dff;   /* primary — electric azure */
+const CYAN = 0x4fd8ff;   /* secondary — cyan-azure */
 const BONE_DIM = 0x9aa5a0;
-const CORE_DARK = 0x171209; // the unlit shell of the nucleus
+const CORE_DARK = 0x0d1420; // the unlit shell of the nucleus
 const CORE_POS = { x: 0, y: 0, z: -14 };
 
 function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCanvasElement): () => void {
@@ -234,11 +234,11 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
   scene.add(gyro);
 
   /* the core — near-black, warm, lit only by what surrounds it */
-  const core = new THREE.Mesh(new THREE.SphereGeometry(1.15, 48, 32), new THREE.MeshBasicMaterial({ color: 0x171209, fog: false }));
+  const core = new THREE.Mesh(new THREE.SphereGeometry(1.15, 48, 32), new THREE.MeshBasicMaterial({ color: 0x0d1420, fog: false }));
   gyro.add(core);
 
-  /* the heart — a tiny magenta spark that breathes inside the dark shell */
-  const heart = new THREE.Mesh(new THREE.SphereGeometry(0.36, 32, 24), new THREE.MeshBasicMaterial({ color: MAGENTA, fog: false }));
+  /* the heart — a tiny cyan spark that breathes inside the dark shell */
+  const heart = new THREE.Mesh(new THREE.SphereGeometry(0.36, 32, 24), new THREE.MeshBasicMaterial({ color: CYAN, fog: false }));
   gyro.add(heart);
 
   /* the needle — a faint spindle with two bright caps, the balance point */
@@ -252,7 +252,7 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
   disposables.push(spindleGeometry);
 
   const capGeometry = new THREE.SphereGeometry(0.075, 16, 12);
-  const capMaterial = new THREE.MeshBasicMaterial({ color: AMBER, fog: false });
+  const capMaterial = new THREE.MeshBasicMaterial({ color: BLUE, fog: false });
   const capTop = new THREE.Mesh(capGeometry, capMaterial);
   capTop.position.set(0, 4.9, 0);
   const capBottom = new THREE.Mesh(capGeometry, capMaterial);
@@ -260,8 +260,8 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
   gyro.add(capTop, capBottom);
   disposables.push(capGeometry, capMaterial);
 
-  /* backlight — a soft amber halo behind the whole assembly */
-  const haloTexture = makeGlowTexture(THREE, [255, 180, 84], 0.42);
+  /* backlight — a soft blue halo behind the whole assembly */
+  const haloTexture = makeGlowTexture(THREE, [79, 157, 255], 0.42);
   const halo = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: haloTexture, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
   );
@@ -269,8 +269,8 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
   halo.position.set(CORE_POS.x, CORE_POS.y, CORE_POS.z);
   scene.add(halo);
 
-  /* pool of magenta light the engine floats on */
-  const poolTexture = makeGlowTexture(THREE, [255, 79, 216], 0.5);
+  /* pool of cyan light the engine floats on */
+  const poolTexture = makeGlowTexture(THREE, [79, 216, 255], 0.5);
   const pool = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: poolTexture, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
   );
@@ -292,13 +292,13 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
     return { group, mesh: ring, baseTilt: 0, wobbleAmp: 0, wobbleFreq: 0, wobblePhase: 0, spin: 0 };
   };
 
-  const ringA = makeRing(2.35, 0.028, AMBER, 0.85);
+  const ringA = makeRing(2.35, 0.028, BLUE, 0.85);
   ringA.baseTilt = 1.15;
   ringA.spin = 0.34;
   ringA.wobbleFreq = 0.11;
   ringA.wobbleAmp = 0.05;
 
-  const ringB = makeRing(3.2, 0.02, MAGENTA, 0.65);
+  const ringB = makeRing(3.2, 0.02, CYAN, 0.65);
   ringB.baseTilt = -0.95;
   ringB.spin = -0.24;
   ringB.wobbleFreq = 0.08;
@@ -321,9 +321,9 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
   const packetGeometry = new THREE.SphereGeometry(0.085, 12, 10);
   const scratchColor = new THREE.Color();
   const scratchWhite = new THREE.Color(0xffffff);
-  const scratchAmber = new THREE.Color(AMBER);
+  const scratchBlue = new THREE.Color(BLUE);
   const scratchCoreDark = new THREE.Color(CORE_DARK);
-  const scratchMagenta = new THREE.Color(MAGENTA);
+  const scratchCyan = new THREE.Color(CYAN);
   const matrixTranslation = new THREE.Matrix4();
 
   const makePackets = (host: RingGroup, radius: number, count: number, color: number, speedBase: number): PacketWorld => {
@@ -341,8 +341,8 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
     return { mesh, radius, angles, speeds, colors, phase: rand(0, Math.PI * 2) };
   };
 
-  const amberPackets = makePackets(ringA, 2.35, 6, AMBER, 0.5);
-  const magentaPackets = makePackets(ringB, 3.2, 8, MAGENTA, 0.42);
+  const bluePackets = makePackets(ringA, 2.35, 6, BLUE, 0.5);
+  const cyanPackets = makePackets(ringB, 3.2, 8, CYAN, 0.42);
   const bonePackets = makePackets(ringC, 4.15, 5, BONE_DIM, 0.28);
 
   /* -------------------------------------------------------- interaction */
@@ -392,7 +392,7 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
     raycaster.setFromCamera(ndc, camera);
     const coreHit = raycaster.intersectObject(core, false)[0];
     if (coreHit) {
-      spawnWave(CORE_POS.x, CORE_POS.z, AMBER, 7);
+      spawnWave(CORE_POS.x, CORE_POS.z, BLUE, 7);
       coreFlash = 1;
       return;
     }
@@ -400,7 +400,7 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
     for (const ring of [ringA, ringB, ringC, ringD]) {
       const ringHit = raycaster.intersectObject(ring.mesh, false)[0];
       if (ringHit && ringHit.point) {
-        spawnWave(ringHit.point.x, ringHit.point.z, MAGENTA, 3.2);
+        spawnWave(ringHit.point.x, ringHit.point.z, CYAN, 3.2);
         return;
       }
     }
@@ -518,8 +518,8 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
       world.mesh.instanceMatrix.needsUpdate = true;
       world.mesh.instanceColor!.needsUpdate = true;
     };
-    ride(amberPackets);
-    ride(magentaPackets);
+    ride(bluePackets);
+    ride(cyanPackets);
     ride(bonePackets);
 
     /* shockwaves — one calm ripple in the engine's plane */
@@ -563,15 +563,15 @@ function buildGyroscopeScene(THREE: NonNullable<Window["THREE"]>, canvas: HTMLCa
   };
   document.addEventListener("visibilitychange", onVisibility);
 
-  /** Core color: warms toward amber while hovered, eases back to the dark
-      shell otherwise, and flashes magenta when struck. No idle drift — the
+  /** Core color: warms toward blue while hovered, eases back to the dark
+      shell otherwise, and flashes cyan when struck. No idle drift — the
       hover state has to stay meaningful. */
   function coreColorLerp(material: MaterialLike, hoverT: number, flashT: number): void {
     const current = material.color as unknown as ColorLike;
     const hex = current.getHex ? current.getHex() : CORE_DARK;
     scratchColor.setHex(hex);
-    scratchColor.lerp(hoverT > 0 ? scratchAmber : scratchCoreDark, hoverT > 0 ? hoverT : 0.05);
-    scratchColor.lerp(scratchMagenta, flashT);
+    scratchColor.lerp(hoverT > 0 ? scratchBlue : scratchCoreDark, hoverT > 0 ? hoverT : 0.05);
+    scratchColor.lerp(scratchCyan, flashT);
     current.copy(scratchColor);
   }
 

@@ -17,7 +17,7 @@
   cursor: pointer;
   transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
 }
-.outline:hover { border-color: var(--vermilion); color: var(--vermilion); background: rgba(255, 180, 84, 0.07); }
+.outline:hover { border-color: var(--vermilion); color: var(--vermilion); background: rgba(79, 157, 255, 0.07); }
 .outline span { padding-left: 18px; font-size: 17px; }
 .agent-summary {
   display: grid;
@@ -38,7 +38,7 @@
 }
 .agent-summary b { font-size: 20px; letter-spacing: -0.02em; margin-top: 7px; display: block; color: var(--bone); }
 .agent-board { margin-top: 12px; display: grid; gap: 12px; }
-.empty-state { border: 1px dashed rgba(235, 202, 158, 0.28); color: var(--muted); margin: 0; padding: 28px; font-size: 14px; line-height: 1.6; }
+.empty-state { border: 1px dashed rgba(150, 185, 240, 0.28); color: var(--muted); margin: 0; padding: 28px; font-size: 14px; line-height: 1.6; }
 .run-card { background: rgba(10, 13, 24, 0.62); border: 1px solid var(--line); }
 .run-card header { display: flex; justify-content: space-between; align-items: start; padding: 18px 20px; border-bottom: 1px solid var(--line); }
 .run-card h3 { margin: 5px 0 0; font-size: 18px; }
@@ -46,8 +46,8 @@
   font-size: 10px;
   letter-spacing: 0.1em;
   color: var(--gold);
-  background: rgba(255, 196, 107, 0.12);
-  border: 1px solid rgba(255, 196, 107, 0.34);
+  background: rgba(95, 178, 255, 0.12);
+  border: 1px solid rgba(95, 178, 255, 0.34);
   padding: 6px 8px;
 }
 .run-card ol { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); }
@@ -65,13 +65,13 @@
 .step-dot {
   flex: 0 0 21px;
   height: 21px;
-  border: 1px solid rgba(235, 202, 158, 0.32);
+  border: 1px solid rgba(150, 185, 240, 0.32);
   display: grid;
   place-items: center;
   font-size: 10px;
   color: var(--muted);
 }
-.step-dot.ready { background: rgba(255, 196, 107, 0.16); border-color: var(--gold); color: var(--gold); }
+.step-dot.ready { background: rgba(95, 178, 255, 0.16); border-color: var(--gold); color: var(--gold); }
 .run-card li strong,
 .run-card li small { display: block; }
 .run-card li strong { font-size: 13px; line-height: 1.35; }

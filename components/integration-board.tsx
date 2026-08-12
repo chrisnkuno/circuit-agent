@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
+import { IntegrationNetwork } from "@/components/integration-network";
 import { connectorRegistry } from "@/lib/connectors";
 import { buildMultiAppWorkflow, type WorkflowTemplate } from "@/lib/multitasker";
 import { api } from "@/convex/_generated/api";
@@ -38,6 +39,13 @@ export function IntegrationBoard({ organizationId }: { organizationId?: Id<"orga
   const workflow = useMemo(() => buildMultiAppWorkflow(template, `preview-${template}`), [template]);
   const focusedConnector = focusConnector ? connectorRegistry.get(focusConnector) : undefined;
   const focusedIntents = useMemo(() => focusConnector ? workflow.intents.filter((intent) => intent.connectorId === focusConnector) : [], [focusConnector, workflow]);
+  const focusedConnected = focusConnector ? Boolean(connections?.find((item) => item.connectorId === focusConnector && item.status === "connected")) : false;
+  const templatesUsingConnector = useMemo(() => {
+    if (!focusConnector) return [];
+    return templates
+      .filter((item) => buildMultiAppWorkflow(item.id, `probe-${item.id}`).intents.some((intent) => intent.connectorId === focusConnector))
+      .map((item) => item.label);
+  }, [focusConnector]);
   const calendarConnection = connections?.find((item) => item.connectorId === "google-calendar" && item.status === "connected");
   const latestOperationsTask = tasks?.find((item) => item.kind === "operations" && !["completed", "cancelled"].includes(item.status));
   const calendarIntents = actionIntents?.filter((item) => item.connectorId === "google-calendar") ?? [];
@@ -77,6 +85,7 @@ export function IntegrationBoard({ organizationId }: { organizationId?: Id<"orga
   }
 
   return <section className="integration-section" id="integrations">
+    <IntegrationNetwork />
     <div className="integration-intro" data-rv="up">
       <div><p className="eyebrow">03 / DAILY-LIFE MULTITASKER</p><h2>Many apps. One controlled workflow.</h2><p>Combine calendars, messages, files, tasks, notes, and home state. Read-only work can run in parallel; anything consequential becomes a durable approval before execution.</p></div>
       <div className="permission-key" aria-label="Connector permission levels"><span>READ</span><span>DRAFT</span><span>EXECUTE + APPROVAL</span></div>
@@ -85,7 +94,7 @@ export function IntegrationBoard({ organizationId }: { organizationId?: Id<"orga
       {connectorRegistry.list().map((connector) => {
         const connected = connector.id === "google-calendar" && Boolean(calendarConnection);
         const selected = focusConnector === connector.id;
-        return <article className={`connector-card${selected ? " selected" : ""}`} key={connector.id} role="button" tabIndex={0} aria-pressed={selected} onClick={() => setFocusConnector((current) => (current === connector.id ? null : connector.id))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setFocusConnector((current) => (current === connector.id ? null : connector.id)); } }}>
+        return <article className={`connector-card${selected ? " selected" : ""}`} key={connector.id} data-connector-id={connector.id} role="button" tabIndex={0} aria-pressed={selected} onClick={() => setFocusConnector((current) => (current === connector.id ? null : connector.id))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setFocusConnector((current) => (current === connector.id ? null : connector.id)); } }}>
           <div className="connector-inner">
             <header><span className="app-mark">{connector.appName.slice(0, 2).toUpperCase()}</span><b className={connected ? "connector-state connected" : "connector-state"}>{connected ? "Connected" : "Not connected"}</b></header>
             <h3>{connector.appName}</h3><p>{connector.description}</p>
@@ -96,10 +105,16 @@ export function IntegrationBoard({ organizationId }: { organizationId?: Id<"orga
       })}
     </div>
     {focusedConnector && <div className="flow-inspector" key={`${focusedConnector.id}-${template}`}>
-      <span className="fi-k">FLOW INSPECTOR — {focusedConnector.appName}</span>
+      <div className="fi-head">
+        <span className="fi-k">FLOW INSPECTOR — {focusedConnector.appName}</span>
+        <span className={`fi-auth${focusedConnected ? " on" : ""}`}>{focusedConnected ? "Connected" : `${focusedConnector.auth.toUpperCase()} setup required`}</span>
+      </div>
+      <p className="fi-desc">{focusedConnector.description}</p>
+      <div className="fi-meta"><span className="fi-domains">{focusedConnector.domains.join(" · ")}</span><span className="fi-scope">READ · DRAFT · EXECUTE + APPROVAL</span></div>
+      <ul className="fi-actions">{focusedConnector.actions.map((action) => <li key={action.id}><b>{action.permission.toUpperCase()}</b><span>{action.label}</span>{action.requiresApproval && <em>approval</em>}</li>)}</ul>
       {focusedIntents.length > 0
-        ? <p>{focusedConnector.appName} appears in <b>{workflow.title}</b> as {focusedIntents.length} step{focusedIntents.length === 1 ? "" : "s"}: {focusedIntents.map((intent) => intent.title).join(" · ")}.</p>
-        : <p>{focusedConnector.appName} is not used by <b>{workflow.title}</b>. Pick another template to trace its path.</p>}
+        ? <p className="fi-trace">{focusedConnector.appName} appears in <b>{workflow.title}</b> as {focusedIntents.length} step{focusedIntents.length === 1 ? "" : "s"}: {focusedIntents.map((intent) => intent.title).join(" · ")}.</p>
+        : <p className="fi-trace">{focusedConnector.appName} is not used by <b>{workflow.title}</b>.{templatesUsingConnector.length > 0 ? ` It appears in ${templatesUsingConnector.length === 1 ? "the" : "these templates:"} ${templatesUsingConnector.join(", ")} — pick ${templatesUsingConnector.length === 1 ? "that" : "one"} to trace its path.` : " No template uses it yet."}</p>}
     </div>}
     {calendarConnection && <div className="calendar-console">
       <div><span>LIVE GOOGLE CALENDAR</span><h3>Scoped read and approved write</h3><p>Tokens are encrypted at rest. Event contents are stored as encrypted action payloads; creation waits for a linked approval.</p></div>
