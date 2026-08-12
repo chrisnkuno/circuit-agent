@@ -4,7 +4,10 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a Node side
 
 ## Features
 
-- Settings: provider, API key, **API base URL** (default `https://api.circuitnotion.com/v1`), model, budget, E2B key
+- Settings that ask for one thing: paste an API key. Base URL, budget, sandbox and relay are all
+  still there, behind a disclosure, because only one of them is required
+- **Test this key** checks credentials before you commit to them, using the provider's model list —
+  an authenticated call that generates no tokens, so it costs nothing
 - Chat with streaming assistant output, rendered with code blocks and per-block copy
 - Modes: Plan / Build / Auto, as one segmented control that states the posture it puts you in
 - Per-tool approval dialog showing the exact command, answerable with `Y` / `N` / `A` / `D` or Escape
@@ -13,6 +16,8 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a Node side
 - The agent's plan as a live panel
 - E2B sandbox toggle, upload, pull
 - Follows the system light/dark setting
+- Keyboard throughout: Ctrl+Enter send, Esc stop, Ctrl+M model, Ctrl+D changes, Ctrl+Z undo,
+  Ctrl+, settings, Alt+1/2/3 mode — listed in the Keyboard panel so they can be found
 
 ## Design notes
 

@@ -24,6 +24,7 @@ import {
 import type { ModelPriceCatalog } from "@circuit-nova/nova-core/model-cost";
 import type { SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { createE2BProvider } from "@circuit-nova/nova-core/providers/factory";
+import { verifyCredentials } from "./verify.js";
 import type { IpcEvent, IpcRequest, NovaSettings, ProviderId } from "./protocol.js";
 import { DEFAULT_MODELS } from "./protocol.js";
 import { settingsToEnvironment } from "./settings.js";
@@ -74,6 +75,10 @@ export class NovaHost {
         return this.describeProviders();
       case "providers.describe":
         return this.describeProviders();
+      // Takes the settings in the request rather than the stored ones: this is asked from a form
+      // the user is still editing, about values they have not committed yet.
+      case "providers.verify":
+        return await verifyCredentials(request.settings);
       case "session.open":
         return await this.openSession(request.root, request.mode ?? "build", !!request.sandbox, !!request.upload);
       case "session.list":

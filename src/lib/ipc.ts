@@ -81,6 +81,13 @@ export async function getCost() {
   }>({ type: "cost.get" });
 }
 
+export async function verifyCredentials(settings: NovaSettings) {
+  return await sidecarRequest<{ ok: boolean; models?: number; note?: string; reason?: string; hint?: string }>({
+    type: "providers.verify",
+    settings,
+  });
+}
+
 export async function getDiff() {
   return await sidecarRequest<{ diff: string }>({ type: "diff.get" });
 }

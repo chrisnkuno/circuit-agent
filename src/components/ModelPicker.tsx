@@ -14,8 +14,13 @@ export function ModelPicker(props: {
   model: string;
   busy: boolean;
   onPick: (provider: ProviderId, model: string) => void;
+  /** Controlled by the parent so a keyboard shortcut can open it too. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const { open } = props;
+  const setOpen = (next: boolean | ((current: boolean) => boolean)) =>
+    props.onOpenChange(typeof next === "function" ? next(props.open) : next);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);

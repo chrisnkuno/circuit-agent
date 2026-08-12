@@ -1012,3 +1012,110 @@ button {
   line-height: 1.55;
   white-space: pre;
 }
+
+/* ---- Settings: progressive disclosure and key verification ------------- */
+
+.advanced {
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--sunken-bg);
+}
+
+.advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.advanced[open] summary {
+  margin-bottom: 0.8rem;
+  color: var(--text);
+}
+
+.advanced .field + .field,
+.advanced .field-row + .field {
+  margin-top: 0.75rem;
+}
+
+.verify-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.verify {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.85rem;
+  padding-top: 0.4rem;
+}
+
+.verify.ok {
+  color: var(--ok);
+}
+
+.verify.failed {
+  color: var(--danger);
+}
+
+.verify em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.8rem;
+}
+
+.save-hint {
+  margin: -0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* ---- Keyboard help ----------------------------------------------------- */
+
+.keys-help {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 1rem 0.8rem;
+  font-size: 0.8rem;
+}
+
+.keys-help summary {
+  cursor: pointer;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+
+.keys-help dl {
+  margin: 0.6rem 0 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.keys-help dl > div {
+  display: grid;
+  grid-template-columns: 5.2rem 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.keys-help dt,
+.keys-help dd {
+  margin: 0;
+}
+
+.keys-help kbd {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  color: var(--muted);
+}
+
+.keys-help dd {
+  color: var(--muted);
+}
