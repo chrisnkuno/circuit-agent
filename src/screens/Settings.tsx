@@ -4,6 +4,8 @@ import { defaultBaseUrl, defaultSettings, DEFAULT_MODELS, type NovaSettings, typ
 export function SettingsScreen(props: {
   initial: NovaSettings;
   onSave: (settings: NovaSettings) => Promise<void>;
+  /** A boot failure to explain in place, above the fields that can fix it. */
+  notice?: string | null;
 }) {
   const [settings, setSettings] = useState(props.initial);
   const [saving, setSaving] = useState(false);
@@ -40,6 +42,14 @@ export function SettingsScreen(props: {
         </div>
         <h1>Nova</h1>
         <p className="lede">A coding agent for your desktop. Connect a model provider to start — CircuitNotion is the default.</p>
+
+        {props.notice ? (
+          <div className="notice warn" role="status">
+            <strong>The agent runtime did not start.</strong>
+            <span>{props.notice}</span>
+            <span className="notice-hint">Your settings still save, and Save will start it again.</span>
+          </div>
+        ) : null}
 
         <div className="field">
           <label htmlFor="provider">Provider</label>

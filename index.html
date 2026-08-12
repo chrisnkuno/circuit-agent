@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nova</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      No remote fonts. This is a desktop app: a stylesheet fetched from fonts.googleapis.com means
+      the typeface silently disappears offline, every launch waits on a third-party host before it
+      can paint text, and the app phones out to load its own chrome. The stack in styles.css uses
+      each platform's own UI face instead, which is both always available and what a native window
+      is expected to look like.
+    -->
   </head>
   <body>
     <div id="root"></div>
