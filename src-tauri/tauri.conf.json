@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.circuitnotion.nova",
   "build": {
-    "beforeDevCommand": "npm run sidecar:bundle && npm run dev",
+    "beforeDevCommand": "npm run sidecar:binary && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build && npm run sidecar:bundle",
+    "beforeBuildCommand": "npm run build && npm run sidecar:binary",
     "frontendDist": "../dist"
   },
   "app": {

@@ -68,52 +68,67 @@ fn app_root() -> PathBuf {
   dir
 }
 
+/// The sidecar Tauri bundles, named as it lands on disk. `.exe` on Windows, bare elsewhere.
+fn sidecar_file_name() -> String {
+  format!("nova-sidecar{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// Locates the compiled sidecar executable.
+///
+/// There is exactly one artifact now, in development and in an installed app alike. It used to
+/// fall back to `node sidecar/dist/index.js` — a path inside the *development tree* — which had
+/// three consequences: an installed app pointed at a directory that does not exist on the user's
+/// machine, the end user needed Node, and, worst of all, running `tauri dev` locally never
+/// exercised the binary a release actually ships. The packaging path could only break silently.
+///
+/// The candidates are ordered by how a real installation looks first, so the dev tree is consulted
+/// only when neither bundle layout is present.
 fn sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-  // Prefer a plain Node entry so the GUI never blocks on `npx` network/prompts.
-  let resource = app
-    .path()
-    .resource_dir()
-    .map_err(|e| e.to_string())?;
-  let bundled = resource.join("binaries").join("nova-sidecar");
-  if bundled.exists() {
-    return Ok(bundled);
+  let name = sidecar_file_name();
+
+  // Installed: Tauri places an external binary beside the app executable.
+  if let Ok(exe) = std::env::current_exe() {
+    if let Some(dir) = exe.parent() {
+      let candidate = dir.join(&name);
+      if candidate.exists() {
+        return Ok(candidate);
+      }
+    }
   }
 
-  let dir = app_root();
-  let js = dir.join("sidecar").join("dist").join("index.js");
-  if js.exists() {
-    return Ok(js);
+  // Some bundle layouts stage resources separately.
+  if let Ok(resource) = app.path().resource_dir() {
+    let candidate = resource.join("binaries").join(&name);
+    if candidate.exists() {
+      return Ok(candidate);
+    }
   }
-  let ts = dir.join("sidecar").join("src").join("index.ts");
-  if ts.exists() {
-    return Ok(ts);
+
+  // Development: the triple-named artifact `npm run sidecar:binary` produces. The triple comes
+  // from Tauri's own build script, so it cannot drift from the name the bundler will look for.
+  let dev = app_root()
+    .join("src-tauri")
+    .join("binaries")
+    .join(format!(
+      "nova-sidecar-{}{}",
+      env!("TAURI_ENV_TARGET_TRIPLE"),
+      std::env::consts::EXE_SUFFIX
+    ));
+  if dev.exists() {
+    return Ok(dev);
   }
-  Err("Nova sidecar not found. From apps/nova-desktop run: npm run sidecar:build".into())
+
+  Err(format!(
+    "Nova sidecar not found (looked for {} beside the app and {} in the source tree). \
+     From apps/nova-desktop run: npm run sidecar:binary",
+    name,
+    dev.display()
+  ))
 }
 
 fn spawn_sidecar_process(script: &PathBuf) -> Result<(Child, ChildStdin), String> {
-  let mut command = if script
-    .file_name()
-    .and_then(|s| s.to_str())
-    .is_some_and(|n| n.starts_with("nova-sidecar"))
-    && script.extension().is_none()
-  {
-    Command::new(script)
-  } else if script.extension().and_then(|s| s.to_str()) == Some("ts") {
-    // Never use `npx` here — it can hang the window waiting on the network/TTY.
-    let local_tsx = app_root().join("node_modules").join(".bin").join("tsx");
-    let mut cmd = if local_tsx.exists() {
-      Command::new(local_tsx)
-    } else {
-      Command::new("tsx")
-    };
-    cmd.arg(script);
-    cmd
-  } else {
-    let mut cmd = Command::new("node");
-    cmd.arg(script);
-    cmd
-  };
+  // One shape of invocation, because there is one kind of artifact: a self-contained executable.
+  let mut command = Command::new(script);
 
   // Keep PATH useful for finding `node` when launched from a desktop session.
   if let Ok(path) = std::env::var("PATH") {
