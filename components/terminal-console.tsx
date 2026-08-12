@@ -182,6 +182,14 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
   const renderedEventIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const lastPresetContextKeyRef = useRef<string | null>(null);
 
+  /** A build order handed off from the landing command center via /terminal?cmd=<objective>. */
+  const [queuedCommand, setQueuedCommand] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const raw = new URLSearchParams(window.location.search).get("cmd");
+    return raw ? decodeURIComponent(raw).trim() : null;
+  });
+  // Guards against StrictMode's dev double-mount submitting the same build order twice.
+  const commandHandledRef = useRef(false);
   const [decidingApprovalId, setDecidingApprovalId] = useState<Id<"approvals"> | null>(null);
   const [controllingBranchId, setControllingBranchId] = useState<string | null>(null);
   const [workspacePresetId, setWorkspacePresetId] = useState<string>(DEFAULT_WORKSPACE_PRESET_ID);
@@ -236,6 +244,23 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A build order from the landing page: run it for real if a session is already live,
+  // otherwise prefill the input so the person signs in above and presses Enter — no retyping.
+  useEffect(() => {
+    if (!queuedCommand || session.isPending || commandHandledRef.current) return;
+    commandHandledRef.current = true;
+    const command = queuedCommand.startsWith("run ") ? queuedCommand : `run coding ${queuedCommand}`;
+    if (session.data) {
+      submit(command);
+    } else {
+      setInput(command);
+      appendLine({ tone: "system", text: `build order received — "${queuedCommand}"` });
+      appendLine({ tone: "muted", text: "sign in above, then press Enter to price and run it." });
+    }
+    setQueuedCommand(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queuedCommand, session.isPending, session.data]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
@@ -551,11 +576,6 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           <BranchRunTracker key={branch.runId} runId={branch.runId} onSnapshot={(detail) => handleRunSnapshot(branch.id, detail)} />
         ))}
       <div className="terminal-titlebar">
-        <span className="terminal-dots" aria-hidden="true">
-          <span className="terminal-dot terminal-dot-red" />
-          <span className="terminal-dot terminal-dot-yellow" />
-          <span className="terminal-dot terminal-dot-green" />
-        </span>
         <span className="terminal-title">
           <span className="terminal-title-path">~/{session.data ? session.data.user.email.split("@")[0] : "guest"}</span>
           <span className="terminal-title-sep">/</span>
@@ -565,6 +585,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
           {anyBusy ? <span className="terminal-orbit">{ORBIT_FRAMES[orbitFrame]}</span> : <span className="terminal-status-dot" />}
           {anyBusy ? `${runningCount} running` : "idle"}
         </span>
+        <span className="terminal-host" aria-hidden="true">circuit-nova</span>
       </div>
       {branches.length > 1 && (
         <div className="terminal-branches">
@@ -704,7 +725,7 @@ export const TerminalConsole = forwardRef<TerminalConsoleHandle, { onOpenFiles: 
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder={scriptBusy ? "preview playing — you can still start a real run" : 'run coding <objective>   ·   help'}
+            placeholder={scriptBusy ? "preview playing — you can still start a real run" : 'run coding <objective>   ·   help · ↑↓ history'}
             aria-label="Terminal command input"
           />
           <button type="submit" className="terminal-send" disabled={!input.trim()} aria-label="Run command">↵</button>

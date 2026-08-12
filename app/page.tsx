@@ -1,14 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { estimateTaskCost, formatRwf, type QualityTier, type TaskKind } from "@/lib/task-cost";
 import { AgentBoard } from "@/components/agent-board";
 import { IntegrationBoard } from "@/components/integration-board";
 import { AuthPanel, useCurrentOrganization } from "@/components/auth-panel";
+import { GyroscopeScene } from "@/components/gyroscope-scene";
+import { CopyCommand } from "@/components/copy-command";
+import { KageFurniture } from "@/components/kage-ui";
 import { authClient } from "@/lib/auth-client";
+
+const CLI_COMMAND = "npm install -g @circuit-nova/nova-cli";
 
 const taskKinds: { value: TaskKind; label: string; copy: string }[] = [
   { value: "coding", label: "Build or fix software", copy: "E2B sandbox, checks, review-ready evidence" },
@@ -17,13 +23,121 @@ const taskKinds: { value: TaskKind; label: string; copy: string }[] = [
   { value: "writing", label: "Create a deliverable", copy: "Draft, revise, and package an artifact" },
 ];
 
+/** One-click starting points for the command center — each fills the build input verbatim. */
+const buildExamples = [
+  "Build me an emergency response platform with an SOS system, responder dashboard, authentication and location tracking.",
+  "Make a research dashboard that gathers sources on a topic, summarizes the evidence, and emails me a daily brief.",
+  "Create a project tracker that posts approved updates to GitHub and my calendar every morning.",
+];
+
+const chapters = [
+  { id: "work", num: "01", b: "Define the work", p: "Quote the cost of a task before it begins" },
+  { id: "principles", num: "02", b: "Principles", p: "Durable, isolated, never silent" },
+  { id: "integrations", num: "03", b: "Integrations", p: "Many apps, one controlled workflow" },
+  { id: "agents", num: "04", b: "Agents", p: "Inspect the run graph and its gates" },
+] as const;
+
+const principles = [
+  {
+    num: "01", code: "DRB", b: "Durable by default", p: "Convex persists task plans, quotes, approvals, events, and payment holds.", scene: "grid",
+    detail: "Every stage of a run is written down before and after it happens, so a crash, a closed tab, or a new device never loses the state of your work.",
+    itemsLabel: "Persisted records", items: ["Task plans", "Quotes", "Approvals", "Events", "Payment holds"],
+  },
+  {
+    num: "02", code: "ISO", b: "Isolated execution", p: "E2B runs code and browser work away from the user's device.", scene: "traces",
+    detail: "Code and browser work execute inside disposable E2B sandboxes, never on your laptop, so a run can explore, compile, and fail without touching your machine or credentials.",
+    itemsLabel: "Isolated surfaces", items: ["Code sandboxes", "Browser sessions", "Network egress", "Runtime secrets"],
+  },
+  {
+    num: "03", code: "AUTH", b: "Human authority", p: "No overage, send, merge, or payment action happens silently.", scene: "core",
+    detail: "Anything consequential — spending past a cap, sending a message, merging code, or moving money — stops at an approval gate that names the action and the amount before it runs.",
+    itemsLabel: "Silent actions blocked", items: ["Spend overage", "Message sends", "Code merges", "Payment holds"],
+  },
+] as const;
+
 function normalizeAttachmentCount(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.min(10, Math.max(0, Math.trunc(parsed)));
 }
 
+function BrandMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" fill="#070503" />
+      {/* circuit traces */}
+      <path d="M6 20h7l3-6h10" fill="none" stroke="#ffb454" strokeWidth="1.3" />
+      <path d="M6 12h6l3 4h11" fill="none" stroke="#ff4fd8" strokeWidth="1.3" />
+      <circle cx="26" cy="6" r="2.4" fill="#ffb454" />
+      <circle cx="26" cy="26" r="2.4" fill="#ff4fd8" />
+      <circle cx="6" cy="16" r="3" fill="#070503" stroke="#ffb454" strokeWidth="1.3" />
+      <circle cx="6" cy="16" r="1.4" fill="#ffb454" />
+    </svg>
+  );
+}
+
+/** Kage's signature word-by-word masked reveal — each word climbs out of its mask with a stagger. */
+function WordReveal({ text, className = "" }: { text: string; className?: string }) {
+  const words = text.split(" ");
+  const lastIndex = words.length - 1;
+  return (
+    <h2 className={`${className} word-reveal`} data-rv="fade" aria-label={text}>
+      {words.map((word, index) => (
+        <span className="word-mask" key={`${word}-${index}`} aria-hidden="true">
+          <span className="word" style={{ "--word-delay": `${0.06 * index}s` } as CSSProperties}>
+            {word}
+            {index < lastIndex ? "\u00A0" : ""}
+          </span>
+        </span>
+      ))}
+    </h2>
+  );
+}
+
+/** Per-section foreground circuit glyphs — rise on scroll with a stagger, then sway (Kage's fg stages). */
+const FG_SETS: { cls: string; left: string; top: string; d: string; w?: number; h?: number; sway?: boolean }[][] = [
+  [
+    { cls: "g-node", left: "10%", top: "72%", d: "0ms", sway: true },
+    { cls: "g-node g-node--m", left: "89%", top: "16%", d: "130ms" },
+    { cls: "g-trace", left: "4%", top: "58%", d: "260ms", w: 150 },
+    { cls: "g-vtrace", left: "80%", top: "52%", d: "390ms", h: 96 },
+    { cls: "g-corner", left: "47%", top: "84%", d: "520ms", sway: true },
+  ],
+  [
+    { cls: "g-node g-node--m", left: "14%", top: "20%", d: "0ms" },
+    { cls: "g-node", left: "84%", top: "74%", d: "140ms", sway: true },
+    { cls: "g-vtrace", left: "8%", top: "44%", d: "280ms", h: 120 },
+    { cls: "g-trace", left: "62%", top: "28%", d: "420ms", w: 170 },
+    { cls: "g-corner", left: "24%", top: "88%", d: "560ms" },
+  ],
+];
+
+function CircuitFurniture({ seed = 0 }: { seed?: number }) {
+  const glyphs = FG_SETS[seed % FG_SETS.length];
+  return (
+    <div className="fg-scene" data-rv="fade" aria-hidden="true">
+      {glyphs.map((g, index) => (
+        <i
+          key={index}
+          className={`${g.cls}${g.sway ? " g-sway" : ""}`}
+          style={{
+            left: g.left,
+            top: g.top,
+            width: g.w ? `${g.w}px` : undefined,
+            height: g.h ? `${g.h}px` : undefined,
+            "--fg-delay": g.d,
+          } as CSSProperties}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function Home() {
+  const router = useRouter();
+  const [request, setRequest] = useState("");
+  const [engaged, setEngaged] = useState(false); // input focus — wakes the core visualization
+  const commandRef = useRef<HTMLTextAreaElement | null>(null);
   const [kind, setKind] = useState<TaskKind>("coding");
   const [quality, setQuality] = useState<QualityTier>("balanced");
   const [attachments, setAttachments] = useState(1);
@@ -31,6 +145,8 @@ export default function Home() {
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState<"idle" | "pending" | "done" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [focused, setFocused] = useState(0); // selected principle in the Chapter II inspector
+  const [cliOpen, setCliOpen] = useState(false); // CLI platform option reveals a copyable install command
   const quote = useMemo(() => estimateTaskCost({ kind, quality, attachmentCount: attachments, requiresBrowser: browser, requiresSandbox: kind !== "writing" }), [attachments, browser, kind, quality]);
   const selected = taskKinds.find((item) => item.value === kind)!;
   const effectiveTitle = title.trim() || selected.label;
@@ -39,10 +155,30 @@ export default function Home() {
   const session = authClient.useSession();
   const organization = useCurrentOrganization();
   const createQuotedTask = useMutation(api.tasks.createQuotedTask);
+  const focusedPrinciple = principles[focused];
 
   function resetStatus() {
     setStatus("idle");
     setError(null);
+  }
+
+  /** Auto-grows the build input with content, up to a readable ceiling. */
+  function growCommandInput() {
+    const el = commandRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 190)}px`;
+  }
+
+  // Grows on value change (typing or an example chip filling it) — measuring after the DOM
+  // has the new text, not before, so a chip-filled input never clips its first line.
+  useEffect(() => { growCommandInput(); }, [request]);
+
+  /** The command center's one real action: hand the request to the live agent terminal. */
+  function launchBuild() {
+    const objective = request.trim();
+    if (!objective) return;
+    router.push(`/terminal?cmd=${encodeURIComponent(objective)}`);
   }
 
   async function reserve() {
@@ -70,18 +206,250 @@ export default function Home() {
     }
   }
 
-  return <main>
-    <header className="topbar"><a className="brand" href="#top">CIRCUIT<span>NOVA</span></a><nav className="topbar-nav"><Link href="/terminal" className="terminal-nav-link">Agent terminal ↗</Link><AuthPanel /></nav></header>
-    <section className="hero" id="top"><p className="eyebrow">TASK-PRICED AGENT OPERATING SYSTEM</p><h1>Know the cost.<br /><em>Keep the control.</em></h1><p className="lede">A durable agent workspace for coding and everyday execution—quoted in RWF before work begins, observable from your phone, and capped by your approval.</p></section>
-    <section className="workspace" aria-label="Task quote builder">
-      <div className="builder"><div className="section-label">01 / Define the work</div><h2>What should the agent complete?</h2>
-        <div className="task-grid">{taskKinds.map((item) => <button className={kind === item.value ? "task-card selected" : "task-card"} key={item.value} onClick={() => { setKind(item.value); resetStatus(); }}><strong>{item.label}</strong><span>{item.copy}</span></button>)}</div>
-        <div className="controls"><label>Task title<input placeholder={selected.label} value={title} onChange={(event) => { setTitle(event.target.value); resetStatus(); }} /></label><label>Quality<select value={quality} onChange={(event) => { setQuality(event.target.value as QualityTier); resetStatus(); }}><option value="fast">Fast — routine work</option><option value="balanced">Balanced — default</option><option value="expert">Expert — complex work</option></select></label><label>Attached files<input min="0" max="10" step="1" type="number" value={attachments} onChange={(event) => { setAttachments(normalizeAttachmentCount(event.target.value)); resetStatus(); }} /></label><label className="check"><input type="checkbox" checked={browser} onChange={(event) => { setBrowser(event.target.checked); resetStatus(); }} /> Includes browser or app work</label></div>
+  return <div className="kage-page">
+    <GyroscopeScene />
+    <div className="kage-grain" aria-hidden="true" />
+    <div className="kage-vignette" aria-hidden="true" />
+    <KageFurniture />
+
+    {/* Fixed navigation: wordmark, chapter links, auth, mobile menu. */}
+    <header className="nav" id="nav">
+      <a className="brand" href="#top">
+        <BrandMark className="brand-mark" />
+        <span className="brand-tx"><b>CIRCUIT·NOVA</b><i>Task-priced agent OS</i></span>
+      </a>
+      <nav className="nav-links">
+        {chapters.map((chapter) => <a className="nav-link" key={chapter.id} href={`#${chapter.id}`}><span>{chapter.b}</span><span className="alt">{chapter.num} — {chapter.b}</span></a>)}
+        <Link className="nav-link" href="/terminal"><span>Terminal</span><span className="alt">Agent terminal ↗</span></Link>
+      </nav>
+      <div className="nav-auth"><AuthPanel /></div>
+      <button className="nav-burger" aria-label="Open menu"><i /><i /></button>
+    </header>
+
+    <main className="page">
+      {/* Hero — the command center: one input, one question, a real build behind it. */}
+      <section className={`hero${engaged ? " hero-engaged" : ""}`} id="top">
+        <div className="hero-top">
+          <p className="eyebrow"><span className="dot" />Task-priced agent operating system <span className="live">circuit live</span></p>
+          <h1><span className="line"><span>What do you want</span></span><span className="line"><em>to build?</em></span></h1>
+          <div className="command">
+            <div className="command-row">
+              <span className="command-prompt" aria-hidden="true">&gt;</span>
+              <textarea
+                ref={commandRef}
+                className="command-input"
+                rows={1}
+                value={request}
+                onChange={(event) => setRequest(event.target.value)}
+                onFocus={() => setEngaged(true)}
+                onBlur={() => setEngaged(false)}
+                placeholder="Describe the project — Circuit plans it, prices it, and builds it in a real sandbox."
+                aria-label="Describe what you want to build"
+              />
+            </div>
+            <div className="command-examples">
+              <span className="command-label">Try</span>
+              {buildExamples.map((example) => (
+                <button type="button" className="command-chip" key={example} title={example} onClick={() => setRequest(example)}>
+                  {example}
+                </button>
+              ))}
+            </div>
+            <div className="command-cta-row">
+              <button type="button" className="command-cta" onClick={launchBuild} disabled={!request.trim()}>
+                <i />
+                <span>Build with Circuit</span>
+                <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M2 11L11 2M11 2H4M11 2V9" stroke="currentColor" strokeWidth="1.2" /></svg>
+              </button>
+              <p className="command-meta">Quoted before work · Capped by your approval · Runs in a real sandbox</p>
+            </div>
+            <div className="platform">
+              <div className="platform-links">
+                <span className="platform-label">Run on</span>
+                <a className="platform-link" href="/download">Desktop</a>
+                <button
+                  type="button"
+                  className="platform-link"
+                  aria-expanded={cliOpen}
+                  aria-controls="cli-snippet"
+                  onClick={() => setCliOpen((open) => !open)}
+                >
+                  CLI
+                </button>
+                <span className="platform-link platform-link--on" aria-current="page">Web</span>
+              </div>
+              <div className="platform-download">
+                <a className="download-btn" href="/download">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.2" /><path d="M2 11h8" stroke="currentColor" strokeWidth="1.2" /></svg>
+                  <span>Download for Windows</span><span className="sub">· 64-bit</span>
+                </a>
+                <a className="download-note" href="/download#avx2">Older PC without AVX2? Learn more</a>
+              </div>
+            </div>
+            {cliOpen && (
+              <div className="cli-snippet" id="cli-snippet">
+                <span className="cli-snippet-label">Install the CLI</span>
+                <CopyCommand command={CLI_COMMAND} />
+                <span className="cli-snippet-hint">or <Link href="/terminal">open the web terminal</Link></span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="peek" aria-hidden="true">
+          <div className="peek-fr">
+            <span className="peek-grid" />
+            <span className="peek-trace t1" />
+            <span className="peek-trace t2" />
+            <span className="peek-glow" />
+            <span className="peek-core" />
+            <span className="peek-node n1" />
+            <span className="peek-node n2" />
+            <span className="peek-node n3" />
+          </div>
+          <div className="peek-cap"><b>CORE</b><i>build pipeline — engages when you do</i></div>
+        </div>
+        <div className="hero-word" aria-hidden="true"><span>CIRCUIT·NOVA</span></div>
+        <div className="hero-side"><span className="v">DESCRIBE · BUILD · RUN</span></div>
+        <div className="hero-spacer" />
+        <div className="hero-foot">
+          <div className="hero-cue"><span>Scroll</span><span className="track"><i /></span></div>
+          <div className="chapters">
+            {chapters.map((chapter, index) => <button className="chip" key={chapter.id} data-chip={index}><span className="num">{chapter.num}</span><span className="tx"><b>{chapter.b}</b><p>{chapter.p}</p></span></button>)}
+          </div>
+        </div>
+      </section>
+
+      {/* How it works — the quote builder. */}
+      <section className="sec" id="work">
+        <CircuitFurniture seed={1} />
+        <div className="sec-head" data-rv="up"><span className="k"><b>How it works</b></span><span className="rule" /></div>
+        <div className="gate-grid" data-rv="up">
+          <div className="builder">
+            <div className="section-label">01 / Define the work</div>
+            <WordReveal text="Know the cost of every build." />
+            <div className="task-grid">{taskKinds.map((item) => <button className={kind === item.value ? "task-card selected" : "task-card"} key={item.value} onClick={() => { setKind(item.value); resetStatus(); }}><strong>{item.label}</strong><span>{item.copy}</span></button>)}</div>
+            <div className="controls">
+              <label>Task title<input placeholder={selected.label} value={title} onChange={(event) => { setTitle(event.target.value); resetStatus(); }} /></label>
+              <label>Quality<select value={quality} onChange={(event) => { setQuality(event.target.value as QualityTier); resetStatus(); }}><option value="fast">Fast — routine work</option><option value="balanced">Balanced — default</option><option value="expert">Expert — complex work</option></select></label>
+              <label>Attached files<input min="0" max="10" step="1" type="number" value={attachments} onChange={(event) => { setAttachments(normalizeAttachmentCount(event.target.value)); resetStatus(); }} /></label>
+              <label className="check"><input type="checkbox" checked={browser} onChange={(event) => { setBrowser(event.target.checked); resetStatus(); }} /> Includes browser or app work</label>
+            </div>
+          </div>
+          <aside className="quote">
+            <div className="quote-head"><span>02 / Your quote</span><b className={`confidence ${quote.confidence}`}>{quote.confidence} confidence</b></div>
+            <p className="task-name">{selected.label}</p>
+            <div className="range"><strong>{formatRwf(quote.estimateLowRwf)}</strong><span>to</span><strong>{formatRwf(quote.estimateHighRwf)}</strong></div>
+            <p className="quote-copy">Expected cost based on the selected execution plan.</p>
+            <div className="cap"><span>Never exceeds without approval</span><b>{formatRwf(quote.maxRwf)}</b></div>
+            <ul>{quote.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul>
+            <button className="primary" onClick={reserve} disabled={status === "pending"}>{status === "pending" ? "Reserving…" : "Reserve task cap"} <span>→</span></button>
+            {status === "done" && <p className="notice">Task and quote persisted in Convex. Circuit Pay authorization is still blocked until its webhook contract is verified; execution awaits the dispatcher.</p>}
+            {status === "error" && <p className="notice">{error}</p>}
+          </aside>
+        </div>
+      </section>
+
+      {/* Chapter II — principles as framed cards. */}
+      <section className="sec" id="principles">
+        <CircuitFurniture seed={2} />
+        <div className="sec-head" data-rv="up"><span className="k"><b>Principles</b></span><span className="rule" /></div>
+        <div className="cards" data-rv="up">
+          {principles.map((principle, index) => <article
+            className={`card${focused === index ? " focus" : ""}`}
+            key={principle.num}
+            role="button"
+            tabIndex={0}
+            aria-pressed={focused === index}
+            onClick={() => setFocused(index)}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setFocused(index); } }}
+          >
+            <div className={`card-fr scene-${principle.scene}`}>
+              <span className="frame-in">
+                <span className="glow" />
+                {principle.scene === "grid" && <span className="scan" />}
+                {principle.scene === "traces" && <span className="pulse" />}
+                {principle.scene === "core" && <span className="orbit" />}
+                <span className="br br--tl" />
+                <span className="br br--tr" />
+                <span className="card-ar"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 12L12 2M12 2H5M12 2V9" stroke="currentColor" strokeWidth="1.2" /></svg></span>
+                <span className="card-lab"><b>{principle.b}</b><span className="glyph">{principle.code}</span></span>
+              </span>
+            </div>
+            <div className="card-meta"><span>{principle.num} / Core</span><span>{principle.p}</span></div>
+          </article>)}
+        </div>
+        <div className="principle-detail" data-rv="up">
+          <div className="pd-vis" key={`vis-${focused}`}>
+            {focusedPrinciple.scene === "grid" && <>
+              <span className="pd-label l1">Plan</span>
+              <span className="pd-label l2">Quote</span>
+              <span className="pd-label l3">Approval</span>
+              <span className="pd-label l4">Hold</span>
+              <span className="pd-wire w1" />
+              <span className="pd-wire w2" />
+              <span className="pd-wire w3" />
+              <span className="pd-core" />
+            </>}
+            {focusedPrinciple.scene === "traces" && <>
+              <span className="pd-trace t1" />
+              <span className="pd-trace t2" />
+              <span className="pd-trace t3" />
+              <span className="pd-packet p1" />
+              <span className="pd-packet p2" />
+            </>}
+            {focusedPrinciple.scene === "core" && <>
+              <span className="pd-ring" />
+              <span className="pd-nucleus" />
+            </>}
+          </div>
+          <div className="pd-body" key={`body-${focused}`}>
+            <span className="k">{focusedPrinciple.code} — {focusedPrinciple.num} / Core</span>
+            <h3>{focusedPrinciple.b}</h3>
+            <p>{focusedPrinciple.detail}</p>
+            <div className="pd-items">
+              <span>{focusedPrinciple.itemsLabel}</span>
+              <ul>{focusedPrinciple.items.map((item) => <li key={item}>{item}</li>)}</ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Chapter III — integrations. */}
+      <section className="sec" id="integrations">
+        <CircuitFurniture seed={3} />
+        <div className="sec-head" data-rv="up"><span className="k"><b>Integrations</b></span><span className="rule" /></div>
+        <IntegrationBoard organizationId={organization?._id} />
+      </section>
+
+      {/* Chapter IV — agents. */}
+      <section className="sec" id="agents">
+        <CircuitFurniture seed={4} />
+        <div className="sec-head" data-rv="up"><span className="k"><b>Agents</b></span><span className="rule" /></div>
+        <AgentBoard taskKind={kind} />
+      </section>
+
+      {/* Closing statement. */}
+      <section className="sec fin" data-rv="up">
+        <CircuitFurniture seed={5} />
+        <p className="eyebrow">The agent terminal</p>
+        <WordReveal text="See the work. Run it live." />
+        <p>A real command line for real agent runs — live sandbox, live events, live approval gates. Watch the work price itself before anything moves.</p>
+        <Link className="cta" href="/terminal"><i /><span>Open the agent terminal</span> <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><path d="M2 11L11 2M11 2H4M11 2V9" stroke="currentColor" strokeWidth="1.2" /></svg></Link>
+      </section>
+    </main>
+
+    {/* Manifesto footer. */}
+    <footer className="foot">
+      <div className="foot-grid">
+        <div className="foot-brand">
+          <BrandMark className="foot-mark" />
+          <div><b>CIRCUIT·NOVA</b><p>A task-priced agent operating system — quoted in RWF before work begins, observable from your phone, and capped by your approval.</p></div>
+        </div>
+        <div><h4>Work</h4><ul><li><a href="#work">Define the work</a></li><li><a href="#principles">Principles</a></li></ul></div>
+        <div><h4>Connect</h4><ul><li><a href="#integrations">Integrations</a></li><li><a href="#agents">Agents</a></li></ul></div>
+        <div><h4>Run</h4><ul><li><Link href="/terminal">Agent terminal</Link></li></ul></div>
       </div>
-      <aside className="quote"><div className="quote-head"><span>02 / Your quote</span><b className={`confidence ${quote.confidence}`}>{quote.confidence} confidence</b></div><p className="task-name">{selected.label}</p><div className="range"><strong>{formatRwf(quote.estimateLowRwf)}</strong><span>to</span><strong>{formatRwf(quote.estimateHighRwf)}</strong></div><p className="quote-copy">Expected cost based on the selected execution plan.</p><div className="cap"><span>Never exceeds without approval</span><b>{formatRwf(quote.maxRwf)}</b></div><ul>{quote.assumptions.map((assumption) => <li key={assumption}>{assumption}</li>)}</ul><button className="primary" onClick={reserve} disabled={status === "pending"}>{status === "pending" ? "Reserving…" : "Reserve task cap"} <span>→</span></button>{status === "done" && <p className="notice">Task and quote persisted in Convex. Circuit Pay authorization is still blocked until its webhook contract is verified; execution awaits the dispatcher.</p>}{status === "error" && <p className="notice">{error}</p>}</aside>
-    </section>
-    <section className="principles"><div><span>01</span><h3>Durable by default</h3><p>Convex persists task plans, quotes, approvals, events, and payment holds.</p></div><div><span>02</span><h3>Isolated execution</h3><p>E2B runs code and browser work away from the user’s device.</p></div><div><span>03</span><h3>Human authority</h3><p>No overage, send, merge, or payment action happens silently.</p></div></section>
-    <IntegrationBoard organizationId={organization?._id} />
-    <AgentBoard taskKind={kind} />
-  </main>;
+      <div className="foot-base"><span>© 2026 Circuit-Nova</span><span>Quoted before work · Capped by approval</span><span>Interface: Circuit Core</span></div>
+    </footer>
+  </div>;
 }

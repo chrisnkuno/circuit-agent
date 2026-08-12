@@ -1,44 +1,46 @@
 /* ============================================================================
-   Circuit-Nova agent terminal — night-blue glass over a live starfield.
-   Panels are deliberately translucent (see --nova-panel) with a heavy backdrop
-   blur, so the animated sky reads through the chrome without costing legibility.
+   Circuit-Nova agent terminal — a flat, terminal-first TUI in the spirit of
+   OpenCode's CLI: near-opaque obsidian panels, monospace type, square chrome,
+   hairline rules, and a slim status bar. No glassmorphism, no glow shadows,
+   no traffic lights — the starfield is the only atmosphere, and it stays
+   behind the chrome so text stays crisp.
    ========================================================================= */
 
 .terminal-page {
-  --nova-bg-deep: #04060e;
-  --nova-bg: #070b18;
+  --nova-bg-deep: #050403;
+  --nova-bg: #070604;
 
-  /* Translucent glass. Alpha is low enough that stars read through, while the
-     blur+saturate below keeps monospace text crisp on top of moving points. */
-  --nova-panel: rgba(10, 15, 34, 0.55);
-  --nova-panel-solid: rgba(11, 16, 36, 0.74);
-  --nova-panel-raised: rgba(255, 255, 255, 0.035);
-  --nova-glass: blur(22px) saturate(150%);
+  /* Near-opaque panels. The starfield is allowed to tint, not drown, the UI. */
+  --nova-panel: rgba(15, 11, 7, 0.94);
+  --nova-panel-solid: rgba(17, 12, 8, 0.97);
+  --nova-panel-raised: rgba(255, 255, 255, 0.025);
 
-  --nova-border: rgba(126, 156, 255, 0.2);
-  --nova-border-strong: rgba(111, 227, 255, 0.42);
-  --nova-text: #e2e9ff;
-  --nova-muted: #8592c2;
-  --nova-faint: rgba(133, 146, 194, 0.55);
-  --nova-cyan: #6fe3ff;
-  --nova-violet: #b6a6ff;
-  --nova-amber: #ffce7a;
-  --nova-mint: #7effc4;
-  --nova-warn: #ffcf6b;
-  --nova-error: #ff8f92;
-  --nova-accent: #9fdcff;
+  --nova-border: rgba(232, 198, 152, 0.16);
+  --nova-border-strong: rgba(255, 180, 84, 0.42);
+  --nova-text: #d4dae8;
+  --nova-muted: #7f8aa6;
+  --nova-faint: rgba(127, 138, 166, 0.6);
+  --nova-ember: #ffb454;   /* primary — the amber phosphor glow (was cyan) */
+  --nova-violet: #e0b184;
+  --nova-amber: #e8b565;   /* semantic warn/tool-call amber — distinct from --nova-ember */
+  --nova-mint: #6fe3a5;
+  --nova-warn: #e6b45c;
+  --nova-error: #ef7d84;
+  --nova-accent: #ffc98a;
 
-  --nova-radius: 16px;
-  --nova-radius-sm: 10px;
+  --nova-mono: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --nova-radius: 0px;
+  --nova-radius-sm: 2px;
 
   min-height: 100vh;
   position: relative;
   background:
-    radial-gradient(ellipse 100% 60% at 15% -5%, rgba(58, 84, 190, 0.22) 0%, transparent 60%),
-    radial-gradient(ellipse 90% 55% at 88% 8%, rgba(124, 84, 208, 0.16) 0%, transparent 62%),
-    radial-gradient(ellipse 130% 90% at 50% -10%, #0e1734 0%, var(--nova-bg) 48%, var(--nova-bg-deep) 100%);
+    radial-gradient(ellipse 100% 60% at 15% -5%, rgba(214, 140, 66, 0.14) 0%, transparent 60%),
+    radial-gradient(ellipse 90% 55% at 88% 8%, rgba(188, 108, 52, 0.1) 0%, transparent 62%),
+    radial-gradient(ellipse 130% 90% at 50% -10%, #0e0a05 0%, var(--nova-bg) 48%, var(--nova-bg-deep) 100%);
   color: var(--nova-text);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--nova-mono);
+  font-size: 13px;
   overflow-x: hidden;
 }
 
@@ -54,13 +56,13 @@
 .nova-shell {
   position: relative;
   z-index: 1;
-  max-width: 1560px;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 18px 24px 24px;
+  padding: 14px 20px 20px;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .nova-topbar {
@@ -69,6 +71,8 @@
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  border-bottom: 1px solid var(--nova-border);
+  padding-bottom: 12px;
 }
 
 .nova-brand {
@@ -80,23 +84,24 @@
 }
 
 .nova-brand-mark {
-  font-size: 17px;
-  color: var(--nova-cyan);
-  text-shadow: 0 0 18px rgba(111, 227, 255, 0.65);
-  transition: transform 0.25s ease;
+  font-size: 15px;
+  color: var(--nova-ember);
+  text-shadow: none;
+  transition: color 0.2s ease, transform 0.25s ease;
 }
-.nova-brand:hover .nova-brand-mark { transform: rotate(90deg); }
+.nova-brand:hover .nova-brand-mark { color: var(--nova-mint); transform: rotate(90deg); }
 
 .nova-brand-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.2em;
   color: var(--nova-text);
 }
-.nova-brand-dot { color: var(--nova-cyan); }
+
+.nova-brand-dot { color: var(--nova-ember); }
 
 .nova-brand-tag {
-  font-size: 10.5px;
+  font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--nova-faint);
@@ -120,13 +125,13 @@
 .nova-topbar-auth .auth-panel p { margin: 0; }
 
 .nova-topbar-auth .auth-panel input {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--nova-border);
   color: var(--nova-text);
-  border-radius: 8px;
-  padding: 7px 11px;
+  border-radius: 0;
+  padding: 6px 10px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   min-width: 0;
   width: 168px;
   transition: border-color 0.15s ease, background 0.15s ease;
@@ -134,14 +139,14 @@
 .nova-topbar-auth .auth-panel input:focus {
   outline: none;
   border-color: var(--nova-border-strong);
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.05);
 }
 .nova-topbar-auth .auth-panel input::placeholder { color: var(--nova-faint); }
 
 .nova-topbar-auth .auth-mode {
   display: flex;
   border: 1px solid var(--nova-border);
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
 }
 .nova-topbar-auth .auth-mode button {
@@ -150,19 +155,19 @@
   border: 0;
   font: inherit;
   font-size: 11.5px;
-  padding: 7px 12px;
+  padding: 6px 12px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.nova-topbar-auth .auth-mode button:hover { color: var(--nova-text); }
-.nova-topbar-auth .auth-mode button.selected { background: var(--nova-cyan); color: #06131f; font-weight: 600; }
+.nova-topbar-auth .auth-mode button:hover { color: var(--nova-text); background: rgba(255, 255, 255, 0.03); }
+.nova-topbar-auth .auth-mode button.selected { background: var(--nova-ember); color: #190e03; font-weight: 600; }
 
 .nova-topbar-auth .auth-panel .outline {
   border: 1px solid var(--nova-border);
   background: transparent;
   color: var(--nova-text);
-  border-radius: 8px;
-  padding: 7px 12px;
+  border-radius: 0;
+  padding: 6px 12px;
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -171,13 +176,13 @@
 .nova-topbar-auth .auth-panel .outline:hover { border-color: var(--nova-border-strong); }
 
 .nova-topbar-auth .auth-panel .primary {
-  background: var(--nova-cyan);
-  color: #06131f;
+  background: var(--nova-ember);
+  color: #190e03;
   border: 0;
-  border-radius: 8px;
-  padding: 8px 14px;
+  border-radius: 0;
+  padding: 7px 14px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -190,10 +195,10 @@
   color: var(--nova-accent);
   font-weight: 500;
   font-size: 12px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border: 1px solid var(--nova-border);
-  border-radius: 999px;
-  background: rgba(111, 227, 255, 0.07);
+  border-radius: 0;
+  background: rgba(255, 180, 84, 0.05);
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -207,19 +212,18 @@
   height: 6px;
   border-radius: 50%;
   background: var(--nova-warn);
-  box-shadow: 0 0 7px rgba(255, 207, 107, 0.7);
+  box-shadow: 0 0 6px rgba(230, 180, 92, 0.6);
 }
-.auth-workspace-ready { background: var(--nova-mint); box-shadow: 0 0 7px rgba(126, 255, 196, 0.7); }
+.auth-workspace-ready { background: var(--nova-mint); box-shadow: 0 0 6px rgba(111, 227, 165, 0.6); }
 
 .nova-topbar-auth .auth-panel .notice {
   position: absolute;
-  top: 44px;
+  top: 42px;
   right: 0;
   background: var(--nova-panel-solid);
-  backdrop-filter: var(--nova-glass);
   border: 1px solid var(--nova-warn);
   color: var(--nova-warn);
-  border-radius: var(--nova-radius-sm);
+  border-radius: 0;
   max-width: 280px;
   padding: 9px 12px;
   font-size: 12px;
@@ -234,7 +238,7 @@
 .nova-layout {
   flex: 1;
   display: grid;
-  gap: 16px;
+  gap: 12px;
   align-items: stretch;
   min-height: 0;
 }
@@ -245,7 +249,7 @@
 .nova-slot { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 .nova-slot-aside {
-  gap: 14px;
+  gap: 12px;
   overflow-y: auto;
   max-height: calc(100vh - 96px);
   padding-right: 2px;
@@ -280,8 +284,8 @@
   background: transparent;
   border: 1px solid var(--nova-border);
   color: var(--nova-muted);
-  border-radius: 7px;
-  padding: 4px 9px;
+  border-radius: 0;
+  padding: 3px 9px;
   font-size: 11px;
   line-height: 1.2;
   cursor: pointer;
@@ -289,55 +293,56 @@
 }
 .nova-layout-option:hover { border-color: var(--nova-border-strong); color: var(--nova-text); }
 .nova-layout-option-active {
-  background: rgba(111, 227, 255, 0.16);
+  background: rgba(255, 180, 84, 0.12);
   border-color: var(--nova-border-strong);
-  color: var(--nova-cyan);
+  color: var(--nova-ember);
 }
 
-/* ----------------------------------------------------------- terminal glass */
+/* ----------------------------------------------------------- terminal TUI */
 
 .terminal-window {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
   background: var(--nova-panel);
-  backdrop-filter: var(--nova-glass);
-  -webkit-backdrop-filter: var(--nova-glass);
   border: 1px solid var(--nova-border);
   border-radius: var(--nova-radius);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.055),
-    0 30px 90px -32px rgba(6, 12, 40, 0.9),
-    0 0 60px -30px var(--nova-border-strong);
+  box-shadow: 0 24px 70px -34px rgba(5, 3, 2, 0.9);
   overflow: hidden;
   cursor: text;
 }
+/* A whisper of CRT scanline, so the tube reads as hardware rather than a card. */
+.terminal-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.013) 0 1px, transparent 1px 3px);
+  mix-blend-mode: overlay;
+}
 
+/* Slim status bar — path · branch · run state, all in mono. */
 .terminal-titlebar {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 11px 16px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--nova-border);
-  background: linear-gradient(rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  background: var(--nova-panel-solid);
   flex-shrink: 0;
+  font-size: 12px;
 }
-
-.terminal-dots { display: flex; gap: 7px; }
-.terminal-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.terminal-dot-red { background: #ff5f57; }
-.terminal-dot-yellow { background: #febc2e; }
-.terminal-dot-green { background: #28c840; }
 
 .terminal-title {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
+  gap: 6px;
+  font-family: var(--nova-mono);
   color: var(--nova-muted);
   overflow: hidden;
   white-space: nowrap;
@@ -355,11 +360,26 @@
   letter-spacing: 0.04em;
   color: var(--nova-faint);
   border: 1px solid var(--nova-border);
-  border-radius: 999px;
-  padding: 3px 11px;
+  border-radius: 0;
+  padding: 2px 10px;
+  font-variant-numeric: tabular-nums;
   transition: all 0.2s ease;
 }
-.terminal-status-live { color: var(--nova-cyan); border-color: var(--nova-border-strong); background: rgba(111, 227, 255, 0.08); }
+.terminal-status-live { color: var(--nova-ember); border-color: var(--nova-border-strong); background: rgba(255, 180, 84, 0.06); }
+
+/* Host tag on the right of the status bar — the OpenCode-style "who am I" readout. */
+.terminal-host {
+  flex-shrink: 0;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--nova-faint);
+  border-left: 1px solid var(--nova-border);
+  padding-left: 10px;
+}
+@media (max-width: 720px) {
+  .terminal-host { display: none; }
+}
 
 .terminal-status-dot {
   width: 5px;
@@ -369,8 +389,8 @@
 }
 
 .terminal-orbit {
-  color: var(--nova-cyan);
-  font-family: ui-monospace, monospace;
+  color: var(--nova-ember);
+  font-family: var(--nova-mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -379,11 +399,11 @@
 .terminal-branches {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
-  padding: 9px 14px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--nova-border);
-  background: rgba(255, 255, 255, 0.018);
+  background: rgba(255, 255, 255, 0.012);
   flex-shrink: 0;
 }
 
@@ -391,16 +411,15 @@
   display: flex;
   align-items: center;
   border: 1px solid var(--nova-border);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 1px 3px 1px 2px;
   background: transparent;
   transition: all 0.15s ease;
 }
-.terminal-branch-tab:hover { border-color: rgba(111, 227, 255, 0.3); }
+.terminal-branch-tab:hover { border-color: rgba(255, 180, 84, 0.3); }
 .terminal-branch-tab-active {
   border-color: var(--nova-border-strong);
-  background: rgba(111, 227, 255, 0.1);
-  box-shadow: 0 0 18px -8px var(--nova-cyan);
+  background: rgba(255, 180, 84, 0.07);
 }
 
 .terminal-branch-select {
@@ -412,8 +431,8 @@
   color: var(--nova-muted);
   font: inherit;
   font-size: 11.5px;
-  padding: 4px 9px;
-  border-radius: 999px;
+  padding: 3px 9px;
+  border-radius: 0;
   cursor: pointer;
   max-width: 230px;
   overflow: hidden;
@@ -429,9 +448,9 @@
   border-radius: 999px;
   background: var(--nova-muted);
 }
-.terminal-branch-dot-running { background: var(--nova-cyan); box-shadow: 0 0 8px var(--nova-cyan); animation: nova-pulse 1.6s ease-in-out infinite; }
-.terminal-branch-dot-completed { background: var(--nova-mint); box-shadow: 0 0 7px rgba(126, 255, 196, 0.6); }
-.terminal-branch-dot-failed { background: var(--nova-error); box-shadow: 0 0 7px rgba(255, 143, 146, 0.6); }
+.terminal-branch-dot-running { background: var(--nova-ember); box-shadow: 0 0 6px var(--nova-ember); animation: nova-pulse 1.6s ease-in-out infinite; }
+.terminal-branch-dot-completed { background: var(--nova-mint); box-shadow: 0 0 5px rgba(111, 227, 165, 0.6); }
+.terminal-branch-dot-failed { background: var(--nova-error); box-shadow: 0 0 5px rgba(239, 125, 132, 0.6); }
 .terminal-branch-dot-idle { background: var(--nova-faint); }
 
 @keyframes nova-pulse {
@@ -445,9 +464,9 @@
   color: var(--nova-faint);
   font-size: 14px;
   line-height: 1;
-  padding: 3px 7px;
+  padding: 2px 7px;
   cursor: pointer;
-  border-radius: 999px;
+  border-radius: 0;
   transition: color 0.15s ease;
 }
 .terminal-branch-close:hover { color: var(--nova-error); }
@@ -455,9 +474,9 @@
 /* ------------------------------------------------------------ stage track */
 
 .terminal-track-panel {
-  padding: 15px 18px 12px;
+  padding: 13px 16px 10px;
   border-bottom: 1px solid var(--nova-border);
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.01);
   overflow-x: auto;
   transition: background 0.3s ease;
   flex-shrink: 0;
@@ -466,16 +485,15 @@
 .terminal-track-art {
   margin: 0;
   color: var(--nova-accent);
-  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--nova-mono);
   font-size: 12.5px;
   line-height: 1.35;
   white-space: pre;
-  text-shadow: 0 0 22px rgba(159, 220, 255, 0.22);
 }
 
 .terminal-celebration {
   margin: 8px 0 0;
-  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--nova-mono);
   font-size: 12.5px;
   line-height: 1.3;
   white-space: pre;
@@ -484,14 +502,13 @@
 
 .terminal-track-completed .terminal-celebration {
   color: var(--nova-mint);
-  text-shadow: 0 0 16px rgba(126, 255, 196, 0.4);
 }
-.terminal-track-completed { background: rgba(126, 255, 196, 0.05); }
-.terminal-track-failed { background: rgba(255, 143, 146, 0.05); }
+.terminal-track-completed { background: rgba(111, 227, 165, 0.04); }
+.terminal-track-failed { background: rgba(239, 125, 132, 0.04); }
 .terminal-failure-art { color: var(--nova-error); }
 
 @keyframes terminal-celebration-pop {
-  from { opacity: 0; transform: scale(0.94); }
+  from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
 
@@ -502,8 +519,8 @@
 .terminal-body {
   flex: 1;
   min-height: 0;
-  padding: 18px 20px 14px;
-  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  padding: 16px 18px 12px;
+  font-family: var(--nova-mono);
   font-size: 13px;
   line-height: 1.7;
   overflow-y: auto;
@@ -512,8 +529,7 @@
 
 .terminal-banner {
   margin: 0 0 12px;
-  color: var(--nova-cyan);
-  text-shadow: 0 0 20px rgba(111, 227, 255, 0.4);
+  color: var(--nova-ember);
   font-size: 12px;
   line-height: 1.4;
   white-space: pre;
@@ -530,38 +546,42 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-.terminal-line-system { color: var(--nova-accent); font-weight: 600; }
-.terminal-line-muted { color: var(--nova-muted); }
-.terminal-line-agent { color: var(--nova-violet); }
-.terminal-line-tool { color: var(--nova-amber); }
+/* OpenCode-style log tones: system reads as a dim directive, tool calls as
+   faint italic aside, agent work as plain text, and success/error stay the
+   only loud colors in the room. */
+.terminal-line-system { color: var(--nova-ember); font-weight: 600; }
+.terminal-line-muted { color: var(--nova-faint); }
+.terminal-line-agent { color: var(--nova-text); }
+.terminal-line-tool { color: var(--nova-amber); font-style: italic; }
 .terminal-line-success { color: var(--nova-mint); }
 .terminal-line-warn { color: var(--nova-warn); }
 .terminal-line-error { color: var(--nova-error); }
-.terminal-line-accent { color: var(--nova-cyan); }
+.terminal-line-accent { color: var(--nova-ember); }
 .terminal-line-input { color: var(--nova-text); }
 
 .terminal-prompt {
-  color: var(--nova-cyan);
+  color: var(--nova-ember);
   font-weight: 700;
   margin-right: 2px;
+  text-shadow: 0 0 12px rgba(255, 180, 84, 0.45);
 }
 
 .terminal-body::-webkit-scrollbar,
-.nova-slot-aside::-webkit-scrollbar { width: 9px; }
+.nova-slot-aside::-webkit-scrollbar { width: 8px; }
 .terminal-body::-webkit-scrollbar-track,
 .nova-slot-aside::-webkit-scrollbar-track { background: transparent; }
 .terminal-body::-webkit-scrollbar-thumb,
-.nova-slot-aside::-webkit-scrollbar-thumb { background: rgba(126, 156, 255, 0.22); border-radius: 6px; }
+.nova-slot-aside::-webkit-scrollbar-thumb { background: rgba(232, 198, 152, 0.2); border-radius: 0; }
 .terminal-body::-webkit-scrollbar-thumb:hover,
-.nova-slot-aside::-webkit-scrollbar-thumb:hover { background: rgba(126, 156, 255, 0.38); }
+.nova-slot-aside::-webkit-scrollbar-thumb:hover { background: rgba(232, 198, 152, 0.36); }
 
 /* --------------------------------------------- pinned dock: presets + input */
 
 .terminal-dock {
   flex-shrink: 0;
   border-top: 1px solid var(--nova-border);
-  background: linear-gradient(rgba(255, 255, 255, 0.012), rgba(255, 255, 255, 0.038));
-  padding: 12px 16px 14px;
+  background: var(--nova-panel-solid);
+  padding: 10px 14px 12px;
 }
 
 .terminal-run-controls {
@@ -569,9 +589,9 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  padding: 8px 16px;
+  padding: 7px 14px;
   border-bottom: 1px solid var(--nova-border);
-  background: rgba(255, 255, 255, 0.014);
+  background: rgba(255, 255, 255, 0.01);
 }
 
 .terminal-run-state {
@@ -579,13 +599,13 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--nova-muted);
-  padding: 3px 8px;
+  padding: 2px 8px;
   border: 1px solid var(--nova-border);
-  border-radius: 999px;
+  border-radius: 0;
 }
-.terminal-run-state-running { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.4); }
-.terminal-run-state-paused { color: var(--nova-warn); border-color: rgba(255, 207, 107, 0.4); }
-.terminal-run-state-awaiting_approval { color: var(--nova-warn); border-color: rgba(255, 207, 107, 0.4); }
+.terminal-run-state-running { color: var(--nova-mint); border-color: rgba(111, 227, 165, 0.4); }
+.terminal-run-state-paused { color: var(--nova-warn); border-color: rgba(230, 180, 92, 0.4); }
+.terminal-run-state-awaiting_approval { color: var(--nova-warn); border-color: rgba(230, 180, 92, 0.4); }
 
 .terminal-run-button {
   font: inherit;
@@ -593,14 +613,14 @@
   background: transparent;
   border: 1px solid var(--nova-border);
   color: var(--nova-accent);
-  border-radius: 999px;
-  padding: 4px 13px;
+  border-radius: 0;
+  padding: 3px 12px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.terminal-run-button:hover:not(:disabled) { border-color: var(--nova-border-strong); color: var(--nova-cyan); }
+.terminal-run-button:hover:not(:disabled) { border-color: var(--nova-border-strong); color: var(--nova-ember); }
 .terminal-run-button:disabled { opacity: 0.4; cursor: default; }
-.terminal-run-resume { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.42); }
+.terminal-run-resume { color: var(--nova-mint); border-color: rgba(111, 227, 165, 0.42); }
 .terminal-run-stop:hover:not(:disabled) { border-color: var(--nova-error); color: var(--nova-error); }
 
 .terminal-run-note {
@@ -618,16 +638,17 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 11px;
+  margin-bottom: 10px;
 }
 
 .terminal-approval {
   display: flex;
   align-items: center;
   gap: 9px;
-  background: rgba(255, 207, 107, 0.08);
-  border: 1px solid rgba(255, 207, 107, 0.34);
-  border-radius: var(--nova-radius-sm);
+  background: rgba(230, 180, 92, 0.06);
+  border: 1px solid rgba(230, 180, 92, 0.3);
+  border-left: 3px solid var(--nova-warn);
+  border-radius: 0;
   padding: 8px 10px;
 }
 
@@ -647,7 +668,7 @@
 .terminal-approval-reject {
   font: inherit;
   font-size: 12px;
-  border-radius: 999px;
+  border-radius: 0;
   padding: 5px 13px;
   cursor: pointer;
   flex-shrink: 0;
@@ -655,11 +676,11 @@
 }
 
 .terminal-approval-accept {
-  background: rgba(126, 255, 196, 0.12);
-  border: 1px solid rgba(126, 255, 196, 0.42);
+  background: rgba(111, 227, 165, 0.1);
+  border: 1px solid rgba(111, 227, 165, 0.42);
   color: var(--nova-mint);
 }
-.terminal-approval-accept:hover:not(:disabled) { background: rgba(126, 255, 196, 0.22); }
+.terminal-approval-accept:hover:not(:disabled) { background: rgba(111, 227, 165, 0.18); }
 
 .terminal-approval-reject {
   background: transparent;
@@ -676,7 +697,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-bottom: 9px;
+  margin-bottom: 8px;
 }
 .terminal-workspace-label {
   font-size: 10px;
@@ -691,16 +712,16 @@
   background: transparent;
   border: 1px solid var(--nova-border);
   color: var(--nova-muted);
-  border-radius: 999px;
-  padding: 3px 11px;
+  border-radius: 0;
+  padding: 2px 11px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 .terminal-workspace-option:hover { color: var(--nova-accent); border-color: var(--nova-border-strong); }
 .terminal-workspace-option-active {
-  color: var(--nova-cyan);
+  color: var(--nova-ember);
   border-color: var(--nova-border-strong);
-  background: rgba(111, 227, 255, 0.1);
+  background: rgba(255, 180, 84, 0.08);
 }
 .terminal-workspace-tools {
   font-size: 10px;
@@ -716,13 +737,13 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
-  margin-bottom: 11px;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .terminal-presets-label {
   font-size: 11px;
-  color: var(--nova-cyan);
+  color: var(--nova-ember);
   cursor: help;
   opacity: 0.75;
 }
@@ -730,11 +751,11 @@
 .terminal-preset-button {
   font: inherit;
   font-size: 12px;
-  background: rgba(111, 227, 255, 0.07);
+  background: rgba(255, 180, 84, 0.05);
   border: 1px solid var(--nova-border);
   color: var(--nova-accent);
-  border-radius: 999px;
-  padding: 6px 14px;
+  border-radius: 0;
+  padding: 5px 13px;
   cursor: pointer;
   transition: all 0.15s ease;
   max-width: 100%;
@@ -743,10 +764,9 @@
   white-space: nowrap;
 }
 .terminal-preset-button:hover:not(:disabled) {
-  background: rgba(111, 227, 255, 0.16);
+  background: rgba(255, 180, 84, 0.12);
   border-color: var(--nova-border-strong);
-  color: var(--nova-cyan);
-  transform: translateY(-1px);
+  color: var(--nova-ember);
 }
 .terminal-preset-button:disabled { opacity: 0.45; cursor: default; }
 
@@ -754,15 +774,15 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: rgba(4, 8, 22, 0.5);
+  background: rgba(10, 7, 4, 0.5);
   border: 1px solid var(--nova-border);
-  border-radius: var(--nova-radius-sm);
-  padding: 10px 12px;
+  border-radius: 0;
+  padding: 9px 12px;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .terminal-input-row:focus-within {
   border-color: var(--nova-border-strong);
-  box-shadow: 0 0 0 3px rgba(111, 227, 255, 0.08);
+  box-shadow: inset 2px 0 0 var(--nova-ember);
 }
 
 .terminal-input {
@@ -772,18 +792,18 @@
   border: 0;
   outline: none;
   color: var(--nova-text);
-  font-family: "SF Mono", "Fira Code", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--nova-mono);
   font-size: 13px;
-  caret-color: var(--nova-cyan);
+  caret-color: var(--nova-ember);
 }
 .terminal-input::placeholder { color: var(--nova-faint); }
 
 .terminal-send {
   flex-shrink: 0;
-  background: rgba(111, 227, 255, 0.1);
+  background: rgba(255, 180, 84, 0.08);
   border: 1px solid var(--nova-border);
-  color: var(--nova-cyan);
-  border-radius: 7px;
+  color: var(--nova-ember);
+  border-radius: 0;
   width: 30px;
   height: 26px;
   font-size: 13px;
@@ -791,7 +811,7 @@
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.terminal-send:hover:not(:disabled) { background: var(--nova-cyan); color: #06131f; border-color: var(--nova-cyan); }
+.terminal-send:hover:not(:disabled) { background: var(--nova-ember); color: #190e03; border-color: var(--nova-ember); }
 .terminal-send:disabled { opacity: 0.3; cursor: default; }
 
 /* ------------------------------------------------------- shared side panel */
@@ -799,14 +819,12 @@
 .task-history,
 .schedule-section {
   background: var(--nova-panel);
-  backdrop-filter: var(--nova-glass);
-  -webkit-backdrop-filter: var(--nova-glass);
   border: 1px solid var(--nova-border);
   border-radius: var(--nova-radius);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 20px 60px -34px rgba(6, 12, 40, 0.85);
+  box-shadow: 0 16px 50px -34px rgba(5, 3, 2, 0.85);
 }
 
-.task-history { padding: 14px 16px 12px; }
+.task-history { padding: 12px 14px 10px; }
 
 .task-history-header {
   display: flex;
@@ -855,7 +873,7 @@
   text-align: left;
   transition: color 0.15s ease;
 }
-.task-folder-toggle:hover { color: var(--nova-cyan); }
+.task-folder-toggle:hover { color: var(--nova-ember); }
 
 .task-folder-glyph {
   display: inline-block;
@@ -863,7 +881,7 @@
   font-size: 10px;
   transition: transform 0.18s ease, color 0.18s ease;
 }
-.task-folder-glyph-open { transform: rotate(90deg); color: var(--nova-cyan); }
+.task-folder-glyph-open { transform: rotate(90deg); color: var(--nova-ember); }
 
 .task-folder-label { flex: 1; }
 
@@ -886,7 +904,7 @@
   gap: 7px;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
-.task-card:hover { border-color: rgba(111, 227, 255, 0.3); background: rgba(255, 255, 255, 0.05); }
+.task-card:hover { border-color: rgba(255, 180, 84, 0.3); background: rgba(255, 255, 255, 0.04); }
 
 .task-card-main {
   display: flex;
@@ -921,11 +939,11 @@
   font-weight: 700;
   white-space: nowrap;
 }
-.task-status-running { color: var(--nova-cyan); border-color: var(--nova-cyan); background: rgba(111, 227, 255, 0.1); }
-.task-status-awaiting_approval { color: var(--nova-warn); border-color: rgba(255, 207, 107, 0.55); }
+.task-status-running { color: var(--nova-ember); border-color: var(--nova-ember); background: rgba(255, 180, 84, 0.08); }
+.task-status-awaiting_approval { color: var(--nova-warn); border-color: rgba(230, 180, 92, 0.55); }
 .task-status-quoted, .task-status-draft { color: var(--nova-muted); }
-.task-status-completed { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.55); background: rgba(126, 255, 196, 0.08); }
-.task-status-blocked, .task-status-cancelled { color: var(--nova-error); border-color: rgba(255, 143, 146, 0.5); }
+.task-status-completed { color: var(--nova-mint); border-color: rgba(111, 227, 165, 0.55); background: rgba(111, 227, 165, 0.06); }
+.task-status-blocked, .task-status-cancelled { color: var(--nova-error); border-color: rgba(239, 125, 132, 0.5); }
 
 .task-card-meta {
   display: flex;
@@ -945,13 +963,13 @@
   gap: 7px;
   font-size: 11px;
   padding: 5px 7px;
-  border-radius: 7px;
-  background: rgba(126, 255, 196, 0.06);
-  border: 1px solid rgba(126, 255, 196, 0.2);
+  border-radius: 2px;
+  background: rgba(111, 227, 165, 0.05);
+  border: 1px solid rgba(111, 227, 165, 0.18);
   min-width: 0;
 }
-.task-card-live-starting { background: rgba(111, 227, 255, 0.06); border-color: rgba(111, 227, 255, 0.22); }
-.task-card-live-stalled { background: rgba(255, 207, 107, 0.07); border-color: rgba(255, 207, 107, 0.3); }
+.task-card-live-starting { background: rgba(255, 180, 84, 0.05); border-color: rgba(255, 180, 84, 0.2); }
+.task-card-live-stalled { background: rgba(230, 180, 92, 0.06); border-color: rgba(230, 180, 92, 0.28); }
 
 .task-card-live-dot {
   width: 6px;
@@ -961,7 +979,7 @@
   background: var(--nova-mint);
   animation: task-live-pulse 1.8s ease-in-out infinite;
 }
-.task-card-live-starting .task-card-live-dot { background: var(--nova-cyan); }
+.task-card-live-starting .task-card-live-dot { background: var(--nova-ember); }
 .task-card-live-stalled .task-card-live-dot { background: var(--nova-warn); animation: none; }
 
 @keyframes task-live-pulse {
@@ -993,7 +1011,7 @@
   background: transparent;
   border: 1px solid var(--nova-border);
   color: var(--nova-muted);
-  border-radius: 7px;
+  border-radius: 2px;
   padding: 6px 12px;
   font: inherit;
   font-size: 11px;
@@ -1004,7 +1022,7 @@
 .task-card-stop:hover:not(:disabled) {
   border-color: var(--nova-error);
   color: var(--nova-error);
-  background: rgba(255, 143, 146, 0.08);
+  background: rgba(239, 125, 132, 0.06);
 }
 .task-card-stop:disabled { opacity: 0.5; cursor: default; }
 
@@ -1019,7 +1037,7 @@
   background: transparent;
   border: 1px solid var(--nova-border);
   color: var(--nova-accent);
-  border-radius: 7px;
+  border-radius: 2px;
   padding: 6px 10px;
   font: inherit;
   font-size: 11px;
@@ -1028,17 +1046,18 @@
 }
 .task-card-resume:hover {
   border-color: var(--nova-border-strong);
-  color: var(--nova-cyan);
-  background: rgba(111, 227, 255, 0.1);
+  color: var(--nova-ember);
+  background: rgba(255, 180, 84, 0.08);
 }
 
 .panel-boundary {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  border: 1px solid rgba(255, 207, 107, 0.3);
-  background: rgba(255, 207, 107, 0.06);
-  border-radius: var(--nova-radius-sm);
+  border: 1px solid rgba(230, 180, 92, 0.26);
+  border-left: 3px solid var(--nova-warn);
+  background: rgba(230, 180, 92, 0.05);
+  border-radius: 0;
   padding: 10px;
 }
 .panel-boundary-title { font-size: 11px; color: var(--nova-warn); }
@@ -1046,17 +1065,16 @@
 .panel-boundary-retry {
   font: inherit; font-size: 11px; align-self: flex-start;
   background: transparent; border: 1px solid var(--nova-border); color: var(--nova-accent);
-  border-radius: 7px; padding: 3px 11px; cursor: pointer;
+  border-radius: 0; padding: 3px 11px; cursor: pointer;
 }
-.panel-boundary-retry:hover { border-color: var(--nova-border-strong); color: var(--nova-cyan); }
+.panel-boundary-retry:hover { border-color: var(--nova-border-strong); color: var(--nova-ember); }
 
 /* -------------------------------------------------------- artifact drawer */
 
 .artifact-scrim {
   position: fixed;
   inset: 0;
-  background: rgba(4, 6, 14, 0.66);
-  backdrop-filter: blur(2px);
+  background: rgba(2, 4, 10, 0.72);
   z-index: 40;
   animation: artifact-fade 0.18s ease;
 }
@@ -1071,9 +1089,8 @@
   display: flex;
   flex-direction: column;
   background: var(--nova-panel-solid);
-  backdrop-filter: var(--nova-glass);
   border-left: 1px solid var(--nova-border-strong);
-  box-shadow: -28px 0 60px rgba(0, 0, 0, 0.45);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
   animation: artifact-slide 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1087,11 +1104,12 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--nova-border);
+  background: var(--nova-panel-solid);
 }
-.artifact-drawer-title { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--nova-text); }
-.artifact-drawer-count { font-size: 10px; color: var(--nova-faint); border: 1px solid var(--nova-border); border-radius: 999px; padding: 1px 7px; }
+.artifact-drawer-title { font-size: 11.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--nova-text); }
+.artifact-drawer-count { font-size: 10px; color: var(--nova-faint); border: 1px solid var(--nova-border); border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
 .artifact-drawer-close {
   margin-left: auto; background: transparent; border: 0; color: var(--nova-muted);
   font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
@@ -1116,11 +1134,11 @@
 
 .artifact-item {
   width: 100%; display: flex; align-items: center; gap: 7px;
-  background: transparent; border: 0; border-radius: 7px; padding: 7px 8px;
+  background: transparent; border: 0; border-radius: 0; padding: 7px 8px;
   font: inherit; font-size: 11.5px; color: var(--nova-muted); cursor: pointer; text-align: left;
 }
-.artifact-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--nova-text); }
-.artifact-item-active { background: rgba(111, 227, 255, 0.1); color: var(--nova-cyan); }
+.artifact-item:hover { background: rgba(255, 255, 255, 0.03); color: var(--nova-text); }
+.artifact-item-active { background: rgba(255, 180, 84, 0.08); color: var(--nova-ember); }
 .artifact-item-kind {
   font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
   border: 1px solid var(--nova-border); border-radius: 999px; padding: 1px 6px; flex-shrink: 0;
@@ -1140,9 +1158,9 @@
 .artifact-view-action {
   font: inherit; font-size: 11px; text-decoration: none;
   background: transparent; border: 1px solid var(--nova-border); color: var(--nova-accent);
-  border-radius: 999px; padding: 3px 11px; cursor: pointer; flex-shrink: 0;
+  border-radius: 0; padding: 3px 11px; cursor: pointer; flex-shrink: 0;
 }
-.artifact-view-action:hover { border-color: var(--nova-border-strong); color: var(--nova-cyan); }
+.artifact-view-action:hover { border-color: var(--nova-border-strong); color: var(--nova-ember); }
 
 .artifact-code {
   flex: 1; min-height: 0; margin: 0; padding: 14px;
@@ -1152,10 +1170,10 @@
 
 .task-card-files {
   background: transparent; border: 1px solid var(--nova-border); color: var(--nova-muted);
-  border-radius: 7px; padding: 6px 12px; font: inherit; font-size: 11px;
+  border-radius: 2px; padding: 6px 12px; font: inherit; font-size: 11px;
   cursor: pointer; flex-shrink: 0; transition: all 0.15s ease;
 }
-.task-card-files:hover { border-color: var(--nova-border-strong); color: var(--nova-cyan); }
+.task-card-files:hover { border-color: var(--nova-border-strong); color: var(--nova-ember); }
 
 /* ----------------------------------------------------------- sandbox panel */
 
@@ -1173,13 +1191,14 @@
   border: 1px solid var(--nova-border);
   border-radius: 999px;
   padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
 }
 .sandbox-panel-error { font-size: 11px; color: var(--nova-error); margin: 0; }
 
 .sandbox-usage {
   display: flex; align-items: baseline; gap: 8px;
   font-size: 11px; color: var(--nova-muted);
-  border: 1px solid var(--nova-border); border-radius: var(--nova-radius-sm);
+  border: 1px solid var(--nova-border); border-radius: 2px;
   padding: 7px 10px; background: var(--nova-panel-raised);
 }
 .sandbox-usage-cost { margin-left: auto; color: var(--nova-faint); font-variant-numeric: tabular-nums; }
@@ -1189,7 +1208,7 @@
 
 .sandbox-card {
   border: 1px solid var(--nova-border);
-  border-radius: var(--nova-radius-sm);
+  border-radius: 2px;
   background: var(--nova-panel-raised);
   padding: 9px 10px;
   display: flex;
@@ -1219,11 +1238,11 @@
 .sandbox-action {
   font: inherit; font-size: 11px; flex: 1;
   background: transparent; border: 1px solid var(--nova-border); color: var(--nova-muted);
-  border-radius: 7px; padding: 4px 8px; cursor: pointer; transition: all 0.15s ease;
+  border-radius: 2px; padding: 4px 8px; cursor: pointer; transition: all 0.15s ease;
 }
 .sandbox-action:hover:not(:disabled) { border-color: var(--nova-border-strong); color: var(--nova-accent); }
 .sandbox-action:disabled { opacity: 0.45; cursor: default; }
-.sandbox-action-resume { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.4); }
+.sandbox-action-resume { color: var(--nova-mint); border-color: rgba(111, 227, 165, 0.4); }
 .sandbox-action-stop:hover:not(:disabled) { border-color: var(--nova-error); color: var(--nova-error); }
 
 /* ---------------------------------------------------------- schedule panel */
@@ -1234,7 +1253,7 @@
   gap: 14px;
 }
 
-.schedule-section { padding: 14px 16px; }
+.schedule-section { padding: 12px 14px; }
 
 .schedule-section-head {
   display: flex;
@@ -1273,19 +1292,19 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  border: 1px solid rgba(126, 255, 196, 0.5);
-  background: rgba(126, 255, 196, 0.08);
+  border: 1px solid rgba(111, 227, 165, 0.5);
+  background: rgba(111, 227, 165, 0.06);
   border-radius: 999px;
   padding: 2px 8px;
 }
 
 .schedule-code-row code {
-  background: rgba(111, 227, 255, 0.11);
+  background: rgba(255, 180, 84, 0.08);
   border: 1px solid var(--nova-border);
-  border-radius: 7px;
+  border-radius: 0;
   padding: 5px 9px;
-  color: var(--nova-cyan);
-  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  color: var(--nova-ember);
+  font-family: var(--nova-mono);
   font-size: 12px;
 }
 
@@ -1297,9 +1316,9 @@
 
 .schedule-form input,
 .schedule-form select {
-  background: rgba(4, 8, 22, 0.45);
+  background: rgba(10, 7, 4, 0.45);
   border: 1px solid var(--nova-border);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 8px 11px;
   color: var(--nova-text);
   font: inherit;
@@ -1316,7 +1335,7 @@
   border: 1px solid var(--nova-border);
   background: transparent;
   color: var(--nova-text);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 7px 12px;
   font: inherit;
   font-size: 11.5px;
@@ -1326,10 +1345,10 @@
 .schedule-panel button.outline:hover { border-color: var(--nova-border-strong); }
 
 .schedule-panel button.primary {
-  background: var(--nova-cyan);
-  color: #06131f;
+  background: var(--nova-ember);
+  color: #190e03;
   border: 0;
-  border-radius: 8px;
+  border-radius: 0;
   padding: 8px 15px;
   font: inherit;
   font-size: 12.5px;
@@ -1355,7 +1374,7 @@
   font-size: 12px;
   background: var(--nova-panel-raised);
   border: 1px solid var(--nova-border);
-  border-radius: var(--nova-radius-sm);
+  border-radius: 2px;
   padding: 8px 10px;
 }
 
@@ -1368,8 +1387,8 @@
   white-space: nowrap;
 }
 
-.schedule-status-active { color: var(--nova-mint); border-color: rgba(126, 255, 196, 0.5); }
-.schedule-status-paused { color: var(--nova-warn); border-color: rgba(255, 207, 107, 0.5); }
+.schedule-status-active { color: var(--nova-mint); border-color: rgba(111, 227, 165, 0.5); }
+.schedule-status-paused { color: var(--nova-warn); border-color: rgba(230, 180, 92, 0.5); }
 .schedule-status-disabled { color: var(--nova-muted); }
 
 .schedule-notice {
@@ -1379,8 +1398,9 @@
   margin: 0;
   padding: 9px 12px;
   border: 1px solid var(--nova-border);
-  border-radius: var(--nova-radius-sm);
-  background: rgba(111, 227, 255, 0.06);
+  border-left: 3px solid var(--nova-ember);
+  border-radius: 0;
+  background: rgba(255, 180, 84, 0.04);
 }
 
 /* ------------------------------------------------------------- responsive */
@@ -1400,7 +1420,7 @@
 }
 
 @media (max-width: 720px) {
-  .nova-shell { padding: 14px 13px 22px; gap: 13px; }
+  .nova-shell { padding: 12px 11px 20px; gap: 11px; }
   .nova-topbar { gap: 11px; }
   .nova-brand-tag { display: none; }
 
@@ -1447,6 +1467,5 @@
   .terminal-line,
   .terminal-celebration { animation: none; }
   .terminal-branch-dot-running { animation: none; }
-  .terminal-preset-button:hover:not(:disabled) { transform: none; }
   .nova-brand:hover .nova-brand-mark { transform: none; }
 }
