@@ -1,0 +1,81 @@
+name: Release Desktop
+
+# Builds the Nova Windows installer (self-contained, no Node needed) on a v* tag
+# and publishes it to GitHub Releases. Also generates the signed `latest.json`
+# the app's auto-updater checks against, so installed apps pick up new versions
+# automatically.
+#
+# To release a new version:
+#   1. Bump `version` in apps/nova-desktop/src-tauri/tauri.conf.json AND
+#      apps/nova-desktop/package.json (and src-tauri/Cargo.toml).
+#   2. Push a tag matching the version: `git tag v0.2.0 && git push origin v0.2.0`
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   TAURI_SIGNING_PRIVATE_KEY        — content of the private key from
+#                                       `npm run tauri signer generate`
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password (unset if none)
+# The matching public key is baked into apps/nova-desktop/src-tauri/tauri.conf.json.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches app version
+        shell: bash
+        run: |
+          APP_VERSION=$(node -p "require('./apps/nova-desktop/src-tauri/tauri.conf.json').version")
+          echo "App version: $APP_VERSION"
+          echo "Pushed tag:  ${{ github.ref_name }}"
+          [[ "${{ github.ref_name }}" == "v$APP_VERSION" ]] || {
+            echo "::error::Tag must match the app version (v$APP_VERSION). Bump the version in apps/nova-desktop first."
+            exit 1
+          }
+
+      - name: Setup bun (for the self-contained sidecar)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: apps/nova-desktop
+        run: npm install
+
+      - name: Build and publish to GitHub Releases
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/nova-desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Nova ${{ github.ref_name }}"
+          releaseBody: |
+            Nova Desktop for Windows — self-contained, no Node required.
+
+            - Installer: `Nova_${{ github.ref_name }}_x64-setup.exe` (NSIS)
+            - Auto-updates: installed apps will update themselves from this release.
+            - Source: circuit-agent
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc
+          updaterJsonPreferNsis: true

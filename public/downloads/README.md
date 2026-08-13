@@ -1,15 +1,8 @@
 # Downloads
 
-Drop the packaged Windows installer here so the `/download` page's primary CTA
-(`/downloads/nova-setup-0.1.0-x64.msi`) resolves.
+Desktop installers are no longer dropped into this folder.
 
-Build it from the desktop app:
-
-```bash
-cd apps/nova-desktop
-npm install
-npm run package:windows
-```
-
-Copy the resulting `.msi` from `src-tauri/target/release/bundle/msi/` into this
-folder as `nova-setup-0.1.0-x64.msi` (or update the href in `app/download/page.tsx`).
+The `/download` page resolves the latest installer from GitHub Releases
+(`https://github.com/chrisnkuno/circuit-agent/releases/latest`), which is produced by the
+`.github/workflows/release-desktop.yml` workflow when a `v*` tag is pushed. See
+`apps/nova-desktop/README.md` for the release + auto-update setup.

@@ -1,6 +1,6 @@
 # Nova Desktop
 
-Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a Node sidecar that runs `@circuit-nova/nova-core` (`NovaAgent`) with the same `.nova/` session format as `nova-cli`.
+Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar that runs `@circuit-nova/nova-core` (`NovaAgent`) with the same `.nova/` session format as `nova-cli`. In release builds the sidecar is compiled into a **single self-contained executable** (via `bun build --compile`), so end users do **not** need Node installed.
 
 ## Features
 
@@ -11,6 +11,7 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a Node side
 - Sessions list + resume
 - Undo (git checkpoints), cost panel, cancel
 - E2B sandbox toggle, upload, pull
+- **Auto-update** — checks GitHub Releases and installs new versions in place
 
 ## Prerequisites
 
@@ -50,17 +51,40 @@ On first launch, enter a CircuitNotion (or other) API key. The base URL defaults
 
 ## Production / Windows packaging
 
+`beforeBuildCommand` runs the frontend build and the sidecar bundle. `sidecar:bundle`
+compiles the sidecar + `nova-core` into a single Windows executable
+(`src-tauri/binaries/nova-sidecar-x86_64-pc-windows-msvc.exe`) with `bun build --compile`,
+so no Node is required on user machines. Tauri then emits the NSIS installer.
+
 ```bash
-npm run sidecar:bundle
+npm run sidecar:bundle   # needs bun on PATH (or npm-global bun) on Windows
 npm run tauri:build
 ```
 
-`beforeBuildCommand` runs the frontend build and sidecar bundle. Tauri emits `.msi` / NSIS targets from `src-tauri/tauri.conf.json`.
+### Releasing + auto-updates
 
-For a self-contained Windows binary that does **not** require Node on the user machine, replace `src-tauri/binaries/nova-sidecar-x86_64-pc-windows-msvc.exe` with a packaged Node binary (e.g. [`pkg`](https://github.com/vercel/pkg) / Node SEA) built from `sidecar/dist/index.js`, then re-run `tauri build`.
+Releases are built by GitHub Actions (`.github/workflows/release-desktop.yml` in the repo
+root) and published to GitHub Releases:
+
+1. Bump the version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`.
+2. Push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The workflow builds the installer on a `windows-latest` runner, signs the updater artifacts,
+and uploads them to the GitHub Release along with `latest.json`. The app checks
+`https://github.com/chrisnkuno/circuit-agent/releases/latest/download/latest.json` on launch
+and updates itself.
+
+Updater signing keys (public key is in `tauri.conf.json`):
+
+```bash
+npm run tauri signer generate -- -w ~/.tauri/nova-desktop.key
+```
+
+Then add the private key to GitHub repo secrets as `TAURI_SIGNING_PRIVATE_KEY`
+(and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if you set a password). Never commit the private key.
 
 ## Architecture
 
 - `src/` — React UI
 - `sidecar/` — JSONL stdio host around `NovaAgent`
-- `src-tauri/` — windowing, folder picker, settings store, sidecar process bridge
+- `src-tauri/` — windowing, folder picker, settings store, sidecar process bridge, updater

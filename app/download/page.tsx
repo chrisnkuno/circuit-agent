@@ -4,8 +4,9 @@ import { CopyCommand } from "@/components/copy-command";
 
 /**
  * Download / run-anywhere page for Circuit·Nova.
- * The Download button targets public/downloads/nova-setup-0.1.0-x64.msi —
- * drop the packaged Tauri installer there (apps/nova-desktop → npm run package:windows).
+ * The installer is published to GitHub Releases by .github/workflows/release-desktop.yml
+ * (build on a v* tag → attach to the release). This page resolves the latest release
+ * so the primary CTA always points at the newest installer.
  */
 
 export const metadata = {
@@ -13,7 +14,57 @@ export const metadata = {
   description: "Download Nova Desktop for Windows or run Circuit·Nova from the CLI or the web.",
 };
 
-export default function DownloadPage() {
+const OWNER = "chrisnkuno";
+const REPO = "circuit-agent";
+
+export const revalidate = 600;
+
+type ReleaseAsset = {
+  name: string;
+  browser_download_url: string;
+  size: number;
+};
+
+type LatestRelease = {
+  tag_name: string;
+  html_url: string;
+  published_at: string | null;
+  assets: ReleaseAsset[];
+};
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "";
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
+}
+
+function pickInstaller(release: LatestRelease): ReleaseAsset | null {
+  const setup =
+    release.assets.find((a) => a.name.endsWith("-setup.exe")) ||
+    release.assets.find((a) => a.name.endsWith(".exe")) ||
+    release.assets.find((a) => a.name.endsWith(".msi"));
+  return setup ?? null;
+}
+
+async function getLatestRelease(): Promise<LatestRelease | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "circuit-agent" },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as LatestRelease;
+  } catch {
+    return null;
+  }
+}
+
+export default async function DownloadPage() {
+  const release = await getLatestRelease();
+  const installer = release ? pickInstaller(release) : null;
+  const fallbackUrl = `https://github.com/${OWNER}/${REPO}/releases/latest`;
+  const downloadUrl = installer?.browser_download_url ?? (release?.html_url ?? fallbackUrl);
+  const version = release?.tag_name?.replace(/^v/, "") ?? null;
+
   return (
     <div className="kage-page download-page">
       <GyroscopeScene />
@@ -31,20 +82,20 @@ export default function DownloadPage() {
 
         <div className="download-card">
           <div className="dl-row">
-            <a className="download-big" href="/downloads/nova-setup-0.1.0-x64.msi">
+            <a className="download-big" href={downloadUrl}>
               <svg width="15" height="15" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.2" /><path d="M2 11h8" stroke="currentColor" strokeWidth="1.2" /></svg>
-              <span>Download for Windows<span>64-bit installer · .msi</span></span>
+              <span>Download for Windows<span>{installer?.name ?? "64-bit installer"} · {installer ? formatBytes(installer.size) : "~60 MB"}</span></span>
             </a>
             <a className="download-alt" href="#avx2">Older PC without AVX2? Learn more</a>
           </div>
           <div className="dl-meta">
-            <span>Version 0.1.0</span>
+            <span>{version ? `Version ${version}` : "Latest release"}</span>
             <span>Windows 10 / 11</span>
             <span>WebView2</span>
           </div>
           <p className="dl-staging">
-            Installer not published yet — build it with <code>npm run package:windows</code> in
-            <code> apps/nova-desktop</code> and drop the <code>.msi</code> into <code>public/downloads/</code>.
+            Self-contained app — no Node or extra runtimes needed. Installed copies update
+            themselves automatically from new GitHub releases.
           </p>
         </div>
 
