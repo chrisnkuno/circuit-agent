@@ -27,5 +27,5 @@ if (platform() === "win32") {
   console.log("To produce Windows installers, run on Windows (or a Windows CI runner):");
   console.log("  rustup target add x86_64-pc-windows-msvc");
   console.log("  npm run tauri -- build --target x86_64-pc-windows-msvc");
-  console.log("Optionally replace src-tauri/binaries/nova-sidecar-x86_64-pc-windows-msvc.exe with a pkg/SEA Node binary first.");
+  console.log("The self-contained sidecar exe is produced by sidecar:bundle (bun build --compile).");
 }

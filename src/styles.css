@@ -415,6 +415,39 @@ button {
   font-size: 0.9rem;
 }
 
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-shell > .workspace {
+  flex: 1;
+  min-height: 0;
+}
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(135deg, rgba(61, 214, 198, 0.12), rgba(61, 214, 198, 0.05));
+  font-size: 0.85rem;
+}
+
+.update-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-banner-error {
+  color: var(--danger);
+}
+
 @media (max-width: 980px) {
   .workspace {
     grid-template-columns: 1fr;

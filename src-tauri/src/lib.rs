@@ -68,13 +68,27 @@ fn app_root() -> PathBuf {
   dir
 }
 
+fn is_bundled_sidecar(path: &PathBuf) -> bool {
+  path
+    .parent()
+    .and_then(|p| p.file_name())
+    .and_then(|s| s.to_str())
+    .is_some_and(|dir| dir == "binaries")
+    && path
+      .file_name()
+      .and_then(|s| s.to_str())
+      .is_some_and(|name| name.starts_with("nova-sidecar"))
+}
+
 fn sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-  // Prefer a plain Node entry so the GUI never blocks on `npx` network/prompts.
+  // Prefer the bundled sidecar binary (a self-contained exe on Windows) so the
+  // GUI never blocks on `npx` network/prompts and never needs Node installed.
   let resource = app
     .path()
     .resource_dir()
     .map_err(|e| e.to_string())?;
-  let bundled = resource.join("binaries").join("nova-sidecar");
+  let bundled_name = if cfg!(windows) { "nova-sidecar.exe" } else { "nova-sidecar" };
+  let bundled = resource.join("binaries").join(bundled_name);
   if bundled.exists() {
     return Ok(bundled);
   }
@@ -92,12 +106,8 @@ fn sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn spawn_sidecar_process(script: &PathBuf) -> Result<(Child, ChildStdin), String> {
-  let mut command = if script
-    .file_name()
-    .and_then(|s| s.to_str())
-    .is_some_and(|n| n.starts_with("nova-sidecar"))
-    && script.extension().is_none()
-  {
+  let mut command = if is_bundled_sidecar(script) {
+    // Self-contained binary (or the POSIX helper script) — run it directly.
     Command::new(script)
   } else if script.extension().and_then(|s| s.to_str()) == Some("ts") {
     // Never use `npx` here — it can hang the window waiting on the network/TTY.
@@ -281,6 +291,7 @@ pub fn run() {
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_store::Builder::default().build())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .manage(state)
     .invoke_handler(tauri::generate_handler![
       sidecar_start,
