@@ -203,10 +203,12 @@ export class NovaHost {
       workspace,
       approve: (request) => this.promptApproval(request),
       onEvent: (event) => this.forwardNovaEvent(event),
-      budgets:
-        budget && settings.budget
+      budgets: {
+        maxToolCallsPerTurn: 16,
+        ...(budget && settings.budget
           ? { maxRwf: Math.max(1, Math.round(settings.budget * (settings.fxRwfPerUsd ?? 1320))) }
-          : undefined,
+          : {}),
+      },
     });
     this.root = root;
     this.mode = mode;
