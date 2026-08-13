@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -135,10 +138,16 @@ fn spawn_sidecar_process(script: &PathBuf) -> Result<(Child, ChildStdin), String
     command.env("PATH", path);
   }
 
-  let mut child = command
+  let child = command
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
+    .stderr(Stdio::piped());
+  #[cfg(windows)]
+  {
+    // Spawn the sidecar without a console window (CREATE_NO_WINDOW).
+    let _ = child.creation_flags(0x08000000);
+  }
+  let mut child = child
     .spawn()
     .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
