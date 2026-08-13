@@ -70,27 +70,32 @@ fn app_root() -> PathBuf {
 
 fn is_bundled_sidecar(path: &PathBuf) -> bool {
   path
-    .parent()
-    .and_then(|p| p.file_name())
+    .file_name()
     .and_then(|s| s.to_str())
-    .is_some_and(|dir| dir == "binaries")
-    && path
-      .file_name()
-      .and_then(|s| s.to_str())
-      .is_some_and(|name| name.starts_with("nova-sidecar"))
+    .is_some_and(|name| name.starts_with("nova-sidecar"))
 }
 
 fn sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
   // Prefer the bundled sidecar binary (a self-contained exe on Windows) so the
   // GUI never blocks on `npx` network/prompts and never needs Node installed.
+  // Tauri places external binaries in the resource dir — NSIS installs put them
+  // at the root next to the app exe, so check both locations.
   let resource = app
     .path()
     .resource_dir()
     .map_err(|e| e.to_string())?;
-  let bundled_name = if cfg!(windows) { "nova-sidecar.exe" } else { "nova-sidecar" };
-  let bundled = resource.join("binaries").join(bundled_name);
-  if bundled.exists() {
-    return Ok(bundled);
+  let bundled_names = if cfg!(windows) {
+    ["nova-sidecar.exe", "nova-sidecar"]
+  } else {
+    ["nova-sidecar", "nova-sidecar.exe"]
+  };
+  for name in bundled_names {
+    for dir in [&resource, &resource.join("binaries")] {
+      let candidate = dir.join(name);
+      if candidate.exists() {
+        return Ok(candidate);
+      }
+    }
   }
 
   let dir = app_root();
