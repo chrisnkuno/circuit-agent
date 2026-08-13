@@ -13,3 +13,5 @@ playwright-report/
 test-results/
 .vercel
 .env*
+dev-server.log
+dev-server.err.log
