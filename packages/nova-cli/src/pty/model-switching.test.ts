@@ -146,7 +146,9 @@ describe("switching models under a real pty", () => {
     const p = await boot();
     const mark = p.output().length;
     p.write("/mod");
-    const seen = await p.waitFor(/\/models/, { timeoutMs: 15_000, since: mark });
+    // Wait for the last of the matching rows. The screen paints suggestions one row at a time, so
+    // waiting for /models (the row before /model) can observe a valid frame halfway through paint.
+    const seen = await p.waitFor(/model picker/, { timeoutMs: 15_000, since: mark });
     // Both commands sharing the prefix are offered, and nothing has been submitted to get them.
     expect(seen.slice(mark)).toContain("/model");
     expect(seen.slice(mark)).toContain("model picker");

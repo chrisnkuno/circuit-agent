@@ -63,6 +63,21 @@ describe("argument parsing", () => {
     expect(parseArgs(["--sandbox", "docker"]).dockerImage).toBeTruthy();
   });
 
+  it("reads the pace flag, bare or with a level, without eating the request", () => {
+    expect(parseArgs([]).pace).toBe("off");
+    expect(parseArgs(["--slow"]).pace).toBe("gentle");
+    expect(parseArgs(["--pace", "strict"]).pace).toBe("strict");
+    expect(parseArgs(["--slow", "off"]).pace).toBe("off");
+    // A bare --slow before a request must not swallow the first word as its level.
+    expect(parseArgs(["--slow", "fix", "the", "tests"])).toMatchObject({ pace: "gentle", prompt: "fix the tests" });
+  });
+
+  it("takes the ASCII flag under both of its names, for terminals that cannot draw the glyphs", () => {
+    expect(parseArgs([]).ascii).toBe(false);
+    expect(parseArgs(["--ascii"]).ascii).toBe(true);
+    expect(parseArgs(["--no-unicode"]).ascii).toBe(true);
+  });
+
   it("parses provider, model, currency and budget", () => {
     const args = parseArgs(["--provider", "anthropic", "--model", "claude-sonnet-5", "--currency", "usd", "--budget", "25"]);
     expect(args).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5", currency: "USD", budget: 25 });

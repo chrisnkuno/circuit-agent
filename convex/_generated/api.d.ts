@@ -25,6 +25,7 @@ import type * as github from "../github.js";
 import type * as githubModel from "../githubModel.js";
 import type * as googleCalendar from "../googleCalendar.js";
 import type * as googleCalendarModel from "../googleCalendarModel.js";
+import type * as growth from "../growth.js";
 import type * as http from "../http.js";
 import type * as lib_artifactStore from "../lib/artifactStore.js";
 import type * as lib_authz from "../lib/authz.js";
@@ -69,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   githubModel: typeof githubModel;
   googleCalendar: typeof googleCalendar;
   googleCalendarModel: typeof googleCalendarModel;
+  growth: typeof growth;
   http: typeof http;
   "lib/artifactStore": typeof lib_artifactStore;
   "lib/authz": typeof lib_authz;

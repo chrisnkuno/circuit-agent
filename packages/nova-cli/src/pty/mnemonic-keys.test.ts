@@ -53,7 +53,8 @@ describe("mnemonic keys under a real pty", () => {
     await p.waitFor(/›/, { timeoutMs: 30_000 });
     const mark = p.output().length;
     p.write(`${ALT}o`);
-    const seen = await p.waitFor(/built-in/, { timeoutMs: 15_000, since: mark });
+    // The tools report is streamed line by line; wait for an actual tool row, not its heading.
+    const seen = await p.waitFor(/read_file/, { timeoutMs: 15_000, since: mark });
     expect(seen.slice(mark)).toContain("read_file");
     p.kill();
   }, 60_000);

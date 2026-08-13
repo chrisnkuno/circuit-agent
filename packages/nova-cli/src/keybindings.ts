@@ -138,6 +138,13 @@ export const DEFAULT_BINDINGS: readonly { command: string; chords: readonly stri
   { command: "/undo", chords: ["alt+u"], description: "Revert the last turn" },
   { command: "/cost", chords: ["alt+c"], description: "Token and cost breakdown" },
   { command: "/tools", chords: ["alt+o"], description: "What the agent can call, and where it came from" },
+  // Ctrl+O is free at this prompt (readline binds it on some emacs-mode setups only) and Alt+E is
+  // the mnemonic. Expansion is the one action people reach for *while reading*, which is why it
+  // gets a chord rather than only a typed command.
+  { command: "/expand", chords: ["ctrl+o", "alt+e"], description: "Unfold the most recent folded block" },
+  { command: "/memory", chords: ["alt+n"], description: "Facts Nova carries between sessions" },
+  { command: "/history", chords: ["f5"], description: "Past conversations" },
+  { command: "/slow", chords: ["alt+s"], description: "Change the spending pace" },
   // Ctrl+Tab is the conventional tab switcher and is unusable here twice over: terminals rarely
   // transmit it, and Tab itself is completion. Alt+arrows are delivered widely and free.
   { command: "/tab new", chords: ["alt+t"], description: "Open another tab" },

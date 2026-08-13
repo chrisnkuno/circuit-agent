@@ -1,3 +1,5 @@
+import { ASCII_GLYPHS, UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
+
 /**
  * The starfield Nova opens with.
  *
@@ -19,6 +21,16 @@ export type BannerOptions = {
   subtitle?: string;
   /** Seeded so a given session's sky is stable, and tests are deterministic. */
   seed?: number;
+  /**
+   * The characters this terminal can actually draw.
+   *
+   * Colour was never the only capability that varies: the wordmark is built from block-drawing
+   * characters and the sky from dingbats, and a terminal on a non-UTF-8 code page renders both as
+   * `?`. Passing an ASCII set swaps in a letterform and a star ladder made of characters every
+   * terminal has had since 1963 — the banner degrades the way it already degrades for colour,
+   * instead of arriving as punctuation.
+   */
+  glyphs?: GlyphSet;
 };
 
 /** What the terminal can actually render, from the environment rather than from hope. */
@@ -68,8 +80,24 @@ const WORDMARK = [
 
 const WORDMARK_WIDTH = 36;
 
+/**
+ * The same four letters in characters no encoding can mangle.
+ *
+ * Not a smaller banner — a *different* one, because the block-drawing wordmark above is unreadable
+ * the moment its characters are substituted, and half a letterform is worse than a plain one.
+ */
+const ASCII_WORDMARK = [
+  " _   _  _____ __   __  ___  ",
+  "| \\ | ||  _  |\\ \\ / / / _ \\ ",
+  "|  \\| || | | | \\ V / | |_| |",
+  "| |\\  || |_| |  \\ /  |  _  |",
+  "|_| \\_||_____|   V   |_| |_|",
+];
+
+const ASCII_WORDMARK_WIDTH = 28;
+
 /** Glyphs by brightness: distant dust through to the few stars that actually shine. */
-export const STAR_GLYPHS = [".", "·", "✧", "✦", "✶"];
+export const STAR_GLYPHS = UNICODE_GLYPHS.starGlyphs;
 
 /** Deterministic noise, so one session's sky does not flicker between redraws. */
 function random(seed: number): () => number {
@@ -88,7 +116,7 @@ function random(seed: number): () => number {
  * Density falls off toward the wordmark so the letters stay legible — the stars are the setting,
  * not the subject.
  */
-function starLine(width: number, density: number, next: () => number, depth: ColorDepth): string {
+function starLine(width: number, density: number, next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS): string {
   let line = "";
   for (let column = 0; column < width; column += 1) {
     if (next() > density) {
@@ -96,7 +124,7 @@ function starLine(width: number, density: number, next: () => number, depth: Col
       continue;
     }
     const brightness = next();
-    const glyph = STAR_GLYPHS[Math.min(STAR_GLYPHS.length - 1, Math.floor(brightness * STAR_GLYPHS.length))];
+    const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
     const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
     line += paint(glyph, color, depth);
   }
@@ -112,26 +140,31 @@ function starLine(width: number, density: number, next: () => number, depth: Col
 export function renderBanner(options: BannerOptions): string {
   const { width, depth } = options;
   const next = random(options.seed ?? 0x5EED);
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  const ascii = glyphs === ASCII_GLYPHS || glyphs.boxHorizontal === ASCII_GLYPHS.boxHorizontal;
+  const wordmark = ascii ? ASCII_WORDMARK : WORDMARK;
+  const wordmarkWidth = ascii ? ASCII_WORDMARK_WIDTH : WORDMARK_WIDTH;
+  const stars = glyphs.starGlyphs;
 
-  if (width < WORDMARK_WIDTH + 4) {
-    const compact = `${paint("✦", STAR_COLORS[3], depth)} ${paint("NOVA", NIGHT_GRADIENT[4], depth)} ${paint("✦", STAR_COLORS[3], depth)}`;
+  if (width < wordmarkWidth + 4) {
+    const compact = `${paint(glyphs.star, STAR_COLORS[3], depth)} ${paint("NOVA", NIGHT_GRADIENT[4], depth)} ${paint(glyphs.star, STAR_COLORS[3], depth)}`;
     return options.subtitle ? `${compact} ${paint(options.subtitle, NIGHT_GRADIENT[0], depth)}` : compact;
   }
 
-  const indent = Math.max(2, Math.floor((width - WORDMARK_WIDTH) / 2));
+  const indent = Math.max(2, Math.floor((width - wordmarkWidth) / 2));
   const pad = " ".repeat(indent);
   const lines: string[] = [];
 
-  lines.push(starLine(width - 1, 0.05, next, depth));
-  lines.push(starLine(width - 1, 0.03, next, depth));
+  lines.push(starLine(width - 1, 0.05, next, depth, stars));
+  lines.push(starLine(width - 1, 0.03, next, depth, stars));
 
   // Lit from the top down: the wordmark brightens as it descends, like a horizon glow.
-  WORDMARK.forEach((row, index) => {
+  wordmark.forEach((row, index) => {
     const color = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 1)];
-    lines.push(`${flank(indent, next, depth)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${paint(row, color, depth)}${trailing(next, depth)}`);
+    lines.push(`${flank(indent, next, depth, stars)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${paint(row, color, depth)}${trailing(next, depth, stars)}`);
   });
 
-  lines.push(starLine(width - 1, 0.035, next, depth));
+  lines.push(starLine(width - 1, 0.035, next, depth, stars));
 
   if (options.subtitle) {
     const subtitleIndent = Math.max(2, Math.floor((width - options.subtitle.length) / 2));
@@ -150,7 +183,7 @@ function flankWidth(indent: number): number {
   return indent > 8 ? 4 : 0;
 }
 
-function flank(indent: number, next: () => number, depth: ColorDepth): string {
+function flank(indent: number, next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS): string {
   const reserved = flankWidth(indent);
   if (reserved === 0) return "";
   if (next() > 0.4) return " ".repeat(reserved);
@@ -158,15 +191,15 @@ function flank(indent: number, next: () => number, depth: ColorDepth): string {
   // Drawn once and reused for both pads. Sampling the position twice made the left and right
   // padding disagree, so each row was a different width and the letterforms sheared apart.
   const position = Math.floor(next() * reserved);
-  const glyph = STAR_GLYPHS[Math.min(STAR_GLYPHS.length - 1, Math.floor(brightness * STAR_GLYPHS.length))];
+  const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
   const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
   return `${" ".repeat(position)}${paint(glyph, color, depth)}${" ".repeat(reserved - position - 1)}`;
 }
 
-function trailing(next: () => number, depth: ColorDepth): string {
+function trailing(next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS): string {
   if (next() > 0.35) return "";
   const brightness = 0.55 + next() * 0.45;
-  const glyph = STAR_GLYPHS[Math.min(STAR_GLYPHS.length - 1, Math.floor(brightness * STAR_GLYPHS.length))];
+  const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
   const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
   return `${" ".repeat(2 + Math.floor(next() * 4))}${paint(glyph, color, depth)}`;
 }

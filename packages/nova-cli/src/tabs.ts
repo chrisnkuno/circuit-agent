@@ -1,3 +1,4 @@
+import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 /**
  * Several pieces of work in one session.
  *
@@ -148,15 +149,16 @@ export class WorkspaceController<T> {
  * Rendered only when there is more than one tab: a single-tab session should look exactly like it
  * did before tabs existed, since a strip that always says "1 nova" is noise on every prompt.
  */
-export function renderTabStrip(views: readonly TabView[], options: { width?: number } = {}): string {
+export function renderTabStrip(views: readonly TabView[], options: { width?: number; glyphs?: GlyphSet } = {}): string {
   if (views.length <= 1) return "";
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const cells = views.map((view) => {
-    const marker = view.status === "running" ? "●" : view.status === "failed" ? "✗" : view.unread > 0 ? "•" : " ";
+    const marker = view.status === "running" ? glyphs.circleFull : view.status === "failed" ? glyphs.cross : view.unread > 0 ? glyphs.bullet : " ";
     return `${view.active ? "[" : " "}${view.id}${marker}${view.title}${view.active ? "]" : " "}`;
   });
   const line = cells.join(" ");
   const width = options.width ?? 80;
-  return line.length <= width ? line : `${line.slice(0, Math.max(0, width - 1))}…`;
+  return line.length <= width ? line : `${line.slice(0, Math.max(0, width - glyphs.ellipsis.length))}${glyphs.ellipsis}`;
 }
 
 export type TabCommand =

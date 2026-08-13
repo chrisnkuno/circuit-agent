@@ -52,6 +52,33 @@ import { IMPLICIT_SKILL_PROVIDER_ID } from "@circuit-nova/nova-core";
 import { renderTools } from "./tools-command";
 import { removeRecording, startRecording, transcribeAudio } from "./voice";
 import { controlLabel, resolveControlLanguage, type ControlLanguage } from "./i18n";
+import { UNICODE_GLYPHS, resolveGlyphs, type GlyphSet } from "./glyphs";
+import { GUTTER, heading, note, panel, rule, type SectionStyle } from "./sections";
+import { describeChange, diffLines, diffStat, renderFileChange } from "./code-view";
+import { parseTestOutput, renderTestReport } from "./test-report";
+import { ExpandableStore, expandHint, parseExpandCommand, renderExpandableList } from "./expandable";
+import {
+  addMemory,
+  clearMemories,
+  describeAdded,
+  forgetMemory,
+  loadMemories,
+  memoryFile,
+  memoryPromptBlock,
+  parseMemoryCommand,
+  renderMemories,
+  type MemoryEntry,
+} from "./memory";
+import {
+  parseHistoryCommand,
+  relativeTime,
+  renderHistoryList,
+  renderReplay,
+  searchHistory,
+  summarizeSession,
+  type HistoryEntry,
+} from "./chat-history";
+import { applyPacing, describePace, exceedsPace, paceBadge, parsePaceCommand, parsePaceFlag, remainingCooldown, type PaceLevel } from "./pacing";
 
 /**
  * Nova CLI — the terminal front end.
@@ -121,6 +148,22 @@ type ParsedArgs = {
   /** Explicit task-level consent for non-interactive sensitive work; tool gates still apply. */
   allowSensitive: boolean;
   /**
+   * How fast the agent is allowed to spend.
+   *
+   * A pace, not a cap — `--budget` is the cap. This bounds how much work one turn may do before it
+   * has to come back and report, which is the difference between a surprise and a decision.
+   */
+  pace: PaceLevel;
+  /**
+   * Force the ASCII glyph set regardless of what the environment claims.
+   *
+   * The detection in `glyphs.ts` is a heuristic over `LANG` and `TERM`, and a heuristic that gets it
+   * wrong leaves someone reading `?` where a status mark should be. This is the escape hatch, and it
+   * is a flag rather than only an environment variable because the person who needs it is looking at
+   * broken output right now.
+   */
+  ascii: boolean;
+  /**
    * Machine-readable output: JSONL on stdout, human text on stderr, a stable exit code.
    *
    * Implies a single turn. A REPL that emits JSONL has nobody to read it, and the approval prompt
@@ -145,7 +188,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
-    root: process.cwd(), help: false,
+    root: process.cwd(), help: false, pace: "off", ascii: false,
     backend: "local", dockerImage: DEFAULT_DOCKER_IMAGE, upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false, json: false,
   };
   const rest: string[] = [];
@@ -161,6 +204,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--estimate") parsed.estimateOnly = true;
     else if (argument === "--allow-sensitive") parsed.allowSensitive = true;
     else if (argument === "--json" || argument === "--headless") parsed.json = true;
+    else if (argument === "--ascii" || argument === "--no-unicode") parsed.ascii = true;
+    else if (argument === "--slow" || argument === "--pace") {
+      // `--slow` on its own means the obvious thing; a value selects how slow.
+      const level = parsePaceFlag(argv[index + 1]);
+      if (level) { parsed.pace = level; index += 1; } else parsed.pace = "gentle";
+    }
     else if (argument === "--update") parsed.update = true;
     else if (argument === "--check-update") { parsed.update = true; parsed.checkUpdate = true; }
     else if (argument === "--check" && updateRequested) parsed.checkUpdate = true;
@@ -242,8 +291,26 @@ ${style.bold("Cost")}
   nova --location EG        Select a country (auto-detected from your locale by default)
   nova --currency EGP       Select any supported ISO display currency
   nova --budget N           Approve and enforce a cap in the display currency
+  nova --slow               Spend at a slower pace: fewer model rounds, smaller replies
+  nova --slow strict        Slower still, with a pause between turns
+  /slow [on|strict|off]     Change the pace mid-session
   nova --estimate "task"    Show a token/cost forecast without calling the model
   /cost                     Token and cost breakdown for this session
+
+${style.bold("Memory and history")}
+  # we use bun, not npm     Remember a fact for every future session in this project
+  /memory                   Everything remembered, project and personal, with numbers
+  /memory add --user <fact> Remember something about you rather than about this project
+  /memory forget N          Drop one entry
+  /history                  Past conversations in this project
+  /history search <text>    Find one by what you asked for
+  /history <id>             Read a past conversation back
+  /history resume           Pick one up where it stopped
+
+${style.bold("Reading the transcript")}
+  /expand [N|all|list]      Unfold written code, a test run, or a long result
+  nova --ascii              Draw with plain ASCII when the terminal mangles symbols
+                            (or set NOVA_GLYPHS=ascii)
 
 ${style.bold("Headless output")}
   With --json, stdout carries one JSON object per line and nothing else; everything
@@ -277,6 +344,17 @@ const toolLines = new ReplaceableBlock();
 let markdown = new MarkdownStream(process.stdout, "none");
 let spinner: Spinner | undefined;
 let screen: PinnedScreen | undefined;
+/**
+ * The characters and the colour depth this terminal was found to support.
+ *
+ * Module state for the same reason `markdown` and `statusBar` are: there is one screen, and a
+ * renderer that has to be told what it can draw at every call site is a renderer where one call
+ * site will eventually be told wrong. `configureRendering` sets both from the environment once.
+ */
+let glyphs: GlyphSet = UNICODE_GLYPHS;
+let renderDepth: ReturnType<typeof detectColorDepth> = "none";
+/** Folded blocks from this session, addressable by `/expand`. */
+const expandables = new ExpandableStore();
 
 /** Wrapping width for prose: the pinned screen's golden-ratio-capped measure, or the raw terminal otherwise. */
 function contentWidth(): number {
@@ -288,17 +366,31 @@ const activity: { awaitingFirstDelta: boolean; toolCalls: number; tokens: number
   tokens: 0,
   phase: "thinking",
 };
-/** Announced calls awaiting their result, by call id, so each can be rewritten where it sits. */
-const pendingCalls = new Map<string, { line: number; detail: string; name: string }>();
+/**
+ * Announced calls awaiting their result, by call id, so each can be rewritten where it sits.
+ *
+ * The arguments are held alongside the line handle because the *result* is where the transcript
+ * shows what a write actually contained — by then the call event is long gone, and re-reading the
+ * file to find out would be both a round trip and a different answer.
+ */
+const pendingCalls = new Map<string, { line: number; detail: string; name: string; arguments: Record<string, unknown> }>();
 
-/** Points the renderer at the colour depth and terminal the session actually has. */
+/** Points the renderer at the colour depth, glyph repertoire and terminal the session actually has. */
 export function configureRendering(
   depth: ReturnType<typeof detectColorDepth>,
   live: boolean = Boolean(process.stdout.isTTY),
+  glyphSet: GlyphSet = UNICODE_GLYPHS,
 ): void {
   colorEnabled = depth !== "none";
   liveTerminal = live;
-  markdown = new MarkdownStream(process.stdout, depth, contentWidth, live);
+  glyphs = glyphSet;
+  renderDepth = depth;
+  markdown = new MarkdownStream(process.stdout, depth, contentWidth, live, glyphSet);
+}
+
+/** The width/depth/glyph triple every section renderer takes, from the live terminal. */
+function sectionStyle(): SectionStyle {
+  return { width: contentWidth(), depth: renderDepth, glyphs };
 }
 
 function endStreamedLine(): void {
@@ -331,8 +423,86 @@ function toolLineText(mark: string, name: string, detail: string, summary: strin
 function renderUserTurn(text: string): string {
   return text
     .split("\n")
-    .map((line) => `${style.bold(style.cyan("❯"))} ${style.bold(line)}`)
+    .map((line) => `${style.bold(style.cyan(glyphs.prompt))} ${style.bold(line)}`)
     .join("\n");
+}
+
+/**
+ * How much of a long block is printed before the rest is folded behind `/expand`.
+ *
+ * A third of a short terminal, so a single tool result can never push the answer it belongs to off
+ * the top of the screen — the failure that makes people scroll back instead of reading forward.
+ */
+const FOLD_AFTER_LINES = 14;
+
+/**
+ * Prints a block that may be too long, folding the tail and offering it by number.
+ *
+ * The whole text is kept, never discarded: the point of folding rather than truncating is that the
+ * detail is one word away instead of gone.
+ */
+function writeFoldable(label: string, rendered: { text: string; hidden: number; full: string }): void {
+  process.stdout.write(`${rendered.text}\n`);
+  if (rendered.hidden > 0) {
+    const id = expandables.add(label, rendered.full, rendered.hidden);
+    process.stdout.write(`${GUTTER}${expandHint(id, rendered.hidden, renderDepth, glyphs)}\n`);
+  }
+}
+
+/**
+ * The code a `write_file` or `edit_file` call carried, shown under its tool line.
+ *
+ * Read from the *call's own arguments*: that is what was sent, it costs no round trip to a possibly
+ * remote sandbox to fetch it back, and it is the only version guaranteed to be the one this line is
+ * reporting on.
+ */
+function renderWrittenCode(toolName: string, args: Record<string, unknown>): void {
+  const path = typeof args.path === "string" ? args.path : "";
+  if (!path) return;
+  const style_ = sectionStyle();
+  if (toolName === "write_file") {
+    const content = typeof args.content === "string" ? args.content : "";
+    if (content === "") return;
+    writeFoldable(path, renderFileChange({ path, kind: "write", content }, style_, { maxLines: FOLD_AFTER_LINES }));
+    return;
+  }
+  const before = typeof args.oldText === "string" ? args.oldText : "";
+  const after = typeof args.newText === "string" ? args.newText : "";
+  if (before === "" && after === "") return;
+  writeFoldable(path, renderFileChange({ path, kind: "edit", before, after }, style_, { maxLines: FOLD_AFTER_LINES }));
+}
+
+/**
+ * A command's output, as a test report when it is one and as folded output when it is not.
+ *
+ * The distinction is worth drawing because the two are read completely differently: nobody reads
+ * test output top to bottom, they look for the failures — so a run that parses is re-laid-out into
+ * sections, and anything else is shown as it came, folded, exactly as a terminal would.
+ */
+function renderCommandOutput(content: string): void {
+  const style_ = sectionStyle();
+  const report = parseTestOutput(content);
+  if (report) {
+    const rendered = renderTestReport(report, style_, { expandHint: "/expand for the raw output" });
+    process.stdout.write(`${rendered}\n`);
+    // The raw output is kept regardless of whether the report folded anything: a parser that read
+    // the run slightly wrong is exactly when someone wants the original, and by then the process
+    // that produced it is gone.
+    const lines = content.split("\n").length;
+    const id = expandables.add(`${report.framework} output`, content.replace(/\n$/, ""), lines);
+    process.stdout.write(`${GUTTER}${expandHint(id, lines, renderDepth, glyphs)}\n`);
+    return;
+  }
+  const body = content.replace(/\n$/, "").split("\n");
+  // One or two lines of output already fit on the tool line's own summary; printing them again
+  // below it would be the same words twice.
+  if (body.length <= 2) return;
+  const shown = body.slice(0, FOLD_AFTER_LINES);
+  writeFoldable("command output", {
+    text: panel(shown, style_, { title: "output", gutterOnly: true }),
+    hidden: Math.max(0, body.length - FOLD_AFTER_LINES),
+    full: panel(body, style_, { title: "output", gutterOnly: true }),
+  });
 }
 
 export function renderEvent(event: NovaEvent): void {
@@ -345,7 +515,7 @@ export function renderEvent(event: NovaEvent): void {
     // The first delta of a turn is the one moment worth a header: it is where a reader's eye needs
     // to land to tell "the assistant is now speaking" apart from the tool lines and the user's own
     // request above it. Every delta after the first is the same reply continuing, not a new one.
-    if (activity.awaitingFirstDelta) process.stdout.write(`\n${style.dim("✦")} ${style.bold("Nova")}\n`);
+    if (activity.awaitingFirstDelta) process.stdout.write(`\n${style.dim(glyphs.star)} ${style.bold("Nova")}\n`);
     // The model is visibly talking now, so animation yields the row to streamed Markdown.
     // This may be the first answer of the turn or the answer after a tool operation. Tool calls
     // restart the spinner even after earlier prose, so every new visible delta owns the screen and
@@ -364,12 +534,12 @@ export function renderEvent(event: NovaEvent): void {
 
   if (event.type === "checkpoint") {
     forgetToolLines();
-    process.stdout.write(style.dim(`  ⎿ checkpoint ${event.checkpoint.tree.slice(0, 8)}\n`));
+    process.stdout.write(style.dim(`  ${glyphs.elbow} checkpoint ${event.checkpoint.tree.slice(0, 8)}\n`));
     return;
   }
   if (event.type === "compaction") {
     forgetToolLines();
-    process.stdout.write(style.dim(`  ⎿ compacted context (${event.messagesBefore} → ${event.messagesAfter} messages)\n`));
+    process.stdout.write(style.dim(`  ${glyphs.elbow} compacted context (${event.messagesBefore} → ${event.messagesAfter} messages)\n`));
     return;
   }
 
@@ -384,8 +554,8 @@ export function renderEvent(event: NovaEvent): void {
     const detail = describeToolCall(runtime.toolName, runtime.arguments);
     // Announcing then rewriting needs a cursor. Piped, the announcement would be a duplicate line
     // nobody can erase, so only the completed line below is printed.
-    const line = liveTerminal ? toolLines.append(toolLineText(style.dim("⋯"), runtime.toolName, style.dim(detail), "")) : -1;
-    pendingCalls.set(runtime.toolCallId, { line, detail, name: runtime.toolName });
+    const line = liveTerminal ? toolLines.append(toolLineText(style.dim(glyphs.pending), runtime.toolName, style.dim(detail), "")) : -1;
+    pendingCalls.set(runtime.toolCallId, { line, detail, name: runtime.toolName, arguments: runtime.arguments });
     activity.phase = "operation";
     activity.operation = runtime.toolName;
     // A model can stream an explanation and then begin a long command. The first delta stopped
@@ -395,7 +565,7 @@ export function renderEvent(event: NovaEvent): void {
   }
   if (runtime.type === "tool_result") {
     activity.toolCalls += 1;
-    const mark = runtime.isError ? style.red("✗") : style.green("✓");
+    const mark = runtime.isError ? style.red(glyphs.cross) : style.green(glyphs.check);
     const summary = summarizeToolResult(runtime.toolName, runtime.content, runtime.isError);
     // The announcement and the outcome are the same line, rewritten where it already sits. Reads
     // parallel-safe calls correctly too: several are announced before the first result returns, so
@@ -406,6 +576,23 @@ export function renderEvent(event: NovaEvent): void {
       process.stdout.write(`${completed}\n`);
     }
     pendingCalls.delete(runtime.toolCallId);
+
+    // The detail belongs *under* the line that announced it. Anything printed here ends the
+    // rewritable block — the tool lines above are no longer the bottom of the screen, and touching
+    // them afterward would erase whatever went in between.
+    // Only the block is forgotten, never the pending map: a call still in flight keeps the
+    // arguments its own result will need, and simply prints its completed line fresh instead of
+    // rewriting one that is no longer at the bottom of the screen.
+    if (!runtime.isError && pending) {
+      if (runtime.toolName === "write_file" || runtime.toolName === "edit_file") {
+        toolLines.forget();
+        renderWrittenCode(runtime.toolName, pending.arguments);
+      } else if (runtime.toolName === "run_command") {
+        toolLines.forget();
+        renderCommandOutput(runtime.content);
+      }
+    }
+
     const stillRunning = pendingCalls.values().next().value as { name: string } | undefined;
     if (stillRunning) {
       activity.phase = "operation";
@@ -431,7 +618,7 @@ export function renderProviders(environment: Record<string, string | undefined>,
   const lines: string[] = [];
 
   for (const status of statuses) {
-    const mark = status.configured ? paint("✓", style.green) : paint("○", style.dim);
+    const mark = status.configured ? paint(glyphs.check, style.green) : paint(glyphs.circleEmpty, style.dim);
     const detail = status.configured
       ? paint(`${status.model} · pricing: ${status.pricing}`, style.dim)
       // `nova settings` leads: it stores the key for next time, where an exported variable lives
@@ -440,7 +627,7 @@ export function renderProviders(environment: Record<string, string | undefined>,
     lines.push(`  ${mark} ${status.label.padEnd(14)} ${detail}`);
   }
   const exaConfigured = Boolean(environment.EXA_API_KEY?.trim());
-  lines.push(`  ${exaConfigured ? paint("✓", style.green) : paint("○", style.dim)} ${"Exa search".padEnd(14)} ${exaConfigured ? paint("web_search enabled", style.dim) : paint("nova settings, or set EXA_API_KEY", style.yellow)}`);
+  lines.push(`  ${exaConfigured ? paint(glyphs.check, style.green) : paint(glyphs.circleEmpty, style.dim)} ${"Exa search".padEnd(14)} ${exaConfigured ? paint("web_search enabled", style.dim) : paint("nova settings, or set EXA_API_KEY", style.yellow)}`);
 
   const unpriced = statuses.filter((status) => status.configured && status.pricing === "unknown");
   if (unpriced.length > 0) {
@@ -478,6 +665,7 @@ function settingsChooser(readline: Interface): NonNullable<SettingsPrompts["choo
       ...(request.filter ? { filter: true } : {}),
       ...(request.initialIndex === undefined ? {} : { initialIndex: request.initialIndex }),
       height: 12,
+      glyphs,
       paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
     },
   );
@@ -720,6 +908,15 @@ async function main(): Promise<number> {
   let savedSettings = await loadSettings(processEnvironment);
   const environment = mergedEnvironment(savedSettings, processEnvironment);
   let language = resolveControlLanguage(args.language ?? environment.NOVA_LANGUAGE ?? environment.LANG);
+  // Before anything prints. `--help`, `--providers` and `--sessions` all return long before the
+  // interactive path configures rendering, and every one of them draws marks and rules — a terminal
+  // that cannot render them should get the ASCII forms from the very first line, not from the point
+  // a session happens to start.
+  configureRendering(
+    detectColorDepth(environment, Boolean(process.stdout.isTTY)),
+    Boolean(process.stdout.isTTY),
+    args.ascii ? resolveGlyphs({ ...environment, NOVA_GLYPHS: "ascii" }) : resolveGlyphs(environment),
+  );
   if (args.help) {
     process.stdout.write(helpText(language));
     return 0;
@@ -916,8 +1113,15 @@ async function main(): Promise<number> {
   // (and corrupting) output when either end of the pipe is not a real terminal.
   const ttyMode = interactive && !args.json && Boolean(process.stdout.isTTY);
   const depth = detectColorDepth(environment, !args.json && Boolean(process.stdout.isTTY));
-  configureRendering(depth);
+  configureRendering(depth, !args.json && Boolean(process.stdout.isTTY), args.ascii ? resolveGlyphs({ ...environment, NOVA_GLYPHS: "ascii" }) : resolveGlyphs(environment));
   let mode = args.mode;
+  /** The spending pace, changeable mid-session with `/slow`. */
+  let pace: PaceLevel = args.pace;
+  /**
+   * What Nova has been asked to remember, read once at startup and re-read whenever `/memory`
+   * changes it. Held in memory because it is consulted on every turn and edited rarely.
+   */
+  let memories: MemoryEntry[] = await loadMemories(args.root, environment);
 
   /**
    * Every return point tears down the same three things, in the same order — reassigned once
@@ -1054,7 +1258,12 @@ async function main(): Promise<number> {
       // real, currency-aware budget. Feeding it the provider's own per-million rates keeps that guard
       // proportionate to actual spend instead of to a unit nobody configured.
       prices: modelPriceCatalogFor(prices, Boolean(approvedBudget)),
-      ...(approvedBudget && prices ? { budgets: { maxRwf: convertTo(approvedBudget, prices.currency, rates)?.micros ?? approvedBudget.micros } } : {}),
+      // The pace's limits are the runtime's own budget fields, merged over the approved cap rather
+      // than replacing it: slowing down must never quietly raise a ceiling the user approved.
+      budgets: applyPacing(
+        approvedBudget && prices ? { maxRwf: convertTo(approvedBudget, prices.currency, rates)?.micros ?? approvedBudget.micros } : {},
+        pace,
+      ),
       mode,
       workspace,
       approve,
@@ -1089,7 +1298,7 @@ async function main(): Promise<number> {
     return true;
   };
   const showTabs = () => {
-    const strip = renderTabStrip(tabs.views, { width: contentWidth() });
+    const strip = renderTabStrip(tabs.views, { width: contentWidth(), glyphs });
     if (strip) process.stdout.write(`  ${style.dim(strip)}\n`);
   };
 
@@ -1102,9 +1311,11 @@ async function main(): Promise<number> {
    * mutation site.
    */
   const idleStatusLine = (): string => {
-    const strip = tabs.size > 1 ? `${renderTabStrip(tabs.views, { width: screen?.current.columns ?? 80 })} · ` : "";
+    const strip = tabs.size > 1 ? `${renderTabStrip(tabs.views, { width: screen?.current.columns ?? 80, glyphs })} ${glyphs.middot} ` : "";
     const cost = ledger.displayTotal ? formatMoney(ledger.displayTotal) : "cost unknown";
-    return `${strip}${style.cyan(mode)} ${style.dim(`· ${cost}`)}`;
+    const badge = pace === "off" ? "" : ` ${style.yellow(paceBadge(pace, glyphs))}`;
+    const remembered = memories.length > 0 ? ` ${style.dim(`${glyphs.middot} ${memories.length} remembered`)}` : "";
+    return `${strip}${style.cyan(mode)}${badge} ${style.dim(`${glyphs.middot} ${cost}`)}${remembered}`;
   };
 
   /** Enqueues a fresh (non-continuation) job and starts its worker — the shared tail of `/jobs run` and `/detach <task>`. */
@@ -1176,12 +1387,31 @@ async function main(): Promise<number> {
   let streamedAnswer = false;
   /** The last turn's terminal status, which headless mode turns into the process exit code. */
   let lastTurnStatus: AgentRuntimeResult["status"] = "failed";
+  /** When the last turn finished, for the pace's cooldown. */
+  let lastTurnEndedAt: number | undefined;
+  /**
+   * Whether this thread has already been told what Nova remembers.
+   *
+   * Sent once per thread, not once per turn: the conversation carries it forward, so re-sending the
+   * same paragraph every turn would bill the user for it every turn. Reset whenever the set changes
+   * or the thread does, which are exactly the two moments the model's copy goes stale.
+   */
+  let memorySent = false;
   const runTurn = async (request: string): Promise<boolean> => {
     headless?.turnStart(request);
     streamedAnswer = false;
     if (screen) {
       screen.parkInTranscript();
+      process.stdout.write(`${rule(sectionStyle(), { label: "you", tone: "accent" })}\n`);
       process.stdout.write(`${renderUserTurn(request)}\n`);
+    }
+
+    // The pace's quiet time, spent before anything is sent. A pause after the *previous* turn is
+    // where a person notices the agent misunderstood them; a pause after this one would be too late.
+    const cooldown = remainingCooldown(pace, lastTurnEndedAt);
+    if (cooldown > 0) {
+      process.stdout.write(style.dim(`  ${paceBadge(pace, glyphs)} ${glyphs.middot} pausing ${Math.ceil(cooldown / 1_000)}s before the next turn\n`));
+      await new Promise((resolve) => setTimeout(resolve, cooldown));
     }
     const taskSafety = assessTaskSafety(request);
     if (mode !== "plan" && !await confirmSensitiveTask(readline, interactive, taskSafety, args.allowSensitive)) {
@@ -1203,7 +1433,21 @@ async function main(): Promise<number> {
       agent.setModelSpendLimit(remainingProvider.micros);
     }
     try {
-      process.stdout.write(style.dim(`  ${ledger.formatPrediction(await agent.estimate(request))}\n`));
+      const prediction = await agent.estimate(request);
+      process.stdout.write(style.dim(`  ${ledger.formatPrediction(prediction)}\n`));
+      // The pace asks about a turn that looks expensive *before* it starts, which is the only
+      // moment the answer is still cheap. Skipped without a terminal: there is nobody to ask, and a
+      // pace is a preference, not a guard that should turn into a refusal in automation.
+      if (interactive && exceedsPace(pace, prediction)) {
+        statusBar.clear();
+        const answer = (await readline.question(
+          `  ${style.yellow(paceBadge(pace, glyphs))} this turn looks large. Run it? ${style.dim("[Y/n]: ")}`,
+        )).trim().toLowerCase();
+        if (answer !== "" && answer !== "y" && answer !== "yes") {
+          process.stdout.write(style.dim("  skipped — nothing was sent to the model\n"));
+          return false;
+        }
+      }
     } catch (error) {
       process.stdout.write(style.yellow(`  Could not estimate this turn: ${error instanceof Error ? error.message : String(error)}\n`));
     }
@@ -1227,6 +1471,7 @@ async function main(): Promise<number> {
         cost: ledger.displayTotal ? formatMoney(ledger.displayTotal) : "cost unknown",
         phase: activity.phase,
         operation: activity.operation,
+        badge: paceBadge(pace, glyphs),
       });
       // A pinned footer redraws its own fixed row and never needs the erase-above-cursor dance
       // `StatusBar` does — that class stays the renderer for every session without one. The status
@@ -1234,14 +1479,19 @@ async function main(): Promise<number> {
       // chrome, not a paragraph, and narrowing it to match reading-width prose would just waste the
       // rest of the row.
       spinner = new Spinner(() => screen
-        ? screen!.renderStatus(formatStatusLine(fields(), screen!.current.columns, depth))
-        : statusBar.render(fields(), depth));
+        ? screen!.renderStatus(formatStatusLine(fields(), screen!.current.columns, depth, glyphs))
+        : statusBar.render(fields(), depth, glyphs), 120, glyphs);
       spinner.start();
     }
     turnActive = true;
     currentTurnAbort = new AbortController();
     try {
-      const result = await agent.send(request);
+      // Remembered facts ride on the first request of a thread, ahead of what the user typed. The
+      // model sees them as part of the conversation rather than as a system rule, which is honest:
+      // they came from the user, and the user can see them with /memory and delete them.
+      const preamble = memorySent ? "" : memoryPromptBlock(memories);
+      memorySent = true;
+      const result = await agent.send(preamble ? `${preamble}\n${request}` : request);
       activity.awaitingFirstDelta = false;
       spinner?.stop();
       statusBar.clear();
@@ -1262,7 +1512,7 @@ async function main(): Promise<number> {
       const asMarkdown = (text: string) => renderMarkdown(text, { width: contentWidth(), depth });
       // A provider that never streamed never printed the "✦ Nova" header renderEvent's first-delta
       // branch owns — this is the one other place a reply begins, so it owns the header here.
-      if (!streamedAnswer) process.stdout.write(`\n${style.dim("✦")} ${style.bold("Nova")}\n`);
+      if (!streamedAnswer) process.stdout.write(`\n${style.dim(glyphs.star)} ${style.bold("Nova")}\n`);
       if (result.status !== "completed" && spokenText && !streamedAnswer && !result.summary.includes(spokenText)) {
         process.stdout.write(`\n${asMarkdown(spokenText)}\n`);
       }
@@ -1277,7 +1527,13 @@ async function main(): Promise<number> {
         toolCalls: result.toolCallsExecuted,
         elapsedMs: Date.now() - started,
       });
-      process.stdout.write(style.dim(`\n  ${result.status} · ${ledger.formatTurn(turn)}\n`));
+      // The turn's own closing rule. A transcript without one is a single column in which the end
+      // of an answer and the start of the next question look identical.
+      process.stdout.write(`${rule(sectionStyle(), {
+        label: result.status,
+        tone: result.status === "completed" ? "good" : "warn",
+        trailing: ledger.formatTurn(turn),
+      })}\n`);
       const warning = ledger.budgetWarning();
       if (warning) process.stdout.write(`  ${style.yellow(warning)}\n`);
       lastTurnStatus = result.status;
@@ -1313,6 +1569,7 @@ async function main(): Promise<number> {
     } finally {
       turnActive = false;
       currentTurnAbort = undefined;
+      lastTurnEndedAt = Date.now();
     }
     return true;
   };
@@ -1351,16 +1608,24 @@ async function main(): Promise<number> {
   process.stdout.write(`${renderBanner({
     width: process.stdout.columns ?? 80,
     depth,
-    subtitle: `${mode} · ${spec.label} ${resolvedModelId} · ${where}`,
+    glyphs,
+    subtitle: `${mode} ${glyphs.middot} ${spec.label} ${resolvedModelId} ${glyphs.middot} ${where}`,
     // Seeded per session, so the sky is stable while you are looking at it.
     seed: Date.now() & 0xffff,
   })}\n`);
-  process.stdout.write(`${renderTagline(`  /help ${controlLabel(language, "help")} · /exit ${controlLabel(language, "exit")} · /voice ${controlLabel(language, "voice")}`, depth)}\n`);
-  process.stdout.write(style.dim(`  costs: ${display}${preference.countryCode ? ` · location ${preference.countryCode}` : ""} · ${preference.source === "location" ? "auto-detected" : preference.source}\n`));
+  process.stdout.write(`${renderTagline(`  /help ${controlLabel(language, "help")} ${glyphs.middot} /exit ${controlLabel(language, "exit")} ${glyphs.middot} /voice ${controlLabel(language, "voice")} ${glyphs.middot} # ${controlLabel(language, "remember")}`, depth)}\n`);
+  process.stdout.write(style.dim(`  costs: ${display}${preference.countryCode ? ` ${glyphs.middot} location ${preference.countryCode}` : ""} ${glyphs.middot} ${preference.source === "location" ? "auto-detected" : preference.source}\n`));
   if (localCurrencyWarning) process.stdout.write(`${style.yellow(`  ${localCurrencyWarning}`)}\n`);
-  if (!args.budget) process.stdout.write(`${style.yellow("  No session spend cap set — use --budget N to approve and enforce one.")}\n`);
+  if (!args.budget) {
+    process.stdout.write(`${style.yellow(`  No session spend cap set ${glyphs.middot} use --budget N to approve and enforce one.`)}\n`);
+    // Named beside the cap it is not: someone reading that line is thinking about spending, and
+    // this is the other half of the answer.
+    if (pace === "off") process.stdout.write(style.dim(`  ${glyphs.middot} /slow paces spending without capping it\n`));
+  }
+  if (pace !== "off") process.stdout.write(style.dim(`  ${paceBadge(pace, glyphs)} ${glyphs.middot} fewer model rounds per turn; /slow off to lift it\n`));
+  if (memories.length > 0) process.stdout.write(style.dim(`  ${glyphs.middot} ${memories.length} remembered fact${memories.length === 1 ? "" : "s"} in play ${glyphs.middot} /memory to see them\n`));
   if (!prices) {
-    process.stdout.write(`${style.yellow(`  No price configured for ${resolvedModelId} — costs will show as unknown.`)}\n`);
+    process.stdout.write(`${style.yellow(`  No price configured for ${resolvedModelId} ${glyphs.middot} costs will show as unknown.`)}\n`);
     process.stdout.write(`${style.dim(`  Set ${PRICE_ENVIRONMENT_HINT}, or run nova --providers.`)}\n`);
   }
 
@@ -1476,7 +1741,7 @@ async function main(): Promise<number> {
     screen?.positionInput();
     let rawInput: string;
     try {
-      const promptLabel = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : "nova")}${style.dim(" › ")}`;
+      const promptLabel = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : "nova")}${style.dim(` ${glyphs.caret} `)}`;
       rawInput = await readline.question(screen ? promptLabel : `\n${promptLabel}`);
     } catch (error) {
       if (isReadlineExit(error) || exitRequested) break;
@@ -1555,6 +1820,7 @@ async function main(): Promise<number> {
           current: { provider: spec.id, model: resolvedModelId },
           price,
           paint,
+          glyphs,
         });
         if (!chosen) { process.stdout.write(style.dim("  no change\n")); continue; }
         if (chosen.kind === "settings") {
@@ -1637,16 +1903,159 @@ async function main(): Promise<number> {
       process.stdout.write(style.dim(`  switched to ${spec.label} ${resolvedModelId}${priceNote}${persistence}\n`));
       continue;
     }
+    const expandCommand = parseExpandCommand(input);
+    if (expandCommand) {
+      if (expandCommand.kind === "invalid") { process.stdout.write(style.yellow(`  ${expandCommand.reason}\n`)); continue; }
+      if (expandCommand.kind === "list") { process.stdout.write(`${renderExpandableList(expandables.all, depth, glyphs)}\n`); continue; }
+      const chosen = expandCommand.kind === "one"
+        ? [expandables.get(expandCommand.id)]
+        : expandCommand.kind === "all" ? [...expandables.all] : [expandables.last];
+      const found = chosen.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+      if (found.length === 0) {
+        process.stdout.write(style.dim(`  nothing to expand${expandCommand.kind === "one" ? ` as ${expandCommand.id}` : ""} — /expand list shows what is folded\n`));
+        continue;
+      }
+      for (const entry of found) {
+        process.stdout.write(`${rule(sectionStyle(), { label: entry.label, tone: "accent" })}\n`);
+        process.stdout.write(`${entry.full}\n`);
+      }
+      continue;
+    }
+
+    const memoryCommand = parseMemoryCommand(input);
+    if (memoryCommand) {
+      const style_ = sectionStyle();
+      const files = { project: memoryFile("project", args.root, environment), user: memoryFile("user", args.root, environment) };
+      switch (memoryCommand.kind) {
+        case "invalid":
+          process.stdout.write(style.yellow(`  ${memoryCommand.reason}\n`));
+          break;
+        case "where":
+          process.stdout.write(`${note(`project ${glyphs.middot} ${files.project}`, style_)}\n${note(`you     ${glyphs.middot} ${files.user}`, style_)}\n`);
+          break;
+        case "list":
+          process.stdout.write(`${renderMemories(memories, style_, files)}\n`);
+          break;
+        case "add": {
+          const result = await addMemory(memoryCommand.scope, memoryCommand.text, args.root, environment);
+          memories = await loadMemories(args.root, environment);
+          // The model's copy is now stale, so the next turn carries the new set. Cheap: one short
+          // paragraph, and only on the turn after an actual change.
+          memorySent = false;
+          process.stdout.write(result.changed
+            ? `${describeAdded({ scope: memoryCommand.scope, text: memoryCommand.text }, style_)}\n`
+            : style.dim("  already remembered\n"));
+          break;
+        }
+        case "forget": {
+          const result = await forgetMemory(memoryCommand.scope, memoryCommand.index, args.root, environment);
+          memories = await loadMemories(args.root, environment);
+          memorySent = false;
+          process.stdout.write(result.removed
+            ? style.green(`  forgot: ${result.removed.text}\n`)
+            : style.yellow(`  there is no ${memoryCommand.scope} memory ${memoryCommand.index} — /memory lists them\n`));
+          break;
+        }
+        case "clear": {
+          const answer = (await readline.question(`  ${style.yellow("?")} Forget every ${memoryCommand.scope} memory? ${style.dim("[y/N]: ")}`)).trim().toLowerCase();
+          if (answer !== "y" && answer !== "yes") { process.stdout.write(style.dim("  kept\n")); break; }
+          await clearMemories(memoryCommand.scope, args.root, environment);
+          memories = await loadMemories(args.root, environment);
+          memorySent = false;
+          process.stdout.write(style.dim(`  ${memoryCommand.scope} memory cleared\n`));
+          break;
+        }
+      }
+      continue;
+    }
+
+    const paceCommand = parsePaceCommand(input, pace);
+    if (paceCommand) {
+      if (paceCommand.kind === "invalid") { process.stdout.write(style.yellow(`  ${paceCommand.reason}\n`)); continue; }
+      if (paceCommand.kind === "show") { process.stdout.write(`${describePace(pace, sectionStyle())}\n`); continue; }
+      pace = paceCommand.level;
+      // The pace lives in the agent's budgets, which are fixed when the client is built — so the
+      // client is rebuilt around the same session, exactly as a mode or model switch does.
+      const previous = agent;
+      const previousSessionId = previous.sessionId;
+      await previous.relinquish();
+      const carried = await loadSession(args.root, previousSessionId);
+      agent = await openClient(carried ?? undefined);
+      process.stdout.write(`${describePace(pace, sectionStyle())}\n`);
+      continue;
+    }
+
+    const historyCommand = parseHistoryCommand(input);
+    if (historyCommand) {
+      const style_ = sectionStyle();
+      const listed = await listSessions(args.root, 30);
+      const entries: HistoryEntry[] = [];
+      for (const summary of listed) {
+        const record = await loadSession(args.root, summary.id);
+        if (record) entries.push(summarizeSession(record));
+      }
+      switch (historyCommand.kind) {
+        case "invalid":
+          process.stdout.write(style.yellow(`  ${historyCommand.reason}\n`));
+          break;
+        case "list":
+          process.stdout.write(`${renderHistoryList(entries, style_, { current: agent.sessionId })}\n`);
+          break;
+        case "search": {
+          const found = searchHistory(entries, historyCommand.query);
+          process.stdout.write(`${heading(`"${historyCommand.query}" ${glyphs.middot} ${found.length} match${found.length === 1 ? "" : "es"}`, 2, style_)}\n`);
+          process.stdout.write(`${renderHistoryList(found, style_, { current: agent.sessionId })}\n`);
+          break;
+        }
+        case "show": {
+          const record = await loadSession(args.root, historyCommand.id);
+          if (!record) { process.stdout.write(style.yellow(`  No session ${historyCommand.id}. /history lists them.\n`)); break; }
+          process.stdout.write(`${renderReplay(record, style_, historyCommand.turns === undefined ? {} : { turns: historyCommand.turns })}\n`);
+          break;
+        }
+        case "resume": {
+          // Picked from a menu when no id was given: reading an id off a list and typing it back is
+          // a transcription step a chooser removes, and the ids are deliberately not memorable.
+          let id = historyCommand.id === "latest" ? entries[0]?.id : historyCommand.id;
+          if (!id && interactive && entries.length > 0) {
+            id = await openChooser<string>(
+              { readline, input: process.stdin, output: process.stdout },
+              entries.map((entry) => ({
+                value: entry.id,
+                label: entry.title || entry.id,
+                hint: relativeTime(entry.updatedAt),
+                description: `${entry.turns} turn${entry.turns === 1 ? "" : "s"}`,
+              })),
+              { title: "Pick up a past conversation", filter: true, height: 12, glyphs, paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow } },
+            );
+          }
+          if (!id) { process.stdout.write(style.dim("  no session chosen\n")); break; }
+          const record = await loadSession(args.root, id);
+          if (!record) { process.stdout.write(style.yellow(`  No session ${id}.\n`)); break; }
+          await agent.relinquish();
+          agent = await openClient(record);
+          // A resumed thread has already been told what Nova remembers only if the memory set has
+          // not changed since — which cannot be known, so it is told again on the next turn.
+          memorySent = false;
+          expandables.clear();
+          process.stdout.write(`${renderReplay(record, style_, { turns: 2 })}\n`);
+          process.stdout.write(style.green(`  resumed ${record.id}\n`));
+          break;
+        }
+      }
+      continue;
+    }
+
     if (input === "/todos") {
       const todos = agent.todos;
       if (todos.length === 0) { process.stdout.write(style.dim("  no plan yet\n")); continue; }
-      const mark = { pending: "○", in_progress: "◐", done: "●" } as const;
-      process.stdout.write(`${box(todos.map((todo) => `${mark[todo.status]} ${todo.text}`), { depth, title: "todos" })}\n`);
+      const mark = { pending: glyphs.circleEmpty, in_progress: glyphs.circleHalf, done: glyphs.circleFull } as const;
+      process.stdout.write(`${box(todos.map((todo) => `${mark[todo.status]} ${todo.text}`), { depth, title: "todos", glyphs })}\n`);
       continue;
     }
     if (input === "/diff") {
       const stat = await agent.diffStat();
-      process.stdout.write(stat ? `${box(stat.split("\n"), { depth, title: "diff" })}\n` : style.dim("  nothing changed since the last checkpoint\n"));
+      process.stdout.write(stat ? `${box(stat.split("\n"), { depth, title: "diff", glyphs })}\n` : style.dim("  nothing changed since the last checkpoint\n"));
       continue;
     }
     const tabCommand = parseTabCommand(input);
@@ -1750,7 +2159,7 @@ async function main(): Promise<number> {
               process.stdout.write(style.dim("  no background jobs — /jobs run <task>, /detach <task>, or /wander daily to start one\n"));
               break;
             }
-            const marker = { queued: "○", running: style.cyan("●"), paused: style.yellow("⏸"), completed: style.green("✓"), failed: style.red("✗"), cancelled: style.dim("⊘") } as const;
+            const marker = { queued: glyphs.circleEmpty, running: style.cyan(glyphs.circleFull), paused: style.yellow(glyphs.paused), completed: style.green(glyphs.check), failed: style.red(glyphs.cross), cancelled: style.dim(glyphs.cancelled) } as const;
             for (const job of jobs) {
               process.stdout.write(`  ${marker[job.status]} ${job.id}  ${job.status.padEnd(9)} ${job.objective}${job.detail ? style.dim(`  — ${job.detail}`) : ""}\n`);
             }
@@ -1869,6 +2278,10 @@ async function main(): Promise<number> {
     if (input === "/clear") {
       await agent.relinquish();
       agent = await openClient();
+      // A new thread has neither the old thread's folded output nor its copy of what Nova
+      // remembers: the first is unreachable output, the second is context the new thread lacks.
+      expandables.clear();
+      memorySent = false;
       process.stdout.write(style.dim("  new thread\n"));
       continue;
     }
@@ -1902,7 +2315,7 @@ async function main(): Promise<number> {
         }
         process.stdout.write(style.dim("  transcribing…\n"));
         let transcript = await transcribeAudio(audioFile, environment);
-        process.stdout.write(`${box(transcript.split("\n"), { depth, title: "voice transcript" })}\n`);
+        process.stdout.write(`${box(transcript.split("\n"), { depth, title: "voice transcript", glyphs })}\n`);
         const decision = (await readline.question("  Send this prompt? [Y/n/e to edit]: ")).trim().toLowerCase();
         if (decision === "n" || decision === "no") continue;
         if (decision === "e" || decision === "edit") transcript = (await readline.question("  Edit prompt: ")).trim() || transcript;
@@ -1937,13 +2350,6 @@ async function main(): Promise<number> {
       }, style)}\n`);
       continue;
     }
-    if (input === "/sessions") {
-      for (const session of await listSessions(args.root)) {
-        process.stdout.write(`  ${style.cyan(session.id)}  ${session.title}\n`);
-      }
-      continue;
-    }
-
     if (input.startsWith("/") && !isKnownCommand(input.split(/\s+/)[0])) {
       // Without this the typo is simply sent to the model, which costs a round trip to be told
       // it makes no sense.

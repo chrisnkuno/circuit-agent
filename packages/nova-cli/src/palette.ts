@@ -1,4 +1,5 @@
 import { COMMANDS } from "./commands";
+import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import type { KeypressEvent } from "./keybindings";
 
 /**
@@ -78,11 +79,14 @@ export type PaletteOptions = {
    * lands on, and that has to be the one Return would take.
    */
   direction?: "up" | "down";
+  /** Characters this terminal can draw; the query caret and the cursor come from here. */
+  glyphs?: GlyphSet;
 };
 
 export function renderPalette(frame: PaletteFrame, options: PaletteOptions = {}): string {
   const rows = options.rows ?? 8;
-  const queryLine = `  › ${frame.query}${frame.matches.length === 0 ? "   (no match)" : ""}`;
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  const queryLine = `  ${glyphs.caret} ${frame.query}${frame.matches.length === 0 ? "   (no match)" : ""}`;
   // Scroll the window with the selection so the highlighted row is always on screen; a palette
   // whose selection moves off the visible list looks like the arrow keys have stopped working.
   const start = Math.max(0, Math.min(frame.selected - Math.floor(rows / 2), frame.matches.length - rows));
@@ -91,7 +95,7 @@ export function renderPalette(frame: PaletteFrame, options: PaletteOptions = {})
   const rendered = visible.map((entry, offset) => {
     const active = Math.max(0, start) + offset === frame.selected;
     const head = entry.args ? `${entry.command} ${entry.args}` : entry.command;
-    return `  ${active ? "❯" : " "} ${head.padEnd(width + 2)}${entry.description}${entry.chord ? `  [${entry.chord}]` : ""}`;
+    return `  ${active ? glyphs.prompt : " "} ${head.padEnd(width + 2)}${entry.description}${entry.chord ? `  [${entry.chord}]` : ""}`;
   });
   return options.direction === "up"
     ? [...rendered.reverse(), queryLine].join("\n")

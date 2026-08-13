@@ -381,4 +381,40 @@ export default defineSchema({
   }).index("by_schedule", ["scheduleId"])
     .index("by_idempotency_key", ["idempotencyKey"])
     .index("by_status_lease", ["status", "leaseExpiresAt"]),
+  growthBaselines: defineTable({
+    organizationId: v.id("organizations"),
+    activeUsers: v.number(),
+    monthlyNewUsers: v.number(),
+    monthlyChurnPercent: v.number(),
+    monthlyRevenueUsd: v.number(),
+    monthlyCostsUsd: v.number(),
+    valuationRevenueMultiple: v.number(),
+    updatedAt: v.number(),
+    updatedBy: v.string(),
+  }).index("by_organization", ["organizationId"]),
+  growthFeatures: defineTable({
+    organizationId: v.id("organizations"),
+    name: v.string(),
+    status: v.union(v.literal("idea"), v.literal("building"), v.literal("shipped")),
+    reachPercent: v.number(),
+    adoptionPercent: v.number(),
+    monthlyValuePerAdopterUsd: v.number(),
+    monthlyRevenuePerAdopterUsd: v.number(),
+    retentionLiftPercent: v.number(),
+    evidence: v.union(v.literal("hypothesis"), v.literal("interviews"), v.literal("usage"), v.literal("revenue")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_organization", ["organizationId"]),
+  growthFeedback: defineTable({
+    organizationId: v.id("organizations"),
+    featureId: v.optional(v.id("growthFeatures")),
+    source: v.string(),
+    summary: v.string(),
+    kind: v.union(v.literal("problem"), v.literal("request"), v.literal("praise")),
+    affectedUsers: v.number(),
+    willingnessToPay: v.union(v.literal("unknown"), v.literal("no"), v.literal("maybe"), v.literal("yes")),
+    status: v.union(v.literal("new"), v.literal("validated"), v.literal("acted_on")),
+    createdAt: v.number(),
+  }).index("by_organization", ["organizationId"])
+    .index("by_feature", ["featureId"]),
 });

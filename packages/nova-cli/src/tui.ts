@@ -1,4 +1,5 @@
 import type { ColorDepth } from "./banner";
+import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { newMarkdownState, renderMarkdownLine, visibleWidth, type MarkdownState } from "./markdown";
 
 /**
@@ -24,20 +25,25 @@ function paint(text: string, code: string, depth: ColorDepth): string {
  *
  * Every frame is five columns wide, so the activity text never jitters left and right while the
  * core brightens and the two outer sparks collapse back in. The glyphs come from the opening
- * starfield, making this feel like a living piece of Nova instead of a borrowed loader.
+ * starfield, making this feel like a living piece of Nova instead of a borrowed loader — and from
+ * the *terminal's* starfield: a console that cannot draw `✦` gets the four-frame ASCII wheel from
+ * `ASCII_GLYPHS` rather than five columns of question marks rotating in place.
  */
-const SPINNER_FRAMES = ["·   ·", "· ✧ ·", "· ✦ ·", "✧ ✶ ✧", "· ✦ ·", "· ✧ ·"] as const;
-
-export function novaSpinnerFrame(index: number): string {
+export function novaSpinnerFrame(index: number, glyphs: GlyphSet = UNICODE_GLYPHS): string {
+  const frames = glyphs.spinnerFrames;
   const normalized = Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0;
-  return SPINNER_FRAMES[normalized % SPINNER_FRAMES.length];
+  return frames[normalized % frames.length];
 }
 
 export class Spinner {
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
 
-  constructor(private readonly onTick: () => void, private readonly intervalMs = 120) {}
+  constructor(
+    private readonly onTick: () => void,
+    private readonly intervalMs = 120,
+    private readonly glyphs: GlyphSet = UNICODE_GLYPHS,
+  ) {}
 
   start(): void {
     if (this.timer) return;
@@ -45,7 +51,7 @@ export class Spinner {
     // froze and then recovered, which is precisely the uncertainty a spinner is meant to remove.
     this.onTick();
     this.timer = setInterval(() => {
-      this.frame = (this.frame + 1) % SPINNER_FRAMES.length;
+      this.frame = (this.frame + 1) % this.glyphs.spinnerFrames.length;
       this.onTick();
     }, this.intervalMs);
   }
@@ -57,7 +63,7 @@ export class Spinner {
   }
 
   get glyph(): string {
-    return novaSpinnerFrame(this.frame);
+    return novaSpinnerFrame(this.frame, this.glyphs);
   }
 }
 
@@ -74,6 +80,14 @@ export type StatusFields = {
   phase?: ActivityPhase;
   /** Exact tool name while an operation is active; omitted during model reasoning. */
   operation?: string;
+  /**
+   * A standing mode marker — currently the spending pace.
+   *
+   * Ranked just under the mode when the line has to narrow: a pace the user set and then forgot is
+   * the field most likely to explain why the agent is behaving the way it is, so it survives longer
+   * than the counts and the cost that merely report progress.
+   */
+  badge?: string;
 };
 
 function formatElapsed(ms: number): string {
@@ -121,16 +135,18 @@ export function activityLabel(phase: ActivityPhase, operation: string | undefine
  * The elapsed time is the one field that survives every narrowing: it is the only one that answers
  * "is this still going", which is the question a status line exists for.
  */
-export function formatStatusLine(fields: StatusFields, width: number, depth: ColorDepth): string {
+export function formatStatusLine(fields: StatusFields, width: number, depth: ColorDepth, glyphs: GlyphSet = UNICODE_GLYPHS): string {
   const label = activityLabel(fields.phase ?? "thinking", fields.operation, fields.elapsedMs);
-  const left = `${fields.spinnerGlyph} ${label}…`;
-  const paintedLeft = `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint(`${label}…`, DIM, depth)}`;
+  const ellipsis = glyphs.ellipsis;
+  const left = `${fields.spinnerGlyph} ${label}${ellipsis}`;
+  const paintedLeft = `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint(`${label}${ellipsis}`, DIM, depth)}`;
 
   // Ordered least to most important; the front of the list is given up first.
   const optional = [
     fields.cost,
     fields.tokens > 0 ? formatTokens(fields.tokens) : "",
     fields.toolCalls > 0 ? `${fields.toolCalls} tool${fields.toolCalls === 1 ? "" : "s"}` : "",
+    fields.badge ?? "",
     fields.mode,
   ].filter((segment) => segment !== "");
 
@@ -141,9 +157,9 @@ export function formatStatusLine(fields: StatusFields, width: number, depth: Col
     if (total <= width || kept.length === 0) {
       if (total > width) {
         if (visibleWidth(left) <= width) return paintedLeft;
-        const compact = `${fields.spinnerGlyph} …`;
-        if (visibleWidth(compact) <= width) return `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint("…", DIM, depth)}`;
-        return width > 0 ? paint("✦", CYAN, depth) : "";
+        const compact = `${fields.spinnerGlyph} ${ellipsis}`;
+        if (visibleWidth(compact) <= width) return `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint(ellipsis, DIM, depth)}`;
+        return width > 0 ? paint(glyphs.star, CYAN, depth) : "";
       }
       const gap = Math.max(1, width - visibleWidth(left) - right.length);
       return `${paintedLeft}${" ".repeat(gap)}${paint(right, DIM, depth)}`;
@@ -158,10 +174,10 @@ export class StatusBar {
   constructor(private readonly stream: NodeJS.WriteStream = process.stdout) {}
 
   /** Redraws the bar in place: erase what was there, write the new line. */
-  render(fields: StatusFields, depth: ColorDepth): void {
+  render(fields: StatusFields, depth: ColorDepth, glyphs: GlyphSet = UNICODE_GLYPHS): void {
     this.clear();
     const width = this.stream.columns ?? 80;
-    const line = formatStatusLine(fields, width, depth);
+    const line = formatStatusLine(fields, width, depth, glyphs);
     this.stream.write(`${line}\n`);
     this.linesDrawn = 1;
   }
@@ -263,6 +279,7 @@ export class MarkdownStream {
      * through unaltered, which is also the more useful thing to receive.
      */
     private readonly live = true,
+    private readonly glyphs: GlyphSet = UNICODE_GLYPHS,
   ) {}
 
   /** True while a partial line is on screen that nothing else may print over. */
@@ -298,7 +315,7 @@ export class MarkdownStream {
     }
     if (this.pending !== "") this.finalizeLine();
     if (this.state.inFence) {
-      const rendered = renderMarkdownLine("```", this.state, { width: this.columns(), depth: this.depth });
+      const rendered = renderMarkdownLine("```", this.state, { width: this.columns(), depth: this.depth, glyphs: this.glyphs });
       this.stream.write(`${rendered.join("\n")}\n`);
     }
   }
@@ -312,7 +329,7 @@ export class MarkdownStream {
 
   private finalizeLine(): void {
     this.erasePending();
-    const rendered = renderMarkdownLine(this.pending, this.state, { width: this.columns(), depth: this.depth });
+    const rendered = renderMarkdownLine(this.pending, this.state, { width: this.columns(), depth: this.depth, glyphs: this.glyphs });
     this.stream.write(`${rendered.join("\n")}\n`);
     this.pending = "";
   }
@@ -331,8 +348,9 @@ export class MarkdownStream {
  * A unicode-box-drawn card, sized to its content — the same "compute a width, then center or pad
  * within it" math `banner.ts` uses for the wordmark, applied to arbitrary line-based content.
  */
-export function box(lines: readonly string[], options: { width?: number; depth: ColorDepth; title?: string }): string {
+export function box(lines: readonly string[], options: { width?: number; depth: ColorDepth; title?: string; glyphs?: GlyphSet }): string {
   const terminalWidth = options.width ?? process.stdout.columns ?? 80;
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const titleWidth = options.title ? visibleWidth(options.title) : 0;
   // Measured in columns, not characters: a todo containing an emoji is two columns wide there and
   // one character long, and padding by the latter is what leaves a border short of its own corner.
@@ -340,14 +358,16 @@ export function box(lines: readonly string[], options: { width?: number; depth: 
     Math.max(titleWidth, ...lines.map((line) => visibleWidth(line)), 1),
     Math.max(1, terminalWidth - 4),
   );
-  const horizontal = "─".repeat(contentWidth + 2);
+  const horizontal = glyphs.boxHorizontal.repeat(contentWidth + 2);
   const top = options.title
-    ? `╭─ ${paint(options.title, CYAN, options.depth)} ${"─".repeat(Math.max(0, contentWidth - titleWidth - 1))}╮`
-    : `╭${horizontal}╮`;
-  const bottom = `╰${horizontal}╯`;
+    ? `${glyphs.boxTopLeft}${glyphs.boxHorizontal} ${paint(options.title, CYAN, options.depth)} ${glyphs.boxHorizontal.repeat(Math.max(0, contentWidth - titleWidth - 1))}${glyphs.boxTopRight}`
+    : `${glyphs.boxTopLeft}${horizontal}${glyphs.boxTopRight}`;
+  const bottom = `${glyphs.boxBottomLeft}${horizontal}${glyphs.boxBottomRight}`;
   const body = lines.map((line) => {
-    const clipped = visibleWidth(line) > contentWidth ? `${sliceToWidth(line, contentWidth - 1)}…` : line;
-    return `│ ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} │`;
+    const clipped = visibleWidth(line) > contentWidth
+      ? `${sliceToWidth(line, contentWidth - visibleWidth(glyphs.ellipsis))}${glyphs.ellipsis}`
+      : line;
+    return `${glyphs.boxVertical} ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} ${glyphs.boxVertical}`;
   });
   return [top, ...body, bottom].join("\n");
 }

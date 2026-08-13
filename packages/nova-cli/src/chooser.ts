@@ -1,3 +1,4 @@
+import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import type { KeypressEvent } from "./keybindings";
 
 /**
@@ -136,10 +137,13 @@ export type RenderChooserOptions = {
   paint: ChooserPaint;
   /** Replaces the default key legend. */
   legend?: string;
+  /** Characters this terminal can draw; the cursor and the legend's arrows come from here. */
+  glyphs?: GlyphSet;
 };
 
 export function renderChooser<T>(state: ChooserState, items: readonly ChooserItem<T>[], options: RenderChooserOptions): string {
   const { paint } = options;
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const height = options.height ?? 10;
   const visible = filterItems(items, state.query);
   const lines: string[] = [];
@@ -164,13 +168,13 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
     lastHeader = item.header ?? lastHeader;
     const active = index === state.selected;
     const number = index < 9 ? `${index + 1}.` : "  ";
-    const row = `${active ? paint.green("❯") : " "} ${paint.dim(number)} ${item.label.padEnd(width + 2)}`;
+    const row = `${active ? paint.green(glyphs.prompt) : " "} ${paint.dim(number)} ${item.label.padEnd(width + 2)}`;
     const hint = item.hint ? ` ${paint.dim(item.hint)}` : "";
     const description = item.description ? `  ${paint.dim(item.description)}` : "";
     lines.push(`  ${row}${hint}${description}`);
   }
 
-  lines.push(`  ${paint.dim(options.legend ?? `↑↓ move · Enter choose · ${options.filter ? "type to filter · " : ""}Esc cancel`)}`);
+  lines.push(`  ${paint.dim(options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}Esc cancel`)}`);
   return lines.join("\n");
 }
 

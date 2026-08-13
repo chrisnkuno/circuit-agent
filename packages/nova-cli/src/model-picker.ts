@@ -1,3 +1,4 @@
+import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import type { KeypressEvent } from "./keybindings";
 import type { ModelCatalog, ModelChoice } from "./models";
 import type { ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
@@ -65,6 +66,8 @@ export type PickerPaint = {
 export type RenderPickerOptions = {
   /** Visible rows before the list scrolls under the selection. */
   height?: number;
+  /** Characters this terminal can draw; the cursor, the current-model dot and the legend come from here. */
+  glyphs?: GlyphSet;
   current: { provider: ProviderId; model: string };
   price: (choice: ModelChoice) => string;
   paint: PickerPaint;
@@ -72,6 +75,7 @@ export type RenderPickerOptions = {
 
 export function renderModelPicker(frame: { rows: readonly PickerRow[]; selected: number }, options: RenderPickerOptions): string {
   const { paint } = options;
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const height = options.height ?? 10;
   // Same windowing rule as the palette: keep the selection on screen, or the arrow keys look broken.
   const start = Math.max(0, Math.min(frame.selected - Math.floor(height / 2), frame.rows.length - height));
@@ -82,16 +86,16 @@ export function renderModelPicker(frame: { rows: readonly PickerRow[]; selected:
   for (const [offset, row] of visible.entries()) {
     if (row.header) lines.push(`  ${paint.cyan(row.header)}`);
     const active = Math.max(0, start) + offset === frame.selected;
-    const cursor = active ? paint.green("❯") : " ";
+    const cursor = active ? paint.green(glyphs.prompt) : " ";
     if (row.kind === "settings") {
       lines.push(`  ${cursor} ${paint.yellow(row.label)}`);
       continue;
     }
     const isCurrent = row.choice.provider === options.current.provider && row.choice.model === options.current.model;
     const tags = [row.choice.isProviderDefault ? "default" : "", isCurrent ? "current" : ""].filter(Boolean).join(", ");
-    lines.push(`  ${cursor} ${isCurrent ? paint.green("●") : " "} ${row.choice.model.padEnd(width + 2)}${paint.dim(options.price(row.choice))}${tags ? paint.dim(`  (${tags})`) : ""}`);
+    lines.push(`  ${cursor} ${isCurrent ? paint.green(glyphs.circleFull) : " "} ${row.choice.model.padEnd(width + 2)}${paint.dim(options.price(row.choice))}${tags ? paint.dim(`  (${tags})`) : ""}`);
   }
-  lines.push(`  ${paint.dim("↑↓ move · Enter choose · Esc cancel")}`);
+  lines.push(`  ${paint.dim(`${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} Esc cancel`)}`);
   return lines.join("\n");
 }
 

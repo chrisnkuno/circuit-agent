@@ -1,4 +1,5 @@
 import type { ColorDepth } from "./banner";
+import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 
 /**
  * Markdown, rendered for a terminal.
@@ -205,12 +206,12 @@ function fitCell(text: string, width: number): string {
   return result + " ".repeat(Math.max(0, width - visibleWidth(result)));
 }
 
-function renderTableLine(cells: string[], separator: boolean, width: number, depth: ColorDepth): string {
+function renderTableLine(cells: string[], separator: boolean, width: number, depth: ColorDepth, glyphs: GlyphSet): string {
   const cellWidth = Math.max(3, Math.floor((Math.max(width, 12) - cells.length - 1) / cells.length));
-  if (separator) return paint(`├${cells.map(() => "─".repeat(cellWidth)).join("┼")}┤`, DIM, depth);
+  if (separator) return paint(`${glyphs.boxTeeLeft}${cells.map(() => glyphs.boxHorizontal.repeat(cellWidth)).join(glyphs.boxCross)}${glyphs.boxTeeRight}`, DIM, depth);
   const contentWidth = Math.max(1, cellWidth - 2);
   const rendered = cells.map((cell) => fitCell(parseInline(cell).map((token) => token.text).join(""), contentWidth));
-  return `│${rendered.map((cell) => ` ${cell} `).join("│")}│`;
+  return `${glyphs.boxVertical}${rendered.map((cell) => ` ${cell} `).join(glyphs.boxVertical)}${glyphs.boxVertical}`;
 }
 
 /**
@@ -222,37 +223,38 @@ function renderTableLine(cells: string[], separator: boolean, width: number, dep
 export function renderMarkdownLine(
   line: string,
   state: MarkdownState,
-  options: { width: number; depth: ColorDepth },
+  options: { width: number; depth: ColorDepth; glyphs?: GlyphSet },
 ): string[] {
   const { width, depth } = options;
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
 
   const fence = FENCE.exec(line);
   if (fence) {
     if (state.inFence) {
       state.inFence = false;
       state.fenceLanguage = "";
-      return [paint("  ╰────", DIM, depth)];
+      return [paint(`  ${glyphs.boxBottomLeft}${glyphs.boxHorizontal.repeat(4)}`, DIM, depth)];
     }
     state.inFence = true;
     state.fenceLanguage = fence[1].trim();
-    const label = state.fenceLanguage ? ` ${state.fenceLanguage} ` : "────";
-    return [paint(`  ╭─${label}`, DIM, depth)];
+    const label = state.fenceLanguage ? ` ${state.fenceLanguage} ` : glyphs.boxHorizontal.repeat(4);
+    return [paint(`  ${glyphs.boxTopLeft}${glyphs.boxHorizontal}${label}`, DIM, depth)];
   }
 
   if (state.inFence) {
     // Code is never re-wrapped: a broken line of code is a lie about the file it came from, so it
     // is left to the terminal and marked with a gutter that makes the block's extent obvious.
-    return [`${paint("  │ ", DIM, depth)}${paint(line, GREEN, depth)}`];
+    return [`${paint(`  ${glyphs.boxVertical} `, DIM, depth)}${paint(line, GREEN, depth)}`];
   }
 
   const table = tableCells(line);
   if (table) {
     const separator = table.every((cell) => TABLE_SEPARATOR_CELL.test(cell));
-    return [renderTableLine(table, separator, width, depth)];
+    return [renderTableLine(table, separator, width, depth, glyphs)];
   }
 
   if (RULE.test(line) && line.trim().length > 0) {
-    return [paint("  " + "─".repeat(Math.max(4, Math.min(width - 4, 40))), DIM, depth)];
+    return [paint("  " + glyphs.boxHorizontal.repeat(Math.max(4, Math.min(width - 4, 40))), DIM, depth)];
   }
 
   const heading = HEADING.exec(line);
@@ -268,7 +270,7 @@ export function renderMarkdownLine(
   const task = TASK.exec(line);
   if (task) {
     return wrapTokens(parseInline(task[3]), width, {
-      firstPrefix: `${task[1]}${paint(task[2].trim() ? "☑" : "☐", task[2].trim() ? GREEN : BLUE, depth)} `,
+      firstPrefix: `${task[1]}${paint(task[2].trim() ? glyphs.checkboxDone : glyphs.checkbox, task[2].trim() ? GREEN : BLUE, depth)} `,
       continuationPrefix: `${task[1]}  `,
       depth,
     });
@@ -278,7 +280,7 @@ export function renderMarkdownLine(
   if (bullet) {
     const indent = bullet[1];
     return wrapTokens(parseInline(bullet[3]), width, {
-      firstPrefix: `${indent}${paint("•", BLUE, depth)} `,
+      firstPrefix: `${indent}${paint(glyphs.bullet, BLUE, depth)} `,
       continuationPrefix: `${indent}  `,
       depth,
     });
@@ -298,8 +300,8 @@ export function renderMarkdownLine(
   const quote = BLOCKQUOTE.exec(line);
   if (quote) {
     return wrapTokens([{ text: quote[1], code: DIM }], width, {
-      firstPrefix: paint("│ ", YELLOW, depth),
-      continuationPrefix: paint("│ ", YELLOW, depth),
+      firstPrefix: paint(`${glyphs.boxVertical} `, YELLOW, depth),
+      continuationPrefix: paint(`${glyphs.boxVertical} `, YELLOW, depth),
       depth,
     });
   }
@@ -309,11 +311,12 @@ export function renderMarkdownLine(
 }
 
 /** Renders a whole markdown document, for text that is already complete when it arrives. */
-export function renderMarkdown(text: string, options: { width: number; depth: ColorDepth }): string {
+export function renderMarkdown(text: string, options: { width: number; depth: ColorDepth; glyphs?: GlyphSet }): string {
   const state = newMarkdownState();
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const rendered = text
     .split("\n")
     .flatMap((line) => renderMarkdownLine(line, state, options))
-  if (state.inFence) rendered.push(paint("  ╰────", DIM, options.depth));
+  if (state.inFence) rendered.push(paint(`  ${glyphs.boxBottomLeft}${glyphs.boxHorizontal.repeat(4)}`, DIM, options.depth));
   return rendered.join("\n");
 }

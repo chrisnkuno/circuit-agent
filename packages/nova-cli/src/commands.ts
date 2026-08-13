@@ -32,6 +32,10 @@ export const COMMANDS = defineCommands({
   "/diff": { description: "What changed since the last checkpoint" },
   "/todos": { description: "The agent's current plan" },
   "/clear": { description: "Start a fresh thread" },
+  "/memory": { args: "[add <fact> | forget N | clear]", description: "Facts to carry between sessions — # <fact> is the shorthand" },
+  "/history": { args: "[<id> | search <text> | resume]", description: "Browse, read back or pick up a past conversation" },
+  "/expand": { args: "[N | all | list]", description: "Show a folded block — written code, a test run, a long result — in full" },
+  "/slow": { args: "[on|strict|off]", description: "Spend at a slower pace: fewer model rounds, smaller replies, a pause between turns" },
   "/tab": { args: "[new|next|prev|close|rename|N]", description: "Work on several things at once, one in front at a time" },
   "/pull": { args: "[dir]", description: "Copy sandbox files here" },
   "/where": { description: "Show the current workspace" },
@@ -44,7 +48,7 @@ export const COMMANDS = defineCommands({
   "/attach": { args: "<id>", description: "Watch a background job's log live" },
   "/detach": { args: "<task>", description: "Start work in the background; press Alt+B to send a running turn there" },
   "/cost": { description: "Token and cost breakdown for this session" },
-  "/sessions": { description: "List sessions in this project" },
+  "/sessions": { description: "List sessions in this project (an alias for /history)" },
   "/palette": { description: "Search every command by name or by what it does" },
   "/keys": { description: "Keyboard shortcuts" },
   "/help": { description: "This list" },
@@ -201,6 +205,8 @@ export const KEYBOARD_SHORTCUTS = [
   ["clear", "Ctrl-L", "Clear and redraw the terminal"],
   ["interrupt", "Ctrl-C", "Interrupt the current turn"],
   ["voice", "/voice", "Record a prompt from the microphone"],
+  ["expand", "Ctrl-O", "Unfold the most recent folded block"],
+  ["memory", "# fact", "Remember a fact for every future session in this project"],
 ] as const;
 
 export function renderKeyboardShortcuts(language: ControlLanguage = "en"): string {
