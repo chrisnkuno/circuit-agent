@@ -93,7 +93,7 @@ jobs:
           binary="packages/nova-state/target/${{ matrix.target }}/release/nova-state"
           if [[ "$RUNNER_OS" == "Windows" ]]; then binary="${binary}.exe"; fi
           bun run scripts/package-native-state.ts --target "${{ matrix.target }}" --version "${{ inputs.version || '0.1.0' }}" --binary "$binary" --out-dir release-packages
-          npm pack --dry-run "release-packages/${{ matrix.package }}"
+          npm pack --dry-run "./release-packages/${{ matrix.package }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}
