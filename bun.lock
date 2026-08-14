@@ -34,13 +34,14 @@
     },
     "apps/nova-desktop": {
       "name": "@circuit-nova/nova-desktop",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@circuit-nova/nova-core": "workspace:*",
         "@tauri-apps/api": "^2.8.0",
         "@tauri-apps/plugin-dialog": "^2.4.0",
         "@tauri-apps/plugin-shell": "^2.3.0",
         "@tauri-apps/plugin-store": "^2.4.0",
+        "@tauri-apps/plugin-updater": "^2.10.1",
         "e2b": "^2.36.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
@@ -74,7 +75,7 @@
     },
     "packages/nova-cli": {
       "name": "@circuit-nova/nova-cli",
-      "version": "0.7.0",
+      "version": "0.7.2",
       "bin": {
         "nova": "dist/nova.mjs",
       },
@@ -419,6 +420,8 @@
     "@tauri-apps/plugin-shell": ["@tauri-apps/plugin-shell@2.3.5", "", { "dependencies": { "@tauri-apps/api": "^2.10.1" } }, "sha512-jewtULhiQ7lI7+owCKAjc8tYLJr92U16bPOeAa472LHJdgaibLP83NcfAF2e+wkEcA53FxKQAZ7byDzs2eeizg=="],
 
     "@tauri-apps/plugin-store": ["@tauri-apps/plugin-store@2.4.4", "", { "dependencies": { "@tauri-apps/api": "^2.11.0" } }, "sha512-oxSMaj/QpVfJcBMYX5aOQV94fWvga0MwQMfD6TLlbK2dh+ShPWAzefd8HWXhvOKjPRJdGVAkW7ZGO76JzzjaDA=="],
+
+    "@tauri-apps/plugin-updater": ["@tauri-apps/plugin-updater@2.10.1", "", { "dependencies": { "@tauri-apps/api": "^2.10.1" } }, "sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA=="],
 
     "@termuijs/core": ["@termuijs/core@0.1.7", "", {}, "sha512-gVFlizo4+gyvC1DY/RhREkNW157R4tvL4Z2S5I+JGuCbLFfdf07q6hGp3KpbMHO48s6Nny+6hS2QKVQb3QJP/g=="],
 
