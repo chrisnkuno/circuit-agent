@@ -1,0 +1,22 @@
+# Netlify deployment for Circuit-Nova (Next.js 16 + Bun).
+#
+# Netlify auto-detects Next.js and applies @netlify/plugin-nextjs, which
+# handles the .next output, API routes, and middleware — so there is no
+# publish directory to set here.
+#
+# Required environment variables (set in Netlify → Site settings → Env vars):
+#   NEXT_PUBLIC_SITE_URL        https://<your-site>.netlify.app
+#   NEXT_PUBLIC_CONVEX_URL      real Convex deployment URL (see below)
+#   NEXT_PUBLIC_CONVEX_SITE_URL real Convex site URL
+#   SITE_ACCESS_PASSWORD        optional basic-auth gate (unset = open preview)
+#
+# NOTE: the local .env.local ships placeholder Convex URLs for CI. A deployed
+# preview will render the landing page but live features (tasks, terminal,
+# auth) will fail until real Convex env vars are set here. Deploy Convex once
+# from your machine: `bunx convex deploy`, then copy the URLs it prints.
+
+[build]
+  command = "bun run build"
+
+[build.environment]
+  BUN_VERSION = "1.3.14"
