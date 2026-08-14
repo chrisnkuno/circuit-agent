@@ -116,6 +116,18 @@ export class PinnedScreen {
     this.stream.write(`\x1b7\x1b[?25l\x1b[${this.layout.statusRow};1H\x1b[2K${text}\x1b8\x1b[?25h`);
   }
 
+  /**
+   * Draws the input bar's closing border, then restores the cursor.
+   *
+   * The mirror of `renderStatus` — the top border carries the status text, this one closes the box
+   * — and it saves and restores position for the same reason: the row is *below* the input line, so
+   * reaching it means leaving wherever the user is typing and having to come back exactly.
+   */
+  renderPromptBottom(text: string): void {
+    if (!this.holdRegion || !this.layout.promptBottomRow) return;
+    this.stream.write(`\x1b7\x1b[?25l\x1b[${this.layout.promptBottomRow};1H\x1b[2K${text}\x1b8\x1b[?25h`);
+  }
+
   /** Clears the input row and parks the cursor there. Call immediately before `readline.question()`. */
   positionInput(): void {
     if (!this.holdRegion || !this.layout.inputRow) return;

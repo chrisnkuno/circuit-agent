@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ASCII_GLYPHS } from "./glyphs";
 import { visibleWidth } from "./markdown";
 import {
   activityLabel,
@@ -7,14 +8,14 @@ import {
   formatTokens,
   MarkdownStream,
   novaSpinnerFrame,
-  PromptBox,
+  PROMPT_PREFIX_COLUMNS,
+  promptStatusRoom,
   renderPromptBox,
   ReplaceableBlock,
   rowsOccupied,
   Spinner,
   StatusBar,
   thinkingVerb,
-  wrappedRemainder,
   wrapPlain,
 } from "./tui";
 
@@ -449,23 +450,78 @@ describe("renderPromptBox", () => {
     expect(renderPromptBox({ ...fields, mode: "auto", depth: "truecolor" }).top).toMatch(/\x1b\[32m/);
     expect(renderPromptBox({ ...fields, mode: "build", depth: "truecolor" }).top).toMatch(/\x1b\[36m/);
   });
+
+  it("carries the status line on the top border, so the bar costs no extra row", () => {
+    const { top } = renderPromptBox({ ...fields, status: "build · $0.12" });
+    expect(plain(top)).toContain("$0.12");
+    expect(visibleWidth(plain(top))).toBe(80);
+  });
+
+  it("keeps the border exactly the terminal's width whatever the status says", () => {
+    for (const status of ["", "a", "build · $0.12 · 4 tools", "x".repeat(40)]) {
+      const { top } = renderPromptBox({ ...fields, status });
+      expect(visibleWidth(plain(top)), JSON.stringify(status)).toBe(80);
+    }
+  });
+
+  it("drops the status rather than the workspace when a narrow window cannot hold both", () => {
+    // Losing the workspace would leave the bar unable to say where it is; the transcript above
+    // repeats the cost soon enough, so that is the segment worth giving up.
+    const { top } = renderPromptBox({ ...fields, width: 30, status: "a very long status indeed" });
+    expect(plain(top)).not.toContain("a very long status indeed");
+    expect(plain(top)).toContain("build");
+    expect(visibleWidth(plain(top))).toBe(30);
+  });
+
+  it("draws with ASCII glyphs on a terminal that cannot render the box characters", () => {
+    const { top, prefix, bottom } = renderPromptBox({ ...fields, glyphs: ASCII_GLYPHS, status: "$0.12" });
+    for (const line of [top, bottom]) expect(visibleWidth(plain(line))).toBe(80);
+    expect(plain(prefix)).toBe("| > ");
+    expect(visibleWidth(plain(prefix))).toBe(PROMPT_PREFIX_COLUMNS);
+    expect(top).not.toContain("╭");
+  });
+
+  it("pays for the ellipsis out of the workspace's budget, not out of the border", () => {
+    // ASCII's ellipsis is three columns to Unicode's one. Clipping to the budget and appending it
+    // afterwards is what pushes a border one character past its own corner.
+    const { top } = renderPromptBox({ ...fields, workspace: "x".repeat(500), glyphs: ASCII_GLYPHS });
+    expect(plain(top)).toContain("...");
+    expect(visibleWidth(plain(top))).toBe(80);
+  });
+
+  it("draws both borders at exactly the terminal's width, for every combination that fits", () => {
+    // The invariant the whole bar rests on. A border one column over wraps onto the row below,
+    // which on a pinned footer is the input line — the bar eats the place you type. One column
+    // under leaves a ragged notch. Neither is caught by any single hand-picked example, so this
+    // sweeps the axes that interact: width against title length against status length.
+    for (const width of [20, 30, 48, 80, 120, 200]) {
+      for (const workspace of ["a", "circuit-agent", "x".repeat(60), "日本語のリポジトリ"]) {
+        for (const status of ["", "$0.12", "build · $0.12 · 4 tools · 12.3s", "y".repeat(50)]) {
+          for (const glyphs of [undefined, ASCII_GLYPHS]) {
+            const { top, bottom } = renderPromptBox({ mode: "build", workspace, depth: "none", width, status, ...(glyphs ? { glyphs } : {}) });
+            const where = `width ${width} · workspace ${workspace.length} · status ${status.length}${glyphs ? " · ascii" : ""}`;
+            expect(visibleWidth(plain(top)), where).toBe(width);
+            expect(visibleWidth(plain(bottom)), where).toBe(width);
+          }
+        }
+      }
+    }
+  });
 });
 
-describe("wrappedRemainder", () => {
-  it("returns nothing while the line fits on the input row", () => {
-    expect(wrappedRemainder("a short line", 4, 80)).toBe("");
-    expect(wrappedRemainder("", 4, 80)).toBe("");
+describe("promptStatusRoom", () => {
+  it("reports the columns left over once the title and corners are laid out", () => {
+    const room = promptStatusRoom("build", "circuit-agent", 80);
+    // Whatever it reports must actually fit: a status of exactly that width leaves the border
+    // exactly the terminal's width, which is the property the number exists to guarantee.
+    const { top } = renderPromptBox({ mode: "build", workspace: "circuit-agent", depth: "none", width: 80, status: "x".repeat(room) });
+    expect(plain(top)).toContain("x".repeat(room));
+    expect(visibleWidth(plain(top))).toBe(80);
   });
 
-  it("returns the part of the line that spilled onto the next row", () => {
-    // The input row starts four columns in, so at width 20 the first row holds sixteen
-    // characters and the remaining four spill over.
-    expect(wrappedRemainder("x".repeat(20), 4, 20)).toBe("x".repeat(4));
-  });
-
-  it("counts double-width characters as two columns", () => {
-    // Width 12 with a four-column start leaves eight columns: 日本語日 fits, 本 wraps.
-    expect(wrappedRemainder("日本語".repeat(3), 4, 12)).toBe("本語日本語");
+  it("shrinks as the title grows and never goes negative", () => {
+    expect(promptStatusRoom("build", "a", 80)).toBeGreaterThan(promptStatusRoom("build", "a".repeat(30), 80));
+    expect(promptStatusRoom("build", "x".repeat(500), 40)).toBe(0);
   });
 });
 
@@ -487,63 +543,5 @@ describe("wrapPlain", () => {
     for (const line of wrapPlain("日本語のテキストがここにあります", 10)) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(10);
     }
-  });
-});
-
-describe("PromptBox", () => {
-  it("draws the box and parks the cursor at the start of the input row, returning the prefix", () => {
-    const { stream, output, writes } = fakeStream(60);
-    const promptBox = new PromptBox(stream);
-    expect(promptBox.isDrawn).toBe(false);
-
-    const prefix = promptBox.draw("build", "circuit-agent");
-    expect(prefix).toBe("│ › ");
-    expect(promptBox.isDrawn).toBe(true);
-    expect(writes).toHaveLength(3); // header, closing border, and the cursor reposition
-    const text = output();
-    expect(text).toContain("╭─"); // header row
-    expect(text).toContain("╰"); // closing border
-    expect(text).toContain("\x1b[1A\r"); // back onto the input row, column one
-  });
-
-  it("erases exactly the rows the box and the submitted line occupy", () => {
-    const { stream, writes } = fakeStream(80);
-    const promptBox = new PromptBox(stream);
-    promptBox.draw("build", "circuit-agent");
-    writes.length = 0;
-
-    promptBox.erase("");
-    expect(writes).toHaveLength(3); // input row, newline row, top border
-
-    writes.length = 0;
-    promptBox.draw("build", "circuit-agent");
-    writes.length = 0;
-    promptBox.erase("x".repeat(200)); // wraps onto two extra rows
-    expect(writes).toHaveLength(5);
-    for (const write of writes) expect(write).toBe("\x1b[1A\x1b[2K");
-  });
-
-  it("erasing before anything was drawn is a safe no-op", () => {
-    const { stream, writes } = fakeStream();
-    new PromptBox(stream).erase("");
-    expect(writes).toHaveLength(0);
-  });
-
-  it("drops the closing border once and re-shows the wrapped text", () => {
-    const { stream, output, writes } = fakeStream(60);
-    const promptBox = new PromptBox(stream);
-    promptBox.draw("build", "circuit-agent");
-    writes.length = 0;
-
-    promptBox.dropBorder("the remainder that wrapped");
-    expect(writes).toHaveLength(2);
-    expect(output()).toContain("\r\x1b[2K");
-    expect(output()).toContain("the remainder that wrapped");
-
-    promptBox.dropBorder("more"); // already opened — nothing further is written
-    expect(writes).toHaveLength(2);
-
-    promptBox.erase("");
-    expect(writes).toHaveLength(2 + 3);
   });
 });

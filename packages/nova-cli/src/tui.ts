@@ -412,118 +412,100 @@ const MODE_COLORS: Record<string, string> = { plan: YELLOW, auto: GREEN, build: 
 /** Visible columns the `│ › ` prefix of the prompt box occupies. */
 export const PROMPT_PREFIX_COLUMNS = 4;
 
+/** `╭─ `, the space before the filler, and `─╮` — what the top border costs before any content. */
+const PROMPT_CHROME_COLUMNS = 6;
+
+/** The unpainted title text, which is what its column width has to be measured from. */
+function promptTitle(mode: string, workspace: string, glyphs: GlyphSet): string {
+  return `${glyphs.star} nova ${glyphs.middot} ${mode} ${glyphs.middot} ${workspace}`;
+}
+
 /**
- * The input bar that makes the REPL read like a chat app: a titled box parked at the bottom of
- * the screen, with the cursor on its input row.
+ * Columns the top border can give a status line, once its title has been laid out.
  *
- * `draw` renders three rows — a border with a live header (mode, workspace), the input row, and
- * a closing border — and returns the prefix that the caller passes to readline's `question()`,
- * which is what keeps the left border on screen through readline's own editing redraws. The
- * closing border is only guaranteed while the line is being typed forward; any full redraw
- * readline performs (an arrow-key edit, a completion, submit) clears the row below the input, so
- * the box gracefully opens rather than corrupting.
+ * Exported because the caller has to size the status *before* rendering — `formatStatusLine` drops
+ * segments to fit the width it is handed, and handing it the terminal's full width would have it
+ * fit a row the corners and the title have already spent part of, which shows up as a status that
+ * pushes the closing corner off the screen exactly when the session is busiest.
+ */
+export function promptStatusRoom(mode: string, workspace: string, width: number, glyphs: GlyphSet = UNICODE_GLYPHS): number {
+  return Math.max(0, Math.max(12, width) - visibleWidth(promptTitle(mode, workspace, glyphs)) - PROMPT_CHROME_COLUMNS - 3);
+}
+
+/**
+ * The input bar that makes the REPL read like a chat app: a titled box around the place you type,
+ * drawn onto the rows `layout.ts` reserves for the footer.
+ *
+ * Three rows, and each is a pure string the caller paints onto a fixed row — nothing here writes
+ * to a terminal or counts cursor movements. That is the whole reason the bar can be a box at all:
+ * an inline version has to erase itself by walking the cursor back up over however many rows the
+ * submitted line happened to wrap onto, and it loses that race against readline's own redraws. On
+ * reserved rows the geometry is known in advance and never moves, so the borders simply stay drawn.
+ *
+ * `top` doubles as the status line — the title is the session's identity (mode, workspace) and the
+ * right-hand end carries `status`, whatever the caller currently wants said there: the idle
+ * cost-and-mode line between turns, the live activity line during one. Two rows of chrome for what
+ * would otherwise be a status line and a separate bar.
+ *
+ * `prefix` is handed to readline's `question()` rather than printed, which is what keeps the left
+ * border on screen through readline's editing redraws — it is part of the prompt, so readline
+ * rewrites it whenever it rewrites the line.
  */
 export function renderPromptBox(options: {
   mode: string;
   workspace: string;
   depth: ColorDepth;
   width: number;
+  /** Right-hand text on the top border. Pre-painted by the caller; measured, never re-styled. */
+  status?: string;
+  glyphs?: GlyphSet;
 }): { top: string; prefix: string; bottom: string } {
   const { mode, workspace, depth } = options;
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const width = Math.max(12, options.width);
   const modeColor = MODE_COLORS[mode] ?? CYAN;
-  const head = `${paint("✦", CYAN, depth)} ${paint("nova", CYAN, depth)} · ${paint(mode, modeColor, depth)} · `;
-  // The workspace is the part most likely to overrun a narrow window; give it its own budget
-  // and clip it rather than let it push the right-hand corner off screen. The extra column
-  // keeps the header (plus its ellipsis) within width - 6 so the closing corner always fits.
-  const budget = Math.max(4, width - visibleWidth(head) - 7);
-  const clipped = sliceToWidth(workspace, budget);
-  const shown = visibleWidth(clipped) < visibleWidth(workspace) ? `${clipped}…` : workspace;
-  const title = `${head}${paint(shown, DIM, depth)}`;
-  const filler = Math.max(1, width - visibleWidth(title) - 5);
-  const top = `${paint("╭─", CYAN, depth)} ${title} ${paint("─".repeat(filler), CYAN, depth)}${paint("╮", CYAN, depth)}`;
-  const prefix = `${paint("│", CYAN, depth)} ${paint("›", modeColor, depth)} `;
-  const bottom = `${paint("╰", CYAN, depth)}${paint("─".repeat(width - 2), CYAN, depth)}${paint("╯", CYAN, depth)}`;
+  const horizontal = (count: number) => paint(glyphs.boxHorizontal.repeat(Math.max(0, count)), CYAN, depth);
+
+  const CHROME = PROMPT_CHROME_COLUMNS;
+  const status = options.status ?? "";
+  const separator = ` ${glyphs.middot} `;
+  const full = `${paint(glyphs.star, CYAN, depth)} ${paint("nova", CYAN, depth)}${separator}${paint(mode, modeColor, depth)}`;
+  // What the title falls back to when the window will not hold the product's own name: the mode is
+  // the part that changes what the next keystroke is allowed to do, so it is the part that stays.
+  const compact = `${paint(glyphs.star, CYAN, depth)} ${paint(mode, modeColor, depth)}`;
+
+  // The status is shown only if the smallest usable title still fits beside it — a border reduced
+  // to a cost figure and a corner has stopped being an input bar. The one column of filler the
+  // border always keeps is reserved before any of this: leave it out and the title grows into the
+  // gap, the filler floors at one anyway, and the row comes out a column wider than the terminal,
+  // which wraps onto the input line below it.
+  const statusRoom = status === "" ? 0 : visibleWidth(status) + 2;
+  const showStatus = status !== "" && width - CHROME - 1 - statusRoom - visibleWidth(compact) >= 0;
+  const room = width - CHROME - 1 - (showStatus ? statusRoom : 0);
+
+  // Widest of the three that fits, longest first. The workspace needs a floor of its own — clipped
+  // to two characters it says nothing the transcript above does not already say, so below that it
+  // is dropped whole rather than shown as a stub.
+  const workspaceRoom = room - visibleWidth(full) - visibleWidth(separator);
+  let title: string;
+  if (workspaceRoom >= 4) {
+    // The ellipsis pays for itself out of the same budget — ASCII's `...` is three columns to
+    // Unicode's one — but only when there is something to elide. Charging for it unconditionally
+    // clips a workspace that would have fitted whole.
+    const shown = visibleWidth(workspace) <= workspaceRoom
+      ? workspace
+      : `${sliceToWidth(workspace, Math.max(0, workspaceRoom - visibleWidth(glyphs.ellipsis)))}${glyphs.ellipsis}`;
+    title = `${full}${separator}${paint(shown, DIM, depth)}`;
+  } else if (visibleWidth(full) <= room) title = full;
+  else if (visibleWidth(compact) <= room) title = compact;
+  else title = paint(glyphs.star, CYAN, depth);
+
+  const tail = showStatus ? ` ${status} ` : "";
+  const filler = Math.max(1, width - visibleWidth(title) - visibleWidth(tail) - CHROME);
+  const top = `${paint(`${glyphs.boxTopLeft}${glyphs.boxHorizontal}`, CYAN, depth)} ${title} ${horizontal(filler)}${tail}${horizontal(1)}${paint(glyphs.boxTopRight, CYAN, depth)}`;
+  const prefix = `${paint(glyphs.boxVertical, CYAN, depth)} ${paint(glyphs.caret, modeColor, depth)} `;
+  const bottom = `${paint(glyphs.boxBottomLeft, CYAN, depth)}${horizontal(width - 2)}${paint(glyphs.boxBottomRight, CYAN, depth)}`;
   return { top, prefix, bottom };
-}
-
-/** The part of a line that has wrapped past the first row, given the cursor's start column. */
-export function wrappedRemainder(line: string, startColumns: number, width: number): string {
-  let used = startColumns;
-  for (let index = 0; index < line.length; index += 1) {
-    const next = visibleWidth(line[index]);
-    if (used + next > width) return line.slice(index);
-    used += next;
-  }
-  return "";
-}
-
-/**
- * Draws and erases the chat-style input bar, tracking only what it printed so anything below
- * (the turn summary, the banner) is never touched.
- */
-export class PromptBox {
-  private drawn = false;
-  private borderCleared = false;
-
-  constructor(
-    private readonly stream: NodeJS.WriteStream = process.stdout,
-    private readonly depth: ColorDepth = "none",
-  ) {}
-
-  get isDrawn(): boolean {
-    return this.drawn;
-  }
-
-  /**
-   * Renders the box and parks the cursor at the start of its input row. Returns the prompt
-   * string to hand to readline's `question()`.
-   */
-  draw(mode: string, workspace: string): string {
-    const width = this.stream.columns ?? 80;
-    const { top, prefix, bottom } = renderPromptBox({ mode, workspace, depth: this.depth, width });
-    this.stream.write(`${top}\n`);
-    this.stream.write(`\n${bottom}`);
-    // Back to the input row, column one — question() writes the prefix from there.
-    this.stream.write("\x1b[1A\r");
-    this.drawn = true;
-    this.borderCleared = false;
-    return prefix;
-  }
-
-  /**
-   * Removes the box after a line resolves, leaving the cursor on the row its top border
-   * occupied so the caller can print the next transcript line exactly there.
-   *
-   * The count follows the geometry readline leaves behind at submit: it redraws
-   * `prefix + line` from column one (the prefix survives because `question(prefix)` keeps it as
-   * its prompt), clears everything below the input row, and finishes with a newline. `prefix` is
-   * four columns, so a line of width `W` occupies `floor((4 + W - 1) / width)` rows below the
-   * border — one for the input row, one more for the newline, and one for the border itself.
-   */
-  erase(submitted: string): void {
-    if (!this.drawn) return;
-    // A degenerate stream can report zero columns (a 0x0 pty); without the floor, dividing by
-    // it would spin forever. A real terminal always has a sane width, but one guard keeps the
-    // erase bounded everywhere.
-    const width = Math.max(1, this.stream.columns ?? 80);
-    const rows = Math.floor((PROMPT_PREFIX_COLUMNS + visibleWidth(submitted) - 1) / width) + 3;
-    for (let index = 0; index < rows; index += 1) this.stream.write("\x1b[1A\x1b[2K");
-    this.drawn = false;
-  }
-
-  /**
-   * When the typed line has wrapped past the input row, opens the box by dropping the closing
-   * border and re-showing the wrapped remainder, so the border cannot sit under a line of text.
-   */
-  dropBorder(remainder: string): void {
-    if (!this.drawn || this.borderCleared || remainder === "") return;
-    // The cursor is on the border row the moment wrapping starts; clear it and rewrite the
-    // remainder so the text that already wrapped is not lost.
-    this.stream.write("\r\x1b[2K");
-    this.stream.write(remainder);
-    this.borderCleared = true;
-  }
 }
 
 /**

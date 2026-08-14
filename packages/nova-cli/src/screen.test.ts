@@ -20,8 +20,8 @@ describe("entering the pinned footer", () => {
     const screen = new PinnedScreen(stream);
     screen.enter();
 
-    // scrollBottom for a 40-row terminal with a 2-row footer is 38 — see layout.test.ts for the math.
-    expect(stream.writes).toEqual(["\x1b[1;38r", "\x1b[38;1H"]);
+    // scrollBottom for a 40-row terminal with a 3-row footer is 37 — see layout.test.ts for the math.
+    expect(stream.writes).toEqual(["\x1b[1;37r", "\x1b[37;1H"]);
   });
 
   it("falls back to the full-screen default region on a terminal too short for a footer", () => {
@@ -45,8 +45,8 @@ describe("resize", () => {
     stream.rows = 20;
     const layout = screen.resize();
 
-    expect(layout.scrollBottom).toBe(18);
-    expect(stream.writes).toEqual(["\x1b[1;18r", "\x1b[18;1H"]);
+    expect(layout.scrollBottom).toBe(17);
+    expect(stream.writes).toEqual(["\x1b[1;17r", "\x1b[17;1H"]);
   });
 
   it("exposes the new layout through .current after resizing", () => {
@@ -68,7 +68,7 @@ describe("the status line", () => {
     screen.renderStatus("nova · build · $0.12");
 
     expect(stream.writes).toEqual([
-      "\x1b7\x1b[?25l\x1b[39;1H\x1b[2Knova · build · $0.12\x1b8\x1b[?25h",
+      "\x1b7\x1b[?25l\x1b[38;1H\x1b[2Knova · build · $0.12\x1b8\x1b[?25h",
     ]);
   });
 
@@ -91,7 +91,7 @@ describe("positioning the input line", () => {
     stream.writes.length = 0;
 
     screen.positionInput();
-    expect(stream.writes).toEqual(["\x1b[40;1H\x1b[2K"]);
+    expect(stream.writes).toEqual(["\x1b[39;1H\x1b[2K"]);
   });
 
   it("does nothing when the terminal has no room for an input row", () => {
@@ -105,6 +105,41 @@ describe("positioning the input line", () => {
   });
 });
 
+describe("the input bar's closing border", () => {
+  it("draws on the row below the input line, saving and restoring the cursor around it", () => {
+    // Save/restore matters more here than for the status row: this row is *below* where the user
+    // is typing, so reaching it means leaving the input line and having to come back exactly.
+    const stream = fakeStream(40, 100);
+    const screen = new PinnedScreen(stream);
+    screen.enter();
+    stream.writes.length = 0;
+
+    screen.renderPromptBottom("╰──────╯");
+
+    expect(stream.writes).toEqual(["\x1b7\x1b[?25l\x1b[40;1H\x1b[2K╰──────╯\x1b8\x1b[?25h"]);
+  });
+
+  it("does nothing on a terminal too short to spare the row", () => {
+    // A 5-row terminal keeps the status row and the input row and gives up this one.
+    const stream = fakeStream(5, 80);
+    const screen = new PinnedScreen(stream);
+    screen.enter();
+    stream.writes.length = 0;
+
+    screen.renderPromptBottom("╰──────╯");
+    expect(stream.writes).toEqual([]);
+  });
+
+  it("does nothing without a held region, where the row is ordinary transcript", () => {
+    const stream = fakeStream(40, 100);
+    const screen = new PinnedScreen(stream, { holdRegion: false });
+    stream.writes.length = 0;
+
+    screen.renderPromptBottom("╰──────╯");
+    expect(stream.writes).toEqual([]);
+  });
+});
+
 describe("returning to the transcript", () => {
   it("moves the cursor to the bottom of the scroll region for the next ordinary write", () => {
     const stream = fakeStream(40, 100);
@@ -113,7 +148,7 @@ describe("returning to the transcript", () => {
     stream.writes.length = 0;
 
     screen.parkInTranscript();
-    expect(stream.writes).toEqual(["\x1b[38;1H"]);
+    expect(stream.writes).toEqual(["\x1b[37;1H"]);
   });
 });
 

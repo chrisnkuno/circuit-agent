@@ -228,10 +228,11 @@ describe("nova CLI under a real pty", () => {
       const p = boot({ args: ["--pin"] });
       await p.waitFor(PROMPT, { timeoutMs: 30_000 });
 
-      // rows=30 (the harness default), footer=2 (status + input) → scrollBottom=28 — see
-      // computeLayout in layout.ts. A literal DECSTBM sequence is the only real proof the footer is
-      // actually pinned, as opposed to merely printing a status-shaped line inline in the scroll.
-      expect(p.output()).toMatch(/\x1b\[1;28r/);
+      // rows=30 (the harness default), footer=3 (the input bar's top border, input row and closing
+      // border) → scrollBottom=27 — see computeLayout in layout.ts. A literal DECSTBM sequence is
+      // the only real proof the footer is actually pinned, as opposed to merely printing a
+      // status-shaped line inline in the scroll.
+      expect(p.output()).toMatch(/\x1b\[1;27r/);
     }, 30_000);
 
     it("separates the user's own message from the assistant's reply with distinct markers", async () => {
@@ -247,11 +248,31 @@ describe("nova CLI under a real pty", () => {
       // The user's request no longer merely echoes at the old prompt line — with the input row
       // moved into the fixed footer, it has to be deliberately re-printed into the transcript, and
       // this is the marker that proves that happened rather than the line silently disappearing.
-      expect(turn).toMatch(/❯.*what port does the app use/);
+      // It is drawn as a bubble titled "you", the same box the input bar is: the title is what
+      // makes the transcript read as two speakers rather than as an undifferentiated log.
+      expect(turn).toMatch(/what port does the app use/);
+      expect(turn).toMatch(/╭─ .*you/);
       expect(turn).toMatch(/✦.*Nova/);
       // The assistant's own marker must come after the user's, not before — same order a reader
       // would expect a chat transcript to read in.
-      expect(turn.indexOf("❯")).toBeLessThan(turn.indexOf("✦"));
+      // Searched by pattern rather than by bare glyph: the input bar's own top border carries a
+      // `✦` too, so `indexOf("✦")` would find the chrome instead of the assistant's marker.
+      expect(turn.search(/╭─ .*you/)).toBeLessThan(turn.search(/✦[^\n]*Nova/));
+    }, 30_000);
+
+    it("draws the input bar's three rows onto the reserved footer, not into the transcript", async () => {
+      const p = boot({ args: ["--pin"] });
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      const output = p.output();
+      // rows=30, footer=3 → the top border on row 28, the closing border on row 30. Absolute
+      // cursor addressing is the proof the bar is painted onto the footer rather than printed
+      // inline, which is what would push it into scrollback a line at a time.
+      expect(output).toMatch(/\x1b\[28;1H\x1b\[2K[^\n]*╭─/);
+      expect(output).toMatch(/\x1b\[30;1H\x1b\[2K[^\n]*╰/);
+      // The status rides on the top border rather than on a row of its own — the whole reason the
+      // bar costs one row more than the plain status line it replaced, not three.
+      expect(output).toMatch(/╭─[^\n]*nova[^\n]*build[^\n]*╮/);
     }, 30_000);
 
     it("reissues the scroll region at the new size on resize, not the stale one", async () => {
@@ -259,10 +280,10 @@ describe("nova CLI under a real pty", () => {
       await p.waitFor(PROMPT, { timeoutMs: 30_000 });
 
       const before = p.output().length;
-      p.resize(100, 40); // scrollBottom = 40 - 2 = 38
+      p.resize(100, 40); // scrollBottom = 40 - 3 = 37
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(p.output().slice(before)).toMatch(/\x1b\[1;38r/);
+      expect(p.output().slice(before)).toMatch(/\x1b\[1;37r/);
     }, 30_000);
   });
 

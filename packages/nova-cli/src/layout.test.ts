@@ -2,28 +2,53 @@ import { describe, expect, it } from "vitest";
 import { computeLayout, GOLDEN_RATIO } from "./layout";
 
 describe("a normal terminal", () => {
-  it("reserves a status line above the input line, both below the transcript", () => {
+  it("reserves the input bar's three rows below the transcript", () => {
     const layout = computeLayout(40, 100);
-    expect(layout.footerRows).toBe(2);
-    expect(layout.scrollBottom).toBe(38);
-    expect(layout.statusRow).toBe(39);
-    expect(layout.inputRow).toBe(40); // the last row of the terminal, where a chat UI's input sits
+    expect(layout.footerRows).toBe(3);
+    expect(layout.scrollBottom).toBe(37);
+    expect(layout.statusRow).toBe(38); // the bar's top border, which carries the status text
+    expect(layout.inputRow).toBe(39);
+    expect(layout.promptBottomRow).toBe(40); // the closing border, on the terminal's last row
     expect(layout.scrollTop).toBe(1);
   });
 
   it("scales with the terminal, not a fixed row count", () => {
-    expect(computeLayout(24, 80).inputRow).toBe(24);
-    expect(computeLayout(120, 80).inputRow).toBe(120);
+    expect(computeLayout(24, 80).promptBottomRow).toBe(24);
+    expect(computeLayout(120, 80).promptBottomRow).toBe(120);
+  });
+
+  it("keeps the footer's rows contiguous and in order, at every size that has one", () => {
+    // The three rows are drawn independently, by three different calls, onto absolute row numbers.
+    // Nothing downstream re-checks that they are adjacent — a gap or an inversion here would draw
+    // a box with transcript running through the middle of it.
+    for (let rows = 1; rows <= 200; rows += 1) {
+      const layout = computeLayout(rows, 80);
+      const footer = [layout.statusRow, layout.inputRow, layout.promptBottomRow].filter((row) => row !== undefined);
+      expect(footer.length, `rows ${rows}`).toBe(layout.footerRows);
+      footer.forEach((row, index) => {
+        expect(row, `rows ${rows}`).toBe(layout.scrollBottom + index + 1);
+      });
+      expect(layout.scrollBottom + layout.footerRows, `rows ${rows}`).toBe(Math.max(1, rows));
+    }
   });
 });
 
 describe("narrowing under real constraints", () => {
+  it("gives up the closing border first, keeping the status and the input line", () => {
+    // MIN_TRANSCRIPT_ROWS=3, so a 5-row terminal can spare exactly two footer rows.
+    const layout = computeLayout(5, 80);
+    expect(layout.footerRows).toBe(2);
+    expect(layout.statusRow).toBe(4);
+    expect(layout.inputRow).toBe(5);
+    expect(layout.promptBottomRow).toBeUndefined();
+  });
+
   it("gives up the status row before the input row, on a short terminal", () => {
-    // MIN_TRANSCRIPT_ROWS=3, so a 4-row terminal can spare exactly one footer row.
     const layout = computeLayout(4, 80);
     expect(layout.footerRows).toBe(1);
     expect(layout.statusRow).toBeUndefined();
     expect(layout.inputRow).toBe(4);
+    expect(layout.promptBottomRow).toBeUndefined();
   });
 
   it("falls back to plain scrolling — no pinned row at all — below that", () => {
@@ -31,6 +56,7 @@ describe("narrowing under real constraints", () => {
     expect(layout.footerRows).toBe(0);
     expect(layout.statusRow).toBeUndefined();
     expect(layout.inputRow).toBeUndefined();
+    expect(layout.promptBottomRow).toBeUndefined();
     expect(layout.scrollBottom).toBe(3);
   });
 

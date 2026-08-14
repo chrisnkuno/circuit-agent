@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, formatStatusLine, MarkdownStream, ReplaceableBlock, Spinner, StatusBar } from "./tui";
+import { box, formatStatusLine, MarkdownStream, promptStatusRoom, renderPromptBox, ReplaceableBlock, Spinner, StatusBar, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -517,12 +517,12 @@ function toolLineText(mark: string, name: string, detail: string, summary: strin
  * if someone had said it aloud. Once the pinned footer owns the input row (see `screen` above), this
  * is the *only* place the user's own words reach the transcript at all: readline's echo now lands on
  * a row that gets cleared for the next prompt, not one that scrolls into history.
+ *
+ * Drawn as a bubble titled "you", matching the input bar it was typed into, so the transcript reads
+ * as two speakers rather than as a log with an occasional bolded line in it.
  */
 function renderUserTurn(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => `${style.bold(style.cyan(glyphs.prompt))} ${style.bold(line)}`)
-    .join("\n");
+  return renderUserMessage(text, renderDepth, contentWidth(), glyphs);
 }
 
 /**
@@ -612,6 +612,26 @@ type ReadlineInternals = {
   closed: boolean;
   line: string;
 };
+
+/**
+ * What a submitted message looks like in the transcript: a chat bubble, sized to its content and
+ * labelled with the speaker, matching the input bar that produced it.
+ *
+ * The echo is not redundant with what the user just typed. The input bar lives on a fixed footer
+ * row that the next message overwrites, so without this the transcript would be a record of the
+ * assistant talking to itself — every reply present, nothing it was replying to.
+ */
+export function renderUserMessage(
+  text: string,
+  depth: ReturnType<typeof detectColorDepth>,
+  width: number,
+  glyphSet: GlyphSet = UNICODE_GLYPHS,
+): string {
+  // Wrapped per line rather than as one blob: a pasted stack trace or a numbered list is a shape
+  // the sender chose, and reflowing it into a paragraph destroys the thing that made it readable.
+  const body = text.split("\n").flatMap((line) => wrapPlain(line, Math.max(8, width - 6)));
+  return box(body, { depth, width, title: "you", titleColor: "green", glyphs: glyphSet });
+}
 
 export function renderEvent(event: NovaEvent): void {
   // Every event clears the spinner before printing. If the spinner is still running its next tick
@@ -1745,10 +1765,37 @@ async function main(): Promise<number> {
     if (isCacheFresh(cached)) liveModels = cached!.models;
   }
 
-  const showIdleStatus = (): void => {
-    if (screen?.pinned) screen.renderStatus(idleStatusLine());
-    else if (ttyMode) statusBar.renderLine(idleStatusLine());
+  /**
+   * The input bar's three rows, composed against the screen's live geometry.
+   *
+   * `status` is whatever the footer should currently be saying — the idle cost line between turns,
+   * the spinner's activity line during one. It rides on the box's top border rather than on a row
+   * of its own, which is what keeps the chat-style bar to one row more than the plain status line
+   * it replaces.
+   */
+  const promptWidth = () => screen?.current.columns ?? process.stdout.columns ?? 80;
+
+  const promptFrame = (status: string) =>
+    renderPromptBox({ mode, workspace: where, depth, width: promptWidth(), status, glyphs });
+
+  /** How wide a status line may be to fit on the bar's top border beside the title. */
+  const statusRoomFor = (width: number) => promptStatusRoom(mode, where, width, glyphs);
+
+  /**
+   * Repaints the footer with a new status, leaving the input line alone.
+   *
+   * Both borders are redrawn, not just the top: on a resize the bottom border has moved to a row
+   * that previously held transcript, and only the caller of this knows the layout changed.
+   */
+  const showStatus = (status: string): void => {
+    if (screen?.pinned) {
+      const frame = promptFrame(status);
+      screen.renderStatus(frame.top);
+      screen.renderPromptBottom(frame.bottom);
+    } else if (ttyMode) statusBar.renderLine(status);
   };
+
+  const showIdleStatus = (): void => showStatus(idleStatusLine());
 
   /**
    * Jobs whose output is flowing into this session without owning the prompt.
@@ -1955,12 +2002,15 @@ async function main(): Promise<number> {
         badge: paceBadge(pace, glyphs),
       });
       // A pinned footer redraws its own fixed row and never needs the erase-above-cursor dance
-      // `StatusBar` does — that class stays the renderer for every session without one. The status
-      // line uses the full terminal width, not the golden-ratio prose cap: it is one row of UI
-      // chrome, not a paragraph, and narrowing it to match reading-width prose would just waste the
-      // rest of the row.
+      // `StatusBar` does — that class stays the renderer for every session without one.
+      //
+      // The activity line goes onto the input bar's top border, the same row the idle line uses, so
+      // the box stays whole for the length of the turn instead of losing its lid the moment work
+      // starts. It gets the border's inner width rather than the terminal's: `formatStatusLine`
+      // drops segments to fit what it is given, and handing it the full width would have it fit a
+      // row that the corners and title have already spent part of.
       spinner = new Spinner(() => screen?.pinned
-        ? screen.renderStatus(formatStatusLine(fields(), screen.current.columns, depth, glyphs))
+        ? showStatus(formatStatusLine(fields(), statusRoomFor(screen.current.columns), depth, glyphs))
         : statusBar.render(fields(), depth, glyphs), 120, glyphs);
       spinner.start();
     }
@@ -2248,8 +2298,13 @@ async function main(): Promise<number> {
     screen?.positionInput();
     let rawInput: string;
     try {
-      const promptLabel = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : "nova")}${style.dim(` ${glyphs.caret} `)}`;
-      rawInput = await readline.question(screen ? promptLabel : `\n${promptLabel}`);
+      // With a pinned footer the prompt is the input bar's left border, so readline redraws it as
+      // part of the prompt and the box keeps its side through every edit. Without one there is no
+      // box to have a side of, and the old inline label is still the right thing — with the leading
+      // blank line it has always had on a session with no screen of any kind to separate it from.
+      const label = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : "nova")}${style.dim(` ${glyphs.caret} `)}`;
+      const promptLabel = screen?.pinned ? promptFrame(idleStatusLine()).prefix : screen ? label : `\n${label}`;
+      rawInput = await readline.question(promptLabel);
     } catch (error) {
       if (isReadlineExit(error) || exitRequested) break;
       throw error;

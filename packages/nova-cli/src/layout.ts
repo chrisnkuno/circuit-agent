@@ -27,8 +27,13 @@ export const GOLDEN_RATIO = 1.618033988749895;
  */
 const MAX_CONTENT_WIDTH = Math.round(80 * GOLDEN_RATIO);
 
-/** One status line, one input line — the two rows a chat-shaped footer needs at minimum. */
-const FOOTER_ROWS = 2;
+/**
+ * A titled top border, an input line, a closing border — the three rows the chat-style input bar
+ * occupies. The top border is not chrome spent on decoration: it is the status line, wearing the
+ * box's own edge, so the bar costs one row more than a bare status-plus-input footer rather than
+ * three rows more.
+ */
+const FOOTER_ROWS = 3;
 
 /** However short the terminal, the scrollable transcript keeps at least this many rows. */
 const MIN_TRANSCRIPT_ROWS = 3;
@@ -40,8 +45,11 @@ export type ScreenLayout = {
   scrollTop: number;
   scrollBottom: number;
   /** 0 on a terminal too short to spare a footer at all — the caller falls back to plain scrolling. */
-  footerRows: 0 | 1 | 2;
-  /** Row for the pinned status line, or undefined when the terminal can't spare one. */
+  footerRows: 0 | 1 | 2 | 3;
+  /**
+   * Row for the input bar's top border, which is also where the status line is drawn — the border
+   * carries the status text as its title. Undefined when the terminal can't spare the row.
+   */
   statusRow: number | undefined;
   /**
    * Row for the input line. This is the one footer element that matters — undefined only when the
@@ -49,6 +57,11 @@ export type ScreenLayout = {
    * of on a one-line terminal.
    */
   inputRow: number | undefined;
+  /**
+   * Row for the input bar's closing border. The first thing given up on a short terminal: a box
+   * missing its bottom edge still reads as a box, and the row buys back transcript.
+   */
+  promptBottomRow: number | undefined;
   /** Wrapping width for prose: full width up to a comfortable measure, then capped by golden ratio. */
   contentWidth: number;
 };
@@ -57,10 +70,11 @@ export function computeLayout(rows: number, columns: number): ScreenLayout {
   const safeRows = Math.max(1, Math.floor(rows));
   const safeColumns = Math.max(1, Math.floor(columns));
 
-  // Give up the status row before the input row — the same "least essential detail goes first"
-  // rule `formatStatusLine` already applies within one line, one level up: a chat UI with no place
-  // to type isn't a degraded chat UI, it's a different program.
-  const footerRows = Math.min(FOOTER_ROWS, Math.max(0, safeRows - MIN_TRANSCRIPT_ROWS)) as 0 | 1 | 2;
+  // Give up the closing border first, then the status row, and the input row last — the same
+  // "least essential detail goes first" rule `formatStatusLine` already applies within one line,
+  // one level up: a chat UI with no place to type isn't a degraded chat UI, it's a different
+  // program, while one drawn with three sides of a box instead of four is still recognisably it.
+  const footerRows = Math.min(FOOTER_ROWS, Math.max(0, safeRows - MIN_TRANSCRIPT_ROWS)) as 0 | 1 | 2 | 3;
   const scrollBottom = safeRows - footerRows;
 
   return {
@@ -70,7 +84,9 @@ export function computeLayout(rows: number, columns: number): ScreenLayout {
     scrollBottom,
     footerRows,
     statusRow: footerRows >= 2 ? scrollBottom + 1 : undefined,
-    inputRow: footerRows >= 1 ? scrollBottom + footerRows : undefined,
+    // With a top border the input sits under it; with only one row to spare, that row *is* the input.
+    inputRow: footerRows >= 2 ? scrollBottom + 2 : footerRows === 1 ? scrollBottom + 1 : undefined,
+    promptBottomRow: footerRows >= 3 ? scrollBottom + 3 : undefined,
     contentWidth: Math.min(safeColumns, MAX_CONTENT_WIDTH),
   };
 }

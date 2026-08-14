@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Interface } from "node:readline/promises";
+import { visibleWidth } from "./markdown";
 import {
   configureRendering,
   confirmSensitiveTask,
@@ -10,8 +11,10 @@ import {
   readFxRates,
   renderEvent,
   renderProviders,
+  renderUserMessage,
 } from "./nova";
 
+const ESCAPE = /\x1b\[[0-9;]*m/g;
 const plain = (value: string) => value.replace(/\[[0-9;]*m/g, "");
 
 /** Captures every `process.stdout.write` call as plain (colour-stripped) strings. */
@@ -186,6 +189,39 @@ describe("exchange rates", () => {
     expect(readFxRates({ NOVA_FX_FROM: "USD", NOVA_FX_TO: "EGP", NOVA_FX_RATE: "48.5", NOVA_FX_ASOF: "2026-08-08" })[0]).toEqual({
       from: "USD", to: "EGP", rate: 48.5, asOf: "2026-08-08", source: "NOVA_FX_RATE",
     });
+  });
+});
+
+describe("the message echoed into the transcript", () => {
+  it("labels the bubble with the speaker and keeps the text inside it", () => {
+    const rendered = plain(renderUserMessage("ship the release", "none", 40));
+    const [top, ...rest] = rendered.split("\n");
+    expect(top).toContain("you");
+    expect(rest.join(" ")).toContain("ship the release");
+  });
+
+  it("wraps a long message rather than letting one line run past the border", () => {
+    const rendered = plain(renderUserMessage("word ".repeat(60).trim(), "none", 40));
+    const lines = rendered.split("\n");
+    expect(lines.length).toBeGreaterThan(3); // top border, several body rows, bottom border
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+  });
+
+  it("stays inside the width it is given, at any width and for any message", () => {
+    // The bubble is printed into the transcript region of a pinned screen. A line wider than the
+    // terminal wraps, which scrolls the region by a row the caller did not account for.
+    for (const width of [20, 40, 80, 120]) {
+      for (const text of ["hi", "a".repeat(300), "日本語のメッセージです", "one two three four five six seven"]) {
+        for (const line of renderUserMessage(text, "none", width).split("\n")) {
+          expect(visibleWidth(plain(line)), `width ${width}`).toBeLessThanOrEqual(width);
+        }
+      }
+    }
+  });
+
+  it("emits colour only when colour was asked for", () => {
+    expect(renderUserMessage("hello", "none", 40)).not.toMatch(ESCAPE);
+    expect(renderUserMessage("hello", "truecolor", 40)).toMatch(ESCAPE);
   });
 });
 
