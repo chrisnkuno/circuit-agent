@@ -8,6 +8,7 @@ import {
   keyToGuideAction,
   type GuideBrowserState,
 } from "./guide-browser";
+import { NO_COLOR_PALETTE, type Palette } from "./theme";
 
 /**
  * The guide, as a screen you read in.
@@ -39,11 +40,13 @@ export type GuideScreenProps = {
   onExit: () => void;
   /** Opens on this topic rather than the first — `/guide tabs` from the prompt lands on tabs. */
   startAt?: string;
+  /** The session's theme, so the guide matches the transcript it was opened from. */
+  palette?: Palette;
 };
 
-export function GuideScreen({ columns, rows, onExit, startAt }: GuideScreenProps) {
+export function GuideScreen({ columns, rows, onExit, startAt, palette = NO_COLOR_PALETTE }: GuideScreenProps) {
   const [state, setState] = useState<GuideBrowserState>(() => {
-    const initial = initialGuideState(columns, rows);
+    const initial = initialGuideState(columns, rows, palette);
     const index = startAt ? initial.topics.findIndex((topic) => topic.id === startAt) : -1;
     return index >= 0 ? { ...initial, selected: index } : initial;
   });
@@ -59,7 +62,7 @@ export function GuideScreen({ columns, rows, onExit, startAt }: GuideScreenProps
   return (
     <Panel flexDirection="column" width={state.columns} height={state.rows}>
       {frame.map((row, index) => (
-        <Line key={`row-${index}`} bold={row.bold} dimColor={row.dim} inverse={row.inverse}>
+        <Line key={`row-${index}`} bold={row.bold} dimColor={row.dim} inverse={row.inverse} color={row.color}>
           {row.text}
         </Line>
       ))}
@@ -74,7 +77,7 @@ export function GuideScreen({ columns, rows, onExit, startAt }: GuideScreenProps
  * the same arrangement the control panel uses, and the reason `nova --version` is unaffected by
  * either of them existing.
  */
-export async function runGuideScreen(options: { columns: number; rows: number; startAt?: string }): Promise<void> {
+export async function runGuideScreen(options: { columns: number; rows: number; startAt?: string; palette?: Palette }): Promise<void> {
   const { renderApp } = await import("@termuijs/jsx");
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -87,6 +90,7 @@ export async function runGuideScreen(options: { columns: number; rows: number; s
       columns: options.columns,
       rows: options.rows,
       startAt: options.startAt,
+      palette: options.palette,
       onExit: finish,
       fullscreen: true,
     } as never).catch(finish);

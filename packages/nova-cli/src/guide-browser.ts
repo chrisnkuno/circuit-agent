@@ -1,4 +1,5 @@
 import { GUIDE_TOPICS, wrapText, type GuideTopic } from "./guide";
+import { NO_COLOR_PALETTE, type Palette } from "./theme";
 import { visibleWidth } from "./markdown";
 
 /**
@@ -28,10 +29,12 @@ export type GuideBrowserState = {
   searching: boolean;
   columns: number;
   rows: number;
+  /** The session's theme, so the guide is painted in whatever the transcript is painted in. */
+  palette: Palette;
 };
 
-export function initialGuideState(columns: number, rows: number): GuideBrowserState {
-  return { topics: GUIDE_TOPICS, selected: 0, scroll: 0, query: "", searching: false, columns, rows };
+export function initialGuideState(columns: number, rows: number, palette: Palette = NO_COLOR_PALETTE): GuideBrowserState {
+  return { topics: GUIDE_TOPICS, selected: 0, scroll: 0, query: "", searching: false, columns, rows, palette };
 }
 
 /** The topics the filter admits. A filter that matches nothing shows nothing, and says so. */
@@ -51,12 +54,13 @@ export function currentTopic(state: GuideBrowserState): GuideTopic | undefined {
 
 /** Width of the topic list. Bounded at both ends: unreadable below 14, wasteful above 26. */
 export function sidebarWidth(columns: number): number {
-  return Math.max(14, Math.min(26, Math.floor(columns * 0.28)));
+  const width = Math.max(1, Math.floor(columns));
+  return Math.min(width, Math.max(14, Math.min(26, Math.floor(width * 0.28))));
 }
 
 /** Rows of body available, once the header and the footer have taken one each. */
 export function bodyHeight(rows: number): number {
-  return Math.max(1, rows - 2);
+  return Math.max(0, Math.floor(rows) - 2);
 }
 
 export type GuideAction =
@@ -145,10 +149,15 @@ export function applyGuideAction(state: GuideBrowserState, action: GuideAction):
 }
 
 export function bodyWidth(columns: number): number {
-  return Math.max(20, columns - sidebarWidth(columns) - 3);
+  const width = Math.max(1, Math.floor(columns));
+  return width < 40 ? width : Math.max(1, width - sidebarWidth(width) - 3);
 }
 
-export type GuideRow = { text: string; bold?: boolean; dim?: boolean; inverse?: boolean };
+/**
+ * One drawn row. `color` is a theme *token value* (a hex or an ANSI name), not an escape code:
+ * TermUI's `parseColor` takes the value and emits the escape itself.
+ */
+export type GuideRow = { text: string; bold?: boolean; dim?: boolean; inverse?: boolean; color?: string };
 
 /**
  * A topic's page, wrapped to the body column.
@@ -158,14 +167,17 @@ export type GuideRow = { text: string; bold?: boolean; dim?: boolean; inverse?: 
  * the body is a fraction of it.
  */
 export function topicLines(topic: GuideTopic, width: number): GuideRow[] {
+  const measure = Math.max(1, Math.floor(width));
+  const wrap = (text: string, available = measure): string[] => wrapText(text, Math.max(1, available))
+    .flatMap((line) => hardWrap(line, Math.max(1, available)));
   // The title wraps like everything else. "Tabs: several pieces of work at once" is wider than a
   // narrow body column, and a heading that runs off the edge is the first thing a reader sees.
   const rows: GuideRow[] = [
-    ...wrapText(topic.title, width).map((line) => ({ text: line, bold: true })),
+    ...wrap(topic.title).map((line) => ({ text: line, bold: true })),
     { text: "" },
   ];
   for (const paragraph of topic.body) {
-    for (const line of wrapText(paragraph, width)) rows.push({ text: line });
+    for (const line of wrap(paragraph)) rows.push({ text: line });
     rows.push({ text: "" });
   }
   if (topic.examples && topic.examples.length > 0) {
@@ -174,13 +186,38 @@ export function topicLines(topic: GuideTopic, width: number): GuideRow[] {
       // Commands wrap on their spaces with a hanging indent rather than being clipped: half a flag
       // is not something anyone can type, and a narrow window is exactly where someone is most
       // likely to be reading the guide instead of remembering the syntax.
-      const [head, ...rest] = wrapText(example.input, Math.max(10, width - 2));
-      rows.push({ text: `  ${head ?? ""}`, bold: true });
-      for (const line of rest) rows.push({ text: `    ${line}`, bold: true });
-      for (const line of wrapText(example.effect, Math.max(10, width - 4))) rows.push({ text: `    ${line}`, dim: true });
+      const commandIndent = " ".repeat(Math.min(2, Math.max(0, measure - 1)));
+      const detailIndent = " ".repeat(Math.min(4, Math.max(0, measure - 1)));
+      const [head, ...rest] = wrap(example.input, measure - visibleWidth(detailIndent));
+      rows.push({ text: `${commandIndent}${head ?? ""}`, bold: true });
+      for (const line of rest) rows.push({ text: `${detailIndent}${line}`, bold: true });
+      for (const line of wrap(example.effect, measure - visibleWidth(detailIndent))) rows.push({ text: `${detailIndent}${line}`, dim: true });
     }
   }
   return rows;
+}
+
+/** Preserves long tokens by continuing them on the next row instead of letting a widget wrap. */
+function hardWrap(text: string, width: number): string[] {
+  if (visibleWidth(text) <= width) return [text];
+  const lines: string[] = [];
+  let line = "";
+  const segments = typeof Intl.Segmenter === "function"
+    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((entry) => entry.segment)
+    : [...text];
+  for (const segment of segments) {
+    if (line && visibleWidth(line + segment) > width) {
+      lines.push(line);
+      line = "";
+    }
+    if (visibleWidth(segment) > width) {
+      lines.push("\u2026");
+      continue;
+    }
+    line += segment;
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 function pad(text: string, width: number): string {
@@ -208,15 +245,24 @@ function sliceToWidth(text: string, width: number): string {
  * makes that impossible and makes the whole layout checkable by comparing text.
  */
 export function composeGuideFrame(state: GuideBrowserState): GuideRow[] {
-  const sidebar = sidebarWidth(state.columns);
-  const body = bodyWidth(state.columns);
-  const height = bodyHeight(state.rows);
+  const columns = Math.max(1, Math.floor(state.columns));
+  const rowCount = Math.max(1, Math.floor(state.rows));
+  const compact = columns < 40;
+  const sidebar = compact ? 0 : sidebarWidth(columns);
+  const body = bodyWidth(columns);
+  const height = bodyHeight(rowCount);
   const topics = visibleTopics(state);
   const selectedIndex = topics.length === 0 ? -1 : Math.max(0, Math.min(state.selected, topics.length - 1));
   const topic = selectedIndex === -1 ? undefined : topics[selectedIndex];
 
+  const theme = state.palette.tokens;
   const rows: GuideRow[] = [];
-  rows.push({ text: pad(" nova guide", sidebar + body + 3), bold: true, inverse: true });
+  rows.push({
+    text: pad(compact ? ` nova guide · ${topic?.title ?? "no matches"}` : " nova guide", columns),
+    bold: true,
+    color: theme.primary,
+  });
+  if (rowCount === 1) return rows;
 
   const lines = topic ? topicLines(topic, body) : [{ text: "Nothing matches that." }];
   const start = Math.max(0, Math.min(state.scroll, Math.max(0, lines.length - height)));
@@ -231,15 +277,20 @@ export function composeGuideFrame(state: GuideBrowserState): GuideRow[] {
     const cell = listed ? `${chosen ? "›" : " "} ${listed.title}` : "";
     const line = window[offset];
     rows.push({
-      text: `${pad(sliceToWidth(cell, sidebar), sidebar)} │ ${pad(line?.text ?? "", body)}`,
+      text: compact
+        ? pad(line?.text ?? "", columns)
+        : `${pad(sliceToWidth(cell, sidebar), sidebar)} │ ${pad(line?.text ?? "", body)}`,
       bold: chosen || line?.bold,
       dim: line?.dim && !chosen,
+      // The selected topic takes the accent; a body heading takes the primary; prose is left to
+      // the terminal's own foreground, which is the one colour a reader has already chosen.
+      ...(chosen ? { color: theme.accent } : line?.bold ? { color: theme.primary } : {}),
     });
   }
 
   const footer = state.searching
     ? `search: ${state.query}▏  Enter done · Esc done`
     : `↑↓ topic · ←→ scroll · space page · / search · q leave${state.query ? `   filter: ${state.query}` : ""}`;
-  rows.push({ text: pad(` ${footer}`, sidebar + body + 3), dim: true });
+  rows.push({ text: pad(` ${footer}`, columns), dim: true, color: theme.textMuted });
   return rows;
 }

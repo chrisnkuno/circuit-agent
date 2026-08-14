@@ -15,6 +15,7 @@ import {
   type WorkspacePane,
   type WorkspaceSnapshot,
 } from "./workspace-model";
+import { visibleWidth } from "./markdown";
 
 const pane = (key: string, lines: number, overrides: Partial<WorkspacePane> = {}): WorkspacePane => ({
   kind: "tab",
@@ -235,5 +236,23 @@ describe("the frame", () => {
     const frame = composeFrame(snapshot([pane("a", 5)], { rows: 2 }));
     expect(frame).toHaveLength(2);
     expect(frame[frame.length - 1].text).toContain("q leave");
+  });
+
+  it("clips every finished row instead of letting TermUI wrap and displace the footer", () => {
+    const crowded = snapshot([
+      pane("a", 5, { title: "a very long pane title", subtitle: "a very long model and backend subtitle", lines: ["output ".repeat(40)] }),
+      pane("b", 5, { title: "another long pane title" }),
+    ], { selected: 1 });
+    for (const columns of [1, 8, 19, 40, 80]) {
+      const frame = composeFrame({ ...crowded, columns });
+      for (const row of frame) expect(visibleWidth(row.text), `columns ${columns}: ${row.text}`).toBeLessThanOrEqual(columns);
+    }
+  });
+
+  it("keeps the active pane named when the full tab strip cannot fit", () => {
+    const panes = Array.from({ length: 6 }, (_unused, index) => pane(`${index}`, 1, { title: `pane-${index}-with-a-long-name` }));
+    const bar = composeFrame(snapshot(panes, { selected: 4, columns: 32 }))[0].text;
+    expect(bar).toContain("5 pane-4");
+    expect(visibleWidth(bar)).toBeLessThanOrEqual(32);
   });
 });

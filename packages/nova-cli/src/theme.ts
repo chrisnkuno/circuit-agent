@@ -309,6 +309,14 @@ export type Palette = {
   /** Carried for a renderer that owns its cells; nothing in the transcript paints these. */
   readonly bg: string;
   readonly surface: string;
+  /**
+   * The theme's raw token values, beside the escape codes resolved from them.
+   *
+   * The transcript needs codes; a screen-buffer renderer needs the *values* — TermUI's `parseColor`
+   * takes `#8ab4f8` or `cyan` and emits the escape itself, and handing it one already-escaped would
+   * put literal `38;2;…` on screen. Carrying both means neither surface has to convert.
+   */
+  readonly tokens: ThemeTokens;
 };
 
 function borderStyleOf(value: string): Palette["borderStyle"] {
@@ -334,6 +342,7 @@ export function buildPalette(theme: Theme, depth: ColorDepth): Palette {
     borderStyle: borderStyleOf(theme.tokens.border),
     bg: theme.tokens.bg,
     surface: theme.tokens.surface,
+    tokens: theme.tokens,
   };
 }
 

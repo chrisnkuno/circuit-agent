@@ -1,4 +1,6 @@
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
+import { clipTo, terminalColumns, windowStart } from "./chooser";
+import { visibleWidth } from "./markdown";
 import type { KeypressEvent } from "./keybindings";
 import type { ModelCatalog, ModelChoice } from "./models";
 import type { ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
@@ -64,6 +66,8 @@ export type PickerPaint = {
 };
 
 export type RenderPickerOptions = {
+  /** Terminal columns. Rows are clipped to it; a wrapped row corrupts the repaint. */
+  width?: number;
   /** Visible rows before the list scrolls under the selection. */
   height?: number;
   /** Characters this terminal can draw; the cursor, the current-model dot and the legend come from here. */
@@ -78,24 +82,36 @@ export function renderModelPicker(frame: { rows: readonly PickerRow[]; selected:
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const height = options.height ?? 10;
   // Same windowing rule as the palette: keep the selection on screen, or the arrow keys look broken.
-  const start = Math.max(0, Math.min(frame.selected - Math.floor(height / 2), frame.rows.length - height));
-  const visible = frame.rows.slice(Math.max(0, start), Math.max(0, start) + height);
-  const width = Math.max(0, ...visible.map((row) => (row.kind === "model" ? row.choice.model.length : row.label.length)));
+  const columns = terminalColumns(options.width);
+  const start = windowStart(frame.selected, frame.rows.length, height);
+  const visible = frame.rows.slice(start, start + height);
+  const naturalWidth = Math.max(0, ...visible.map((row) => visibleWidth(row.kind === "model" ? row.choice.model : row.label)));
+  const labelBudget = Math.max(0, Math.min(naturalWidth, Math.floor(Math.max(0, columns - 11) * 0.65)));
 
   const lines: string[] = [];
   for (const [offset, row] of visible.entries()) {
-    if (row.header) lines.push(`  ${paint.cyan(row.header)}`);
-    const active = Math.max(0, start) + offset === frame.selected;
+    if (row.header) lines.push(paint.cyan(clipTo(`  ${row.header}`, columns)));
+    const active = start + offset === frame.selected;
     const cursor = active ? paint.green(glyphs.prompt) : " ";
+    const number = offset < 9 ? `${offset + 1}.` : "  ";
+    if (columns < 9) {
+      const label = row.kind === "model" ? row.choice.model : row.label;
+      lines.push(active ? paint.green(clipTo(`${glyphs.prompt}${label}`, columns)) : clipTo(label, columns));
+      continue;
+    }
     if (row.kind === "settings") {
-      lines.push(`  ${cursor} ${paint.yellow(row.label)}`);
+      lines.push(`  ${cursor} ${paint.dim(number)} ${paint.yellow(clipTo(row.label, columns - 7))}`);
       continue;
     }
     const isCurrent = row.choice.provider === options.current.provider && row.choice.model === options.current.model;
     const tags = [row.choice.isProviderDefault ? "default" : "", isCurrent ? "current" : ""].filter(Boolean).join(", ");
-    lines.push(`  ${cursor} ${isCurrent ? paint.green(glyphs.circleFull) : " "} ${row.choice.model.padEnd(width + 2)}${paint.dim(options.price(row.choice))}${tags ? paint.dim(`  (${tags})`) : ""}`);
+    const shownModel = clipTo(row.choice.model, labelBudget);
+    const padded = shownModel + " ".repeat(Math.max(0, labelBudget - visibleWidth(shownModel)));
+    const tail = `${options.price(row.choice)}${tags ? `  (${tags})` : ""}`;
+    const room = Math.max(0, columns - visibleWidth(`  ${active ? glyphs.prompt : " "} ${number} ${isCurrent ? glyphs.circleFull : " "} ${padded}  `));
+    lines.push(`  ${cursor} ${paint.dim(number)} ${isCurrent ? paint.green(glyphs.circleFull) : " "} ${padded}  ${paint.dim(clipTo(tail, room))}`);
   }
-  lines.push(`  ${paint.dim(`${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} Esc cancel`)}`);
+  lines.push(paint.dim(clipTo(`  ${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} Esc cancel`, columns)));
   return lines.join("\n");
 }
 
@@ -105,7 +121,7 @@ export function renderModelPicker(frame: { rows: readonly PickerRow[]; selected:
  * Split from the reading loop for the same reason the palette's is: the whole interaction is then
  * testable without a terminal, and the loop below does nothing but turn keypresses into these calls.
  */
-export function advanceModelPicker(state: PickerState, rows: readonly PickerRow[], input: { str?: string; key: KeypressEvent }): {
+export function advanceModelPicker(state: PickerState, rows: readonly PickerRow[], input: { str?: string; key: KeypressEvent }, options: { height?: number } = {}): {
   state: PickerState;
   done?: { result?: PickerResult };
 } {
@@ -114,7 +130,7 @@ export function advanceModelPicker(state: PickerState, rows: readonly PickerRow[
 
   if (name === "escape" || (input.key.ctrl && (name === "c" || name === "g"))) return { state, done: {} };
   if (name === "return" || name === "enter") {
-    const row = rows[state.selected];
+    const row = rows.length > 0 ? rows[Math.max(0, Math.min(state.selected, rows.length - 1))] : undefined;
     if (!row) return { state, done: {} };
     return { state, done: { result: row.kind === "model" ? { kind: "model", choice: row.choice } : { kind: "settings" } } };
   }
@@ -128,13 +144,21 @@ export function advanceModelPicker(state: PickerState, rows: readonly PickerRow[
   // Typing a number still works, because the printed list taught people to do that and a menu that
   // silently ignores the habit it created is worse than one that never offered numbers at all.
   if (input.str && /^[1-9]$/.test(input.str) && !input.key.ctrl && !input.key.meta) {
-    const index = Number(input.str) - 1;
-    if (index <= last) return { state: { selected: index } };
+    const height = options.height ?? 10;
+    const start = windowStart(state.selected, rows.length, height);
+    const shown = Math.min(height, rows.length - start);
+    const digit = Number(input.str);
+    if (digit > shown) return { state };
+    return { state: { selected: start + digit - 1 } };
   }
   return { state };
 }
 
-export type RunModelPickerOptions = RenderPickerOptions & { rows: readonly PickerRow[] };
+export type RunModelPickerOptions = RenderPickerOptions & {
+  rows: readonly PickerRow[];
+  /** Re-read before every frame so a live terminal resize cannot leave stale geometry behind. */
+  getSize?: () => { width?: number; height?: number };
+};
 
 export async function runModelPicker(
   keys: AsyncIterable<{ str?: string; key: KeypressEvent }>,
@@ -143,13 +167,19 @@ export async function runModelPicker(
 ): Promise<PickerResult | undefined> {
   const { rows } = options;
   let state: PickerState = { selected: initialSelection(rows, options.current) };
-  paint(renderModelPicker({ rows, selected: state.selected }, options));
+  const liveOptions = (): RunModelPickerOptions => {
+    const size = options.getSize?.();
+    const height = Math.max(1, Math.min(options.height ?? 10, size?.height ?? Number.POSITIVE_INFINITY));
+    return { ...options, width: size?.width ?? options.width, height };
+  };
+  paint(renderModelPicker({ rows, selected: state.selected }, liveOptions()));
 
   for await (const input of keys) {
-    const step = advanceModelPicker(state, rows, input);
+    const current = liveOptions();
+    const step = advanceModelPicker(state, rows, input, { height: current.height });
     state = step.state;
     if (step.done) return step.done.result;
-    paint(renderModelPicker({ rows, selected: state.selected }, options));
+    paint(renderModelPicker({ rows, selected: state.selected }, liveOptions()));
   }
   return undefined;
 }

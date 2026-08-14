@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { advanceModelPicker, buildPickerRows, initialSelection, renderModelPicker, runModelPicker, type PickerRow } from "./model-picker";
 import { buildModelCatalog } from "./models";
 import type { KeypressEvent } from "./keybindings";
+import { visibleWidth } from "./markdown";
 
 const paint = { dim: (text: string) => text, cyan: (text: string) => text, green: (text: string) => text, yellow: (text: string) => text };
 const configured = { ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k", CIRCUITNOTION_API_KEY: "k" };
@@ -63,14 +64,33 @@ describe("moving around the picker", () => {
     expect(advanceModelPicker({ selected: 0 }, rows, press("3", {}, "3")).state.selected).toBe(2);
   });
 
+  it("interprets a number against the visible window after scrolling", () => {
+    const selected = rows.length - 1;
+    const height = 4;
+    const rendered = renderModelPicker({ rows, selected }, { ...options, height });
+    const first = rendered.split("\n").find((line) => line.includes("1."));
+    const jumped = advanceModelPicker({ selected }, rows, press("1", {}, "1"), { height }).state.selected;
+    const label = rows[jumped]?.kind === "model" ? rows[jumped].choice.model : rows[jumped]?.label;
+    expect(first).toContain(label);
+  });
+
   it("ignores a number past the end of the list", () => {
     const short: PickerRow[] = [{ kind: "settings", label: "Settings…" }];
     expect(advanceModelPicker({ selected: 0 }, short, press("9", {}, "9")).state.selected).toBe(0);
   });
 
+  it("ignores a number the live window never displayed", () => {
+    expect(advanceModelPicker({ selected: 0 }, rows, press("9", {}, "9"), { height: 4 }).state.selected).toBe(0);
+  });
+
   it("returns the chosen model on Return", () => {
     const done = advanceModelPicker({ selected: 0 }, rows, press("return")).done;
     expect(done?.result).toMatchObject({ kind: "model", choice: { model: "claude-sonnet-5" } });
+  });
+
+  it("clamps a stale selection when Enter uses it", () => {
+    const done = advanceModelPicker({ selected: rows.length + 20 }, rows, press("return")).done;
+    expect(done?.result).toEqual({ kind: "settings" });
   });
 
   it("returns a request to open settings when a settings row is chosen", () => {
@@ -102,6 +122,21 @@ describe("rendering the picker", () => {
 
   it("says how to drive it, since a menu that needs explaining elsewhere is not finished", () => {
     expect(renderModelPicker({ rows, selected: 0 }, options)).toContain("Esc");
+  });
+
+  it("shows the same window-relative number the key handler accepts", () => {
+    expect(renderModelPicker({ rows, selected: 0 }, options)).toContain("1.");
+  });
+
+  it("clips long model ids, prices and settings rows at every terminal width", () => {
+    const longRows: PickerRow[] = [
+      { kind: "model", choice: { ...rows.find((row) => row.kind === "model")!.choice, model: "model-".repeat(30) } },
+      { kind: "settings", label: "settings ".repeat(30) },
+    ];
+    for (const width of [1, 8, 19, 30, 80]) {
+      const rendered = renderModelPicker({ rows: longRows, selected: 0 }, { ...options, width, price: () => "price ".repeat(20) });
+      for (const line of rendered.split("\n")) expect(visibleWidth(line), `width ${width}: ${line}`).toBeLessThanOrEqual(width);
+    }
   });
 });
 

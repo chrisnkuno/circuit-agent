@@ -102,10 +102,12 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     summary: "Choosing what runs, and what it costs.",
     body: [
       "Nova talks to several providers. The picker lists what you can use, with prices, and offers to save a key for anything you cannot use yet. Switching model keeps the conversation — you are changing who answers, not starting over.",
+      "The list is the union of what this build knows the prices of and what each provider says it has today, so a model released last week is still offerable — it is simply shown without a price rather than hidden. The live half is cached for six hours; /models refresh asks again.",
       "A model switch applies to the tab you are in. Opening a tab with --model is how you compare two models on the same problem.",
     ],
     examples: [
       { input: "/models", effect: "the list, with prices" },
+      { input: "/models refresh", effect: "ask every provider what it has right now" },
       { input: "/model", effect: "the picker" },
       { input: "/model claude-sonnet-5", effect: "switch straight to one, keeping the transcript" },
       { input: "/providers", effect: "which providers are configured" },

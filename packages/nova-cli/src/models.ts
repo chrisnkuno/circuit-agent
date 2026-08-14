@@ -26,6 +26,13 @@ export type ModelChoice = {
   isProviderDefault: boolean;
   /** Undefined when the catalog has no rate for it — the CLI says so rather than inventing one. */
   prices: TokenPrices | undefined;
+  /**
+   * True for a model the provider reported that this build had never heard of.
+   *
+   * Shown, not hidden: the list's job is "what can I switch to", and a model missing from the
+   * price table is disproportionately likely to be the new one someone actually wants.
+   */
+  live?: boolean;
 };
 
 export type ModelCatalog = {
@@ -53,7 +60,18 @@ export function modelsForProvider(provider: ProviderId, asOf?: string): string[]
   return [fallback, ...models];
 }
 
-export function buildModelCatalog(environment: Record<string, string | undefined>, asOf?: string): ModelCatalog {
+/**
+ * The catalog, optionally widened by what the providers themselves report.
+ *
+ * `live` is a map of provider to model ids, from `model-fetch.ts`. Absent, this behaves exactly as
+ * it always has, which is what keeps every offline path and every test that predates fetching
+ * working unchanged.
+ */
+export function buildModelCatalog(
+  environment: Record<string, string | undefined>,
+  asOf?: string,
+  live?: Partial<Record<ProviderId, readonly string[]>>,
+): ModelCatalog {
   const choices: ModelChoice[] = [];
   const unconfigured: ModelCatalog["unconfigured"] = [];
 
@@ -64,13 +82,17 @@ export function buildModelCatalog(environment: Record<string, string | undefined
       unconfigured.push({ provider, label: spec.label, missing });
       continue;
     }
-    for (const model of modelsForProvider(provider, asOf)) {
+    const known = modelsForProvider(provider, asOf);
+    const knownSet = new Set(known);
+    const extra = (live?.[provider] ?? []).filter((model) => !knownSet.has(model)).slice().sort();
+    for (const model of [...known, ...extra]) {
       choices.push({
         provider,
         providerLabel: spec.label,
         model,
         isProviderDefault: model === (environment[`${provider.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel),
         prices: catalogPrices(provider, model, asOf),
+        ...(knownSet.has(model) ? {} : { live: true }),
       });
     }
   }

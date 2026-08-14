@@ -1,5 +1,6 @@
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import type { KeypressEvent } from "./keybindings";
+import { visibleWidth } from "./markdown";
 
 /**
  * One set of navigation rules, shared by every menu Nova shows.
@@ -70,6 +71,27 @@ export function filterItems<T>(items: readonly ChooserItem<T>[], query: string):
     .map((entry) => entry.item);
 }
 
+/**
+ * First visible row for a given selection.
+ *
+ * Shared by the renderer and the key handler on purpose: they used to compute it separately, so a
+ * digit meant the Nth row *of the list* while the screen showed the Nth row *of the window*. Past
+ * the first screenful they disagreed, and pressing `3` moved the cursor somewhere invisible.
+ */
+export function windowStart(selected: number, total: number, height: number): number {
+  const rows = Math.max(1, Math.floor(height));
+  const count = Math.max(0, Math.floor(total));
+  if (count <= rows) return 0;
+  const cursor = Math.max(0, Math.min(Math.floor(selected), count - 1));
+  return Math.max(0, Math.min(cursor - Math.floor(rows / 2), count - rows));
+}
+
+/** A renderer must respect the real terminal, including unusually narrow embedded terminals. */
+export function terminalColumns(width: number | undefined, fallback = 80): number {
+  const value = width ?? fallback;
+  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
+}
+
 export type ChooserStep = {
   state: ChooserState;
   /** Set once the interaction is over: the chosen index into the *filtered* list, or none. */
@@ -82,16 +104,21 @@ export type ChooserStep = {
  * Pure, so the whole interaction is testable without a terminal — the runner below does nothing
  * but turn real keypresses into these calls and paint what comes back.
  */
-export function advanceChooser<T>(state: ChooserState, items: readonly ChooserItem<T>[], input: { str?: string; key: KeypressEvent }, options: { filter?: boolean; page?: number } = {}): ChooserStep {
+export function advanceChooser<T>(state: ChooserState, items: readonly ChooserItem<T>[], input: { str?: string; key: KeypressEvent }, options: { filter?: boolean; page?: number; height?: number } = {}): ChooserStep {
   const name = input.key.name;
   const visible = filterItems(items, state.query);
   const last = Math.max(0, visible.length - 1);
   const page = options.page ?? 8;
   const clamp = (index: number) => Math.max(0, Math.min(last, index));
 
+  // Escape closes the *inner* thing first: a typed filter is undone before the menu is abandoned,
+  // which is what every editor has trained. Ctrl-C always leaves outright.
+  if (name === "escape" && options.filter && state.query !== "") return { state: { selected: 0, query: "" } };
   if (name === "escape" || (input.key.ctrl && (name === "c" || name === "g"))) return { state, done: {} };
   if (name === "return" || name === "enter") {
-    return { state, done: visible.length > 0 ? { index: state.selected } : {} };
+    // Clamped, not trusted. A selection left over from a longer list resolves to `undefined` in the
+    // runner, and an Enter that quietly cancels is indistinguishable from a broken menu.
+    return { state, done: visible.length > 0 ? { index: clamp(state.selected) } : {} };
   }
 
   // Clamped rather than wrapped. Wrapping is a nice trick on a list you can see all of and a
@@ -103,10 +130,24 @@ export function advanceChooser<T>(state: ChooserState, items: readonly ChooserIt
   if (name === "home") return { state: { ...state, selected: 0 } };
   if (name === "end") return { state: { ...state, selected: last } };
 
-  // A digit jumps, and always means the same row the renderer numbered.
-  if (input.str && /^[1-9]$/.test(input.str) && !input.key.ctrl && !input.key.meta) {
-    const index = Number(input.str) - 1;
-    return index <= last ? { state: { ...state, selected: index } } : { state };
+  /**
+   * A digit jumps to the row the renderer numbered — but only where a digit cannot be text.
+   *
+   * In a filterable list a digit is a character: "gpt-5.6" and "claude-4-5" are unfindable if `5`
+   * moves the cursor instead of narrowing the list, and the cursor jumping mid-word is exactly the
+   * "the menu selects the wrong thing" complaint. Numbers stay the accessible path in every menu
+   * that does not filter, and remain available in a filtering one until the query starts.
+   */
+  const digitsJump = !options.filter || state.query === "";
+  if (digitsJump && input.str && /^[1-9]$/.test(input.str) && !input.key.ctrl && !input.key.meta) {
+    // Relative to the window the renderer drew, so the number pressed is the number on screen —
+    // and only those numbers: a `9` must not teleport past a four-row window that never showed `9.`.
+    const height = options.height ?? 10;
+    const start = windowStart(state.selected, visible.length, height);
+    const shown = Math.min(height, visible.length - start);
+    const digit = Number(input.str);
+    if (digit > shown) return { state };
+    return { state: { ...state, selected: start + digit - 1 } };
   }
 
   if (options.filter) {
@@ -131,6 +172,8 @@ export type ChooserPaint = {
 
 export type RenderChooserOptions = {
   title?: string;
+  /** Terminal columns. Rows are clipped to it; a wrapped row corrupts the repaint. */
+  width?: number;
   /** Visible rows before the list scrolls under the selection. */
   height?: number;
   filter?: boolean;
@@ -145,6 +188,10 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
   const { paint } = options;
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const height = options.height ?? 10;
+  // Rows are clipped, never wrapped. A wrapped row costs the menu a line it did not reserve, which
+  // is how a repaint leaves a stripe of the previous frame behind and why a long description used
+  // to smear the list on a narrow terminal.
+  const width = terminalColumns(options.width);
   const visible = filterItems(items, state.query);
   const lines: string[] = [];
 
@@ -152,36 +199,76 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
   // counting visible rows would call a query that matched nothing a success and leave the user
   // staring at a lone "Clear this setting" with no idea their search failed.
   const matched = visible.some((item) => !item.pinned);
-  if (options.title) lines.push(`  ${paint.cyan(options.title)}`);
-  if (options.filter && state.query) lines.push(`  ${paint.dim("filter:")} ${state.query}${matched ? "" : paint.dim("   (no match)")}`);
-  else if (!matched) lines.push(`  ${paint.dim("(no match)")}`);
+  if (options.title) lines.push(paint.cyan(clipTo(`  ${options.title}`, width)));
+  if (options.filter && state.query) lines.push(paint.dim(clipTo(`  filter: ${state.query}${matched ? "" : "   (no match)"}`, width)));
+  else if (!matched) lines.push(paint.dim(clipTo("  (no match)", width)));
 
-  // Keep the selection on screen, or the arrow keys look like they have stopped working.
-  const start = Math.max(0, Math.min(state.selected - Math.floor(height / 2), visible.length - height));
-  const window = visible.slice(Math.max(0, start), Math.max(0, start) + height);
-  const width = Math.max(0, ...window.map((item) => item.label.length));
+  // Keep the selection on screen, or the arrow keys look like they have stopped working. The same
+  // maths the key handler uses, so a number on screen and a number pressed mean the same row.
+  const start = windowStart(state.selected, visible.length, height);
+  const window = visible.slice(start, start + height);
+  const labelWidth = Math.max(0, ...window.map((item) => visibleWidth(item.label)));
 
   let lastHeader: string | undefined;
   for (const [offset, item] of window.entries()) {
-    const index = Math.max(0, start) + offset;
-    if (item.header && item.header !== lastHeader) lines.push(`  ${paint.cyan(item.header)}`);
+    const index = start + offset;
+    if (item.header && item.header !== lastHeader) lines.push(paint.cyan(clipTo(`  ${item.header}`, width)));
     lastHeader = item.header ?? lastHeader;
     const active = index === state.selected;
-    const number = index < 9 ? `${index + 1}.` : "  ";
-    const row = `${active ? paint.green(glyphs.prompt) : " "} ${paint.dim(number)} ${item.label.padEnd(width + 2)}`;
-    const hint = item.hint ? ` ${paint.dim(item.hint)}` : "";
-    const description = item.description ? `  ${paint.dim(item.description)}` : "";
-    lines.push(`  ${row}${hint}${description}`);
+    // Numbered by position *in the window*: the row labelled 3 is the third row you can see, which
+    // is the only reading of "press 3" that survives a list longer than the screen.
+    const number = offset < 9 ? `${offset + 1}.` : "  ";
+    // The cursor, the number and two spaces are fixed furniture; everything after them shares what
+    // the terminal has left. The label is clipped first and the tail takes the remainder, so a long
+    // label cannot push a row past the edge and a long description cannot hide the label.
+    const furniture = visibleWidth(`  ${active ? ">" : " "} ${number} `) + 2;
+    if (width < furniture) {
+      lines.push(active ? paint.green(clipTo(`${glyphs.prompt}${item.label}`, width)) : clipTo(item.label, width));
+      continue;
+    }
+    const room = Math.max(0, width - furniture);
+    const hasTail = Boolean(item.hint || item.description);
+    const labelBudget = Math.min(labelWidth, hasTail ? Math.max(1, Math.floor(room * 0.6)) : room);
+    const shownLabel = clipTo(item.label, labelBudget);
+    const padded = shownLabel + " ".repeat(Math.max(0, labelBudget - visibleWidth(shownLabel)));
+    const head = `${active ? paint.green(glyphs.prompt) : " "} ${paint.dim(number)} ${padded}  `;
+    const tail = `${item.hint ? ` ${item.hint}` : ""}${item.description ? `  ${item.description}` : ""}`;
+    // The tail is cut *before* it is painted: clipping a coloured string mid-sequence bleeds that
+    // colour down the rest of the page.
+    lines.push(`  ${head}${paint.dim(clipTo(tail, Math.max(0, room - visibleWidth(padded) - 2)))}`);
   }
 
-  lines.push(`  ${paint.dim(options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}Esc cancel`)}`);
+  lines.push(paint.dim(clipTo(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}`, width)));
   return lines.join("\n");
+}
+
+/**
+ * Cuts to a visible width without splitting a colour sequence — the rows here are unpainted.
+ *
+ * Exported because the palette and the model picker are the same menu wearing different clothes,
+ * and they each grew their own width arithmetic. Three copies is how two of them end up wrapping
+ * on a narrow terminal while the third does not.
+ */
+export function clipTo(text: string, width: number): string {
+  if (width <= 0) return "";
+  if (visibleWidth(text) <= width) return text;
+  let out = "";
+  const segments = typeof Intl.Segmenter === "function"
+    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((entry) => entry.segment)
+    : [...text];
+  for (const segment of segments) {
+    if (visibleWidth(out + segment) > width - 1) break;
+    out += segment;
+  }
+  return `${out}…`;
 }
 
 export type RunChooserOptions = RenderChooserOptions & {
   /** Where the cursor starts, as an index into the unfiltered list. */
   initialIndex?: number;
   page?: number;
+  /** Re-read before every frame so a live terminal resize cannot leave stale geometry behind. */
+  getSize?: () => { width?: number; height?: number };
 };
 
 /** Drives a chooser over a stream of keypresses, returning the chosen value. */
@@ -192,16 +279,28 @@ export async function runChooser<T>(
   options: RunChooserOptions,
 ): Promise<T | undefined> {
   let state: ChooserState = { selected: Math.max(0, Math.min(options.initialIndex ?? 0, Math.max(0, items.length - 1))), query: "" };
-  paint(renderChooser(state, items, options));
+  const liveOptions = (): RunChooserOptions => {
+    const size = options.getSize?.();
+    const height = Math.max(1, Math.min(options.height ?? 10, size?.height ?? Number.POSITIVE_INFINITY));
+    return { ...options, width: size?.width ?? options.width, height };
+  };
+  paint(renderChooser(state, items, liveOptions()));
 
   for await (const input of keys) {
-    const step = advanceChooser(state, items, input, { filter: options.filter ?? false, page: options.page ?? options.height ?? 8 });
+    // `height` is passed so a digit means the row the renderer numbered; without it the two
+    // disagree the moment the list is longer than the screen.
+    const current = liveOptions();
+    const step = advanceChooser(state, items, input, {
+      filter: options.filter ?? false,
+      page: options.page ?? current.height ?? 8,
+      ...(current.height === undefined ? {} : { height: current.height }),
+    });
     state = step.state;
     if (step.done) {
       if (step.done.index === undefined) return undefined;
       return filterItems(items, state.query)[step.done.index]?.value;
     }
-    paint(renderChooser(state, items, options));
+    paint(renderChooser(state, items, liveOptions()));
   }
   return undefined;
 }

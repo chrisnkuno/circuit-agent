@@ -1,5 +1,6 @@
 import type { Palette } from "./theme";
 import type { TabView } from "./tabs";
+import { clip } from "./sections";
 
 /**
  * What the control panel is looking at, as data.
@@ -174,8 +175,15 @@ export function tabPanes(
   });
 }
 
-/** One row of the drawn frame: the text, and how it should be weighted. */
-export type FrameRow = { text: string; bold?: boolean; inverse?: boolean; dim?: boolean };
+/**
+ * One row of the drawn frame: the text, how it is weighted, and what colour it takes.
+ *
+ * The colour is a *value from the theme*, resolved here rather than in the component, so the panel
+ * is painted in whatever the session is painted in — a `/theme nebula` at the prompt changes the
+ * control panel too. Kept as a token string (a hex or an ANSI name) because that is what TermUI's
+ * `parseColor` accepts, so nothing has to translate on the way to the screen.
+ */
+export type FrameRow = { text: string; bold?: boolean; inverse?: boolean; dim?: boolean; color?: string };
 
 const STATUS_MARK: Record<WorkspacePane["status"], string> = {
   running: "\u25cf",
@@ -185,6 +193,16 @@ const STATUS_MARK: Record<WorkspacePane["status"], string> = {
 };
 
 export const WORKSPACE_LEGEND = "1-9 pane \u00b7 \u2190\u2192 move \u00b7 \u2191\u2193 scroll \u00b7 g/G ends \u00b7 q leave";
+
+/** Keeps the active pane named even when the full tab strip cannot fit. */
+function paneBar(snapshot: WorkspaceSnapshot, columns: number): string {
+  const tabs = paneTabs(snapshot);
+  const cells = tabs.map((tab) => ` ${STATUS_MARK[tab.status] ?? " "}${tab.label} `);
+  const full = cells.join("");
+  if (full.length <= columns) return full || " no panes ";
+  const selected = Math.max(0, Math.min(snapshot.selected, tabs.length - 1));
+  return `${selected > 0 ? "\u2039 " : ""}${cells[selected] ?? " no panes "}${selected < tabs.length - 1 ? " \u203a" : ""}`;
+}
 
 /**
  * The whole frame, row by row, sized to exactly the terminal it will be drawn on.
@@ -197,19 +215,23 @@ export const WORKSPACE_LEGEND = "1-9 pane \u00b7 \u2190\u2192 move \u00b7 \u2191
  */
 export function composeFrame(snapshot: WorkspaceSnapshot): FrameRow[] {
   const rows: FrameRow[] = [];
+  const columns = Math.max(1, Math.floor(snapshot.columns));
+  const rowCount = Math.max(1, Math.floor(snapshot.rows));
   const pane = selectedPane(snapshot);
-  const height = paneHeight(snapshot.rows);
+  const height = paneHeight(rowCount);
+  const theme = snapshot.palette.tokens;
 
-  const bar = paneTabs(snapshot)
-    .map((tab) => ` ${STATUS_MARK[tab.status] ?? " "}${tab.label} `)
-    .join("");
-  rows.push({ text: bar || " no panes ", bold: true });
+  const bar = paneBar(snapshot, columns);
+  rows.push({ text: bar || " no panes ", bold: true, color: theme.primary });
 
   const scrolled = pane && !atLiveEdge(pane, height, snapshot.scroll);
   const dropped = pane && pane.dropped > 0 ? `  (${pane.dropped} earlier lines dropped)` : "";
   rows.push({
     text: pane ? `${pane.title}  ${pane.subtitle}${dropped}` : "nothing open",
     bold: true,
+    // A failing pane is named in the theme's error colour, so which pane is in trouble is answered
+    // by the header rather than by reading its output.
+    color: pane?.status === "failed" ? theme.error : pane?.status === "running" ? theme.success : theme.accent,
   });
 
   const body = pane ? visibleLines(pane, height, snapshot.scroll) : [];
@@ -217,8 +239,14 @@ export function composeFrame(snapshot: WorkspaceSnapshot): FrameRow[] {
 
   // Padding, so the frame always occupies the same rows and a shorter pane cannot let the previous
   // frame's text show through underneath it.
-  while (rows.length < snapshot.rows - 1) rows.push({ text: "" });
-  rows.length = Math.max(0, snapshot.rows - 1);
-  rows.push({ text: `${WORKSPACE_LEGEND}${scrolled ? "   \u25b2 scrolled back" : ""}`, dim: true });
-  return rows;
+  while (rows.length < rowCount - 1) rows.push({ text: "" });
+  rows.length = Math.max(0, rowCount - 1);
+  rows.push({
+    text: `${WORKSPACE_LEGEND}${scrolled ? "   \u25b2 scrolled back" : ""}`,
+    dim: true,
+    color: theme.textMuted,
+  });
+  // An over-wide Text widget wraps and consumes a row the frame did not reserve, moving the footer
+  // into the pane. The finished frame is clipped once here so every caller gets the same guarantee.
+  return rows.map((row) => ({ ...row, text: clip(row.text, columns) }));
 }

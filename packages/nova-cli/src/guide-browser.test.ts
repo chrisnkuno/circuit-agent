@@ -29,12 +29,12 @@ describe("the layout", () => {
 
   it("leaves the body a usable measure even in a narrow window", () => {
     expect(bodyWidth(100)).toBe(71);
-    expect(bodyWidth(30)).toBeGreaterThanOrEqual(20);
+    expect(bodyWidth(30)).toBe(30);
   });
 
   it("never computes a negative body height", () => {
     expect(bodyHeight(30)).toBe(28);
-    expect(bodyHeight(1)).toBe(1);
+    expect(bodyHeight(1)).toBe(0);
   });
 });
 
@@ -153,12 +153,23 @@ describe("the frame", () => {
   });
 
   it("is exactly as wide as the window, on every row", () => {
-    for (const columns of [60, 100, 140]) {
+    for (const columns of [1, 8, 19, 30, 39, 40, 60, 100, 140]) {
       const frame = composeGuideFrame(state({ columns }));
       const widths = new Set(frame.map((row) => visibleWidth(row.text)));
       expect(widths.size, `columns ${columns}: ${[...widths].join(",")}`).toBe(1);
       expect([...widths][0]).toBeLessThanOrEqual(columns);
     }
+  });
+
+  it("switches to a readable single-column page when two columns cannot fit", () => {
+    const frame = composeGuideFrame(state({ columns: 30 }));
+    expect(frame[0].text).toContain("nova guide");
+    expect(frame.some((row) => row.text.includes("│"))).toBe(false);
+  });
+
+  it("is exactly as tall even when only one or two terminal rows exist", () => {
+    expect(composeGuideFrame(state({ rows: 1 }))).toHaveLength(1);
+    expect(composeGuideFrame(state({ rows: 2 }))).toHaveLength(2);
   });
 
   it("shows the list and the page side by side", () => {

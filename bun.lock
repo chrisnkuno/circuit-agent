@@ -8,6 +8,7 @@
         "@anthropic-ai/sdk": "^0.116.0",
         "@circuit-nova/nova-core": "workspace:*",
         "@convex-dev/better-auth": "^0.12.5",
+        "@termuijs/ui": "^0.1.7",
         "better-auth": "~1.6.15",
         "convex": "^1.31.2",
         "e2b": "^2.36.0",
@@ -426,6 +427,10 @@
     "@termuijs/motion": ["@termuijs/motion@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7" } }, "sha512-j+gCcBYNFYw3RmC2zETXRT2AyJf5TxHV6hf0QQv3H2nvyZAxEyduhDcPlVwFzlhfRvSdXdPI9JtMLaHbLyRnFg=="],
 
     "@termuijs/testing": ["@termuijs/testing@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7", "@termuijs/jsx": "0.1.7", "@termuijs/motion": "0.1.7", "@termuijs/widgets": "0.1.7" } }, "sha512-9K4N+mn1nhf+SGbYcQnE7WVIV2WyQQ08OSSkWw3+qLJqdHrlndBBFeuklYux0j3/rkMY6sfsMtG8YYVcjN0dtg=="],
+
+    "@termuijs/tss": ["@termuijs/tss@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7", "@termuijs/jsx": "0.1.7", "@termuijs/widgets": "0.1.7" } }, "sha512-9xs1kQti0XtCOLT878BEluiwO0fEkzO3ls6Q3Nz/6PV1ijxjaUIEHBnd4+ORekMTxLhUMMofQ3hv5t9t7/UBag=="],
+
+    "@termuijs/ui": ["@termuijs/ui@0.1.7", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "@termuijs/core": "0.1.7", "@termuijs/jsx": "0.1.7", "@termuijs/tss": "0.1.7", "@termuijs/widgets": "0.1.7" } }, "sha512-2SknlX8hCvauxBcdZXQvF0m1/cgqhiDfR3jw28J8EKO4a786wveMLV1IqUTIhZ8BJzaXTBS67V9s8TflPDLwoA=="],
 
     "@termuijs/widgets": ["@termuijs/widgets@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7", "@termuijs/motion": "0.1.7" } }, "sha512-Duo/hEzkWXa5yTuIlK6cBxgPyni1UoaqAXkMwIsJS0Mut3AqoJ/E0us9Ca1P+RphDfFLRcuqQebbS0LPdfFM+w=="],
 

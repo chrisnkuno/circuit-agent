@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { advanceChooser, filterItems, renderChooser, runChooser, type ChooserItem } from "./chooser";
+import { advanceChooser, clipTo, filterItems, renderChooser, runChooser, type ChooserItem } from "./chooser";
 import type { KeypressEvent } from "./keybindings";
+import { visibleWidth } from "./markdown";
+import { buildPickerRows, renderModelPicker } from "./model-picker";
+import { buildModelCatalog } from "./models";
+import { renderPalette } from "./palette";
 
+const plain = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
 const paint = { dim: (t: string) => t, cyan: (t: string) => t, green: (t: string) => t, yellow: (t: string) => t };
 const press = (name: string, key: Partial<KeypressEvent> = {}, str?: string) => ({ ...(str === undefined ? {} : { str }), key: { name, ...key } as KeypressEvent });
 const type = (text: string) => [...text].map((char) => press(char, {}, char));
@@ -182,5 +187,162 @@ describe("driving a chooser end to end", () => {
     const frames: string[] = [];
     await runChooser(keys([press("down"), press("down"), press("return")]), items, (frame) => frames.push(frame), { paint });
     expect(frames).toHaveLength(3);
+  });
+});
+
+describe("the bugs that made menus feel broken", () => {
+  const many = Array.from({ length: 40 }, (_unused, index) => ({ value: index, label: `row ${index}` }));
+
+  it("lets a digit be text once a filter is being typed", () => {
+    // "gpt-5.6" and "claude-4-5" are unfindable if 5 moves the cursor instead of narrowing the
+    // list — and a cursor that jumps mid-word is the whole "it selects the wrong thing" report.
+    const typed = advanceChooser({ selected: 0, query: "gpt-" }, many, press("5", {}, "5"), { filter: true });
+    expect(typed.state.query).toBe("gpt-5");
+    expect(typed.state.selected).toBe(0);
+  });
+
+  it("still jumps on a digit before a query is started, and in every non-filtering menu", () => {
+    expect(advanceChooser({ selected: 0, query: "" }, many, press("3", {}, "3"), { filter: true }).state.selected).toBe(2);
+    expect(advanceChooser({ selected: 0, query: "" }, many, press("3", {}, "3")).state.selected).toBe(2);
+  });
+
+  it("numbers the row you can see, not the row in the list", () => {
+    // Scrolled past the first screenful, the old code numbered nothing and a digit jumped to an
+    // absolute index that was off screen.
+    const scrolled = { selected: 30, query: "" };
+    const rendered = plain(renderChooser(scrolled, many, { paint, height: 5, width: 60 }));
+    expect(rendered).toContain("1. row 28");
+    // Pressing 1 lands on exactly the row labelled 1.
+    expect(advanceChooser(scrolled, many, press("1", {}, "1"), { height: 5 }).state.selected).toBe(28);
+  });
+
+  it("clears the query on Escape before abandoning the menu", () => {
+    const cleared = advanceChooser({ selected: 3, query: "rw" }, many, press("escape"), { filter: true });
+    expect(cleared.done).toBeUndefined();
+    expect(cleared.state).toEqual({ selected: 0, query: "" });
+    // A second Escape, with nothing left to clear, leaves.
+    expect(advanceChooser({ selected: 0, query: "" }, many, press("escape"), { filter: true }).done).toEqual({});
+  });
+
+  it("never returns a selection past the end of the list it is choosing from", () => {
+    // Resolved against the filtered list by the runner; an out-of-range index becomes `undefined`,
+    // and an Enter that silently cancels is indistinguishable from a broken menu.
+    const step = advanceChooser({ selected: 39, query: "row 1" }, many, press("return"));
+    const visible = filterItems(many, "row 1");
+    expect(step.done?.index).toBeLessThan(visible.length);
+  });
+
+  it("clips every row to the terminal instead of wrapping it", () => {
+    const wide = [{ value: 1, label: "a".repeat(50), description: "b".repeat(80), hint: "c".repeat(30) }];
+    for (const width of [1, 8, 19, 40, 60, 100]) {
+      const rendered = plain(renderChooser({ selected: 0, query: "" }, wide, { paint, width }));
+      for (const line of rendered.split("\n")) {
+        expect(visibleWidth(line), `width ${width}: ${line}`).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  it("aligns by visible width, so a wide glyph does not push its neighbours out", () => {
+    const mixed = [
+      { value: 1, label: "日本語", hint: "wide" },
+      { value: 2, label: "ascii", hint: "narrow" },
+    ];
+    const rows = plain(renderChooser({ selected: 0, query: "" }, mixed, { paint, width: 60 })).split("\n");
+    // Measured in *cells*, not characters: 日本語 is three characters and six columns, and a test
+    // that counts characters would report a misalignment the terminal never shows.
+    const hintColumns = rows
+      .filter((row) => row.includes("wide") || row.includes("narrow"))
+      .map((row) => {
+        const hint = row.includes("wide") ? "wide" : "narrow";
+        return visibleWidth(row.slice(0, row.indexOf(hint)));
+      });
+    expect(new Set(hintColumns).size).toBe(1);
+  });
+
+  it("tells the reader that Escape clears a filter before it cancels", () => {
+    expect(plain(renderChooser({ selected: 0, query: "" }, many, { paint, filter: true }))).toContain("Esc clear/cancel");
+    expect(plain(renderChooser({ selected: 0, query: "" }, many, { paint }))).toContain("Esc cancel");
+  });
+
+  it("clips the complete filtered status row, including its no-match suffix", () => {
+    const rendered = plain(renderChooser({ selected: 0, query: "a-query-that-is-far-too-long" }, items, { paint, filter: true, width: 12 }));
+    for (const line of rendered.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(12);
+  });
+
+  it("does not split a joined emoji while clipping", () => {
+    const family = "👨‍👩‍👧‍👦";
+    expect(clipTo(`${family} family`, visibleWidth(family) + 1)).toBe(`${family}…`);
+  });
+});
+
+
+describe("every menu obeys the same rules", () => {
+  /**
+   * The palette and the model picker are the same menu wearing different clothes. They each grew
+   * their own width arithmetic, which is how two of them wrapped on a narrow terminal while the
+   * third did not. These assert the shared invariants against all three at once.
+   */
+  const rows = Array.from({ length: 30 }, (_unused, index) => ({
+    value: index,
+    label: `option ${index} with a fairly long label`,
+    description: "a description long enough to run past the edge of a narrow terminal",
+    hint: "hint",
+  }));
+
+  it("never draws a row wider than the terminal", () => {
+    const pickerRows = buildPickerRows(buildModelCatalog({ ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k", CIRCUITNOTION_API_KEY: "k" }, "2026-08-10"));
+    const paletteMatches = Array.from({ length: 30 }, (_unused, index) => ({
+      command: `/option-${index}-with-a-fairly-long-command`,
+      description: "a description long enough to run past the edge of a narrow terminal",
+    }));
+    for (const width of [1, 8, 19, 30, 40, 80, 120]) {
+      const frames = [
+        plain(renderChooser({ selected: 15, query: "" }, rows, { paint, width, height: 6 })),
+        renderPalette({ query: "q".repeat(40), matches: paletteMatches, selected: 15 }, { width, rows: 6 }),
+        renderModelPicker({ rows: pickerRows, selected: Math.min(15, pickerRows.length - 1) }, { paint, width, height: 6, current: { provider: "anthropic", model: "claude-sonnet-5" }, price: () => "$2/$10" }),
+      ];
+      for (const [index, rendered] of frames.entries()) {
+        for (const line of rendered.split("\n")) {
+          expect(visibleWidth(line), `menu ${index} width ${width}: ${line}`).toBeLessThanOrEqual(width);
+        }
+      }
+    }
+  });
+
+  it("always keeps the selection on screen, at either end of the list", () => {
+    for (const selected of [0, 7, 15, 29]) {
+      const rendered = plain(renderChooser({ selected, query: "" }, rows, { paint, width: 80, height: 6 }));
+      expect(rendered, `selected ${selected}`).toContain(`option ${selected} `);
+    }
+  });
+
+  it("agrees with the key handler about which row is which number", () => {
+    for (const selected of [0, 15, 29]) {
+      const rendered = plain(renderChooser({ selected, query: "" }, rows, { paint, width: 80, height: 6 }));
+      const firstNumbered = rendered.split("\n").find((line) => line.includes("1."))!;
+      const jumped = advanceChooser({ selected, query: "" }, rows, press("1", {}, "1"), { height: 6 }).state.selected;
+      expect(firstNumbered, `selected ${selected}`).toContain(`option ${jumped} `);
+    }
+  });
+
+  it("re-reads terminal size before every frame so a live resize cannot leave stale geometry", async () => {
+    let size = { width: 80, height: 12 };
+    async function* keys() {
+      yield press("down");
+      size = { width: 18, height: 4 };
+      yield press("down");
+      yield press("escape");
+    }
+    const frames: string[] = [];
+    await runChooser(keys(), rows, (frame) => frames.push(plain(frame)), {
+      paint,
+      height: 10,
+      getSize: () => size,
+    });
+    expect(frames.length).toBeGreaterThanOrEqual(3);
+    for (const line of frames.at(-1)!.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(18);
+    // A digit past the live window height is ignored — the screen never showed that number.
+    expect(advanceChooser({ selected: 0, query: "" }, rows, press("9", {}, "9"), { height: 4 }).state.selected).toBe(0);
+    expect(advanceChooser({ selected: 0, query: "" }, rows, press("3", {}, "3"), { height: 4 }).state.selected).toBe(2);
   });
 });

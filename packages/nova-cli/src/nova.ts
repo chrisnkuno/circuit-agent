@@ -8,7 +8,7 @@ import { NovaSessionDaemon, type DaemonNotification, type NovaDaemonClient } fro
 import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
 import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
-import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
@@ -33,8 +33,10 @@ import { loadHistory, saveHistory } from "./history";
 import { renderTabStrip, parseTabCommand, shortModel, WorkspaceController } from "./tabs";
 import { OutputRouter, TabSink, replayLines, terminalStream } from "./output";
 import { renderPatch } from "./patch-view";
+import { fetchableProviders, isCacheFresh, loadLiveModels, readModelCache } from "./model-fetch";
 import { JobStream, WatchRegistry, sandboxWarning } from "./job-stream";
 import { tabPanes, type WorkspaceSnapshot } from "./workspace-model";
+import { explainScreenRefusal, withFullScreen, type ScreenCapabilities, type TerminalControls } from "./screen-host";
 import { findTopic, parseGuideCommand, renderGuideIndex, renderGuideTopic, renderWholeGuide, searchTopics } from "./guide";
 import { DEFAULT_THEME_NAME, NO_COLOR_PALETTE, buildPalette, detectPreferredTheme, findBuiltinTheme, parseThemeCommand, type Palette } from "./theme";
 import { discoverThemes, findTheme, themeDirectory } from "./theme-files";
@@ -755,6 +757,9 @@ function settingsChooser(readline: Interface): NonNullable<SettingsPrompts["choo
       ...(request.filter ? { filter: true } : {}),
       ...(request.initialIndex === undefined ? {} : { initialIndex: request.initialIndex }),
       height: 12,
+      // The real terminal, so rows are clipped rather than wrapped onto lines the repaint does
+      // not know it drew.
+      width: process.stdout.columns ?? 80,
       glyphs,
       paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
     },
@@ -1238,7 +1243,7 @@ async function main(): Promise<number> {
     // Built per keystroke rather than cached: the catalog depends on `environment`, which a
     // `/settings` edit mutates mid-session, and a stale list would keep offering a provider whose
     // key was just removed. It is a walk over a literal table, not IO.
-    completer: (line: string) => completeInput(line, projectFiles, buildModelCatalog(environment).choices.map((choice) => choice.model)),
+    completer: (line: string) => completeInput(line, projectFiles, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model)),
     history: (await loadHistory(environment)).reverse(),
     historySize: 200,
     removeHistoryDuplicates: true,
@@ -1653,6 +1658,57 @@ async function main(): Promise<number> {
    * and redraws itself in place — the same information, at the cost of living in the flow of the
    * transcript rather than above it, and with the terminal's own scrollback left intact.
    */
+  /**
+   * How a full-screen view borrows the terminal. One definition, used by every screen, because the
+   * six steps have to happen in the same order every time and a missed one leaves a dead prompt.
+   */
+  const terminalControls = (): TerminalControls => ({
+    clearStatus: () => statusBar.clear(),
+    releaseScreen: () => screen?.exit(),
+    uninstallShortcuts: () => uninstallShortcuts(),
+    installShortcuts: () => installShortcutsAgain(),
+    pauseInput: () => readline.pause(),
+    resumeInput: () => readline.resume(),
+    restoreScreen: () => { screen?.enter(); showIdleStatus(); },
+  });
+
+  const screenCapabilities = (): ScreenCapabilities => ({
+    interactive: interactive && Boolean(process.stdout.isTTY),
+    columns: process.stdout.columns ?? 80,
+    rows: process.stdout.rows ?? 24,
+  });
+
+  /**
+   * Models the providers themselves report, over and above the ones this build was compiled with.
+   *
+   * Held for the session and filled on first use, so completion and the picker widen without any
+   * of them paying for a request. A failure leaves it empty, which is exactly the behaviour the
+   * CLI had before fetching existed.
+   */
+  let liveModels: Partial<Record<ProviderId, string[]>> = {};
+
+  /**
+   * Fills `liveModels`, from cache when it is fresh and from the providers otherwise.
+   *
+   * Never called at startup. A CLI that reaches the network before drawing its first prompt is a
+   * CLI whose launch time depends on someone else's DNS, and the only thing the request buys is a
+   * longer list in a menu that may never be opened. The cache is read at startup — that is free —
+   * and the request happens the first time the list is actually wanted.
+   */
+  const refreshLiveModels = async (options: { refresh?: boolean } = {}): Promise<{ errors: string[] }> => {
+    const providers = fetchableProviders(environment, PROVIDER_IDS);
+    if (providers.length === 0) return { errors: [] };
+    const loaded = await loadLiveModels(providers, environment, options);
+    if (Object.keys(loaded.models).length > 0) liveModels = loaded.models;
+    return { errors: loaded.errors.map((error) => `${error.provider}: ${error.error}`) };
+  };
+  // Free: a cache hit widens completion and the picker with no request at all. A miss simply means
+  // the first `/models` pays for the fetch.
+  {
+    const cached = await readModelCache(environment);
+    if (isCacheFresh(cached)) liveModels = cached!.models;
+  }
+
   const showIdleStatus = (): void => {
     if (screen?.pinned) screen.renderStatus(idleStatusLine());
     else if (ttyMode) statusBar.renderLine(idleStatusLine());
@@ -2058,7 +2114,7 @@ async function main(): Promise<number> {
     const paintSuggestions = () => setImmediate(() => {
       if (turnActive) return;
       const line = (readline as { line?: string }).line ?? "";
-      const suggestions = suggestionsFor(line, buildModelCatalog(environment).choices.map((choice) => choice.model));
+      const suggestions = suggestionsFor(line, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model));
       if (suggestions.length === 0) { screen?.clearSuggestions(); return; }
       const width = Math.max(...suggestions.map((entry) => entry.command.length + (entry.args ? entry.args.length + 1 : 0)));
       screen?.renderSuggestions(suggestions.map((entry) => {
@@ -2200,7 +2256,17 @@ async function main(): Promise<number> {
     }
     const modelCommand = parseModelCommand(input);
     if (modelCommand) {
-      const catalog = buildModelCatalog(environment);
+      // Refreshed on demand: `/models refresh` is the answer to "a model shipped and it is not
+      // here", and it is the only path that waits on the network.
+      // The list is wanted now, so this is the moment to pay for it: on demand, and only when the
+      // cache has nothing fresh to offer or the user asked for a refresh outright.
+      const wantsRefresh = /\brefresh\b/.test(input);
+      if (wantsRefresh || Object.keys(liveModels).length === 0) {
+        if (wantsRefresh) out.write(style.dim("  asking every provider what it has…\n"));
+        const { errors } = await refreshLiveModels(wantsRefresh ? { refresh: true } : {});
+        for (const error of errors) out.write(style.yellow(`  ${error}\n`));
+      }
+      const catalog = buildModelCatalog(environment, undefined, liveModels);
       const paint = { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow };
       const price = (choice: ModelChoice) => describePrice(choice.prices, display, (money) => convertTo(money, display, rates));
 
@@ -2409,10 +2475,6 @@ async function main(): Promise<number> {
     }
 
     if (input === "/workspace" || input === "/panel") {
-      if (!interactive || !process.stdout.isTTY) {
-        out.write(style.yellow("  The workspace needs an interactive terminal.\n"));
-        continue;
-      }
       /**
        * The control panel: every tab and every watched job, live, side by side.
        *
@@ -2450,26 +2512,13 @@ async function main(): Promise<number> {
       // The panel takes the terminal: raw mode, the alternate screen, and every keystroke. readline
       // and the pinned footer both have to let go first, or two things will be reading stdin and
       // one of them will be writing over the other.
-      let runWorkspaceScreen: typeof import("./workspace-screen").runWorkspace;
-      try {
-        ({ runWorkspace: runWorkspaceScreen } = await import("./workspace-screen"));
-      } catch (error) {
-        out.write(style.yellow(`  The workspace screen could not be loaded: ${error instanceof Error ? error.message : String(error)}\n`));
-        out.write(style.dim("  It needs the @termuijs packages, which ship with Nova but can be pruned by a package manager.\n"));
-        continue;
-      }
-      statusBar.clear();
-      screen?.exit();
-      uninstallShortcuts();
-      readline.pause();
-      try {
-        await runWorkspaceScreen({ read: readSnapshot });
-      } finally {
-        readline.resume();
-        installShortcutsAgain();
-        screen?.enter();
-        showIdleStatus();
-      }
+      const outcome = await withFullScreen(screenCapabilities(), terminalControls(), async () => {
+        const { runWorkspace } = await import("./workspace-screen");
+        await runWorkspace({ read: readSnapshot });
+      });
+      // No text path for the panel — several live panes is the thing a transcript cannot express —
+      // so a refusal is said plainly rather than swallowed.
+      if (!outcome.ok) out.write(style.yellow(`  ${explainScreenRefusal(outcome)}\n`));
       continue;
     }
 
@@ -2478,37 +2527,23 @@ async function main(): Promise<number> {
       const style_ = sectionStyle();
 
       /**
-       * Opens the guide as a screen, and says so honestly if it cannot.
+       * Opens the guide as a screen, and reports whether it happened.
        *
-       * The printed forms below are not a fallback bolted on — they are the right answer whenever
-       * the guide is wanted as *text*: piped, quoted, or kept in the transcript. The screen is the
-       * right answer for reading, which is what a bare `/guide` means.
+       * A `false` return is not an error — it means the printed guide below is the right answer for
+       * this terminal, which is true for a pipe, a window too small to hold a page, and a build
+       * where the framework was pruned. See `terminal_design_system.md` §10.
        */
       const openGuideScreen = async (startAt?: string): Promise<boolean> => {
-        if (!interactive || !process.stdout.isTTY) return false;
-        let runGuideScreen: typeof import("./guide-screen").runGuideScreen;
-        try {
-          ({ runGuideScreen } = await import("./guide-screen"));
-        } catch {
-          return false;
-        }
-        statusBar.clear();
-        screen?.exit();
-        uninstallShortcuts();
-        readline.pause();
-        try {
+        const outcome = await withFullScreen(screenCapabilities(), terminalControls(), async () => {
+          const { runGuideScreen } = await import("./guide-screen");
           await runGuideScreen({
             columns: process.stdout.columns ?? 80,
             rows: process.stdout.rows ?? 24,
+            palette,
             ...(startAt ? { startAt } : {}),
           });
-        } finally {
-          readline.resume();
-          installShortcutsAgain();
-          screen?.enter();
-          showIdleStatus();
-        }
-        return true;
+        });
+        return outcome.ok;
       };
 
       if (guideCommand.kind === "index") {

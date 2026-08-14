@@ -26,7 +26,7 @@ export const COMMANDS = defineCommands({
   "/plan": { description: "Switch to plan mode — read and reason, no writes" },
   "/build": { description: "Switch to build mode — edits need approval" },
   "/auto": { description: "Auto-apply ordinary edits; sensitive actions still ask" },
-  "/models": { description: "Pick a model from a list, with prices — or add a key for one you can't use yet" },
+  "/models": { args: "[refresh]", description: "Every model each provider actually offers, with prices — or add a key for one you can't use yet" },
   "/model": { args: "[name | N | provider model]", description: "Open the model picker, or switch straight to a name, keeping the transcript" },
   "/undo": { args: "[code|conversation]", description: "Revert the last turn — files, the conversation, or both (default)" },
   "/diff": { description: "What changed since the last checkpoint" },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { advancePalette, paletteEntries, rankPaletteEntries, renderPalette, runCommandPalette, type PaletteEntry, type PaletteKey } from "./palette";
+import { visibleWidth } from "./markdown";
 
 const entries: PaletteEntry[] = [
   { command: "/mode", args: "[plan|build|auto]", description: "Show or switch the permission mode" },
@@ -82,6 +83,10 @@ describe("keystrokes", () => {
     expect(advancePalette({ query: "kubernetes", selected: 0 }, entries, press("return")).done).toEqual({});
   });
 
+  it("clamps a stale selection when Enter uses it", () => {
+    expect(advancePalette({ query: "diff", selected: 99 }, entries, press("return")).done).toEqual({ command: "/diff" });
+  });
+
   it("edits the query with Backspace and Ctrl+U", () => {
     expect(advancePalette({ query: "diff", selected: 0 }, entries, press("backspace")).state.query).toBe("dif");
     expect(advancePalette({ query: "diff", selected: 3 }, entries, press("u", { ctrl: true })).state).toEqual({ query: "", selected: 0 });
@@ -110,6 +115,14 @@ describe("rendering", () => {
 
   it("says so plainly when nothing matches", () => {
     expect(renderPalette({ query: "zzz", matches: [], selected: 0 })).toContain("(no match)");
+  });
+
+  it("clips long commands, descriptions and queries at every terminal width", () => {
+    const long = [{ command: `/${"command".repeat(12)}`, args: `[${"argument".repeat(8)}]`, description: "description ".repeat(20) }];
+    for (const width of [1, 8, 19, 30, 80]) {
+      const rendered = renderPalette({ query: "query ".repeat(20), matches: long, selected: 0 }, { width });
+      for (const line of rendered.split("\n")) expect(visibleWidth(line), `width ${width}: ${line}`).toBeLessThanOrEqual(width);
+    }
   });
 
   describe("opening upward", () => {

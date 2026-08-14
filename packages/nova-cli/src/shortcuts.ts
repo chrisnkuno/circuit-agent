@@ -135,7 +135,14 @@ export async function withBorrowedKeyboard<T>(
 
 export async function openPalette(host: ShortcutHost, self?: unknown, options: RunPaletteOptions = {}): Promise<string | undefined> {
   const chords = Object.fromEntries(host.registry.bindings.map((binding) => [binding.command, formatBinding(binding.chord)]));
-  return withBorrowedKeyboard(host, self, (keys, paint) => runCommandPalette(keys, paletteEntries(chords), paint, options));
+  // The live terminal width, so rows are clipped rather than wrapped. Defaulted here rather than in
+  // the renderer: the renderer is pure and has no business asking the process how wide it is.
+  const sized = {
+    width: host.output.columns ?? 80,
+    ...options,
+    getSize: options.getSize ?? (() => ({ width: host.output.columns ?? 80, height: Math.max(1, (host.output.rows ?? 24) - 3) })),
+  };
+  return withBorrowedKeyboard(host, self, (keys, paint) => runCommandPalette(keys, paletteEntries(chords), paint, sized));
 }
 
 /**
@@ -150,12 +157,22 @@ export async function openChooser<T>(
   options: Omit<RunChooserOptions, "paint"> & { paint: ChooserPaint },
   self?: unknown,
 ): Promise<T | undefined> {
-  return withBorrowedKeyboard(host, self, (keys, paint) => runChooser(keys, items, paint, options));
+  const sized = {
+    width: host.output.columns ?? 80,
+    ...options,
+    getSize: options.getSize ?? (() => ({ width: host.output.columns ?? 80, height: Math.max(1, (host.output.rows ?? 24) - 4) })),
+  };
+  return withBorrowedKeyboard(host, self, (keys, paint) => runChooser(keys, items, paint, sized));
 }
 
 /** The model chooser, over the same borrowed keyboard the palette uses. */
 export async function openModelPicker(host: KeyboardHost, options: RunModelPickerOptions, self?: unknown): Promise<PickerResult | undefined> {
-  return withBorrowedKeyboard(host, self, (keys, paint) => runModelPicker(keys, paint, options));
+  const sized = {
+    width: host.output.columns ?? 80,
+    ...options,
+    getSize: options.getSize ?? (() => ({ width: host.output.columns ?? 80, height: Math.max(1, (host.output.rows ?? 24) - 4) })),
+  };
+  return withBorrowedKeyboard(host, self, (keys, paint) => runModelPicker(keys, paint, sized));
 }
 
 function formatBinding(chord: { key: string; ctrl: boolean; shift: boolean; meta: boolean }): string {

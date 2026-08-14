@@ -83,7 +83,7 @@ export function Workspace({ read, onExit, refreshMs = 200 }: WorkspaceProps) {
   return (
     <Panel flexDirection="column" width={snapshot.columns} height={snapshot.rows}>
       {rows.map((row, index) => (
-        <Line key={`row-${index}`} bold={row.bold} dimColor={row.dim} inverse={row.inverse}>
+        <Line key={`row-${index}`} bold={row.bold} dimColor={row.dim} inverse={row.inverse} color={row.color}>
           {row.text}
         </Line>
       ))}

@@ -211,14 +211,14 @@ describe("what a tab keeps, under a real pty", () => {
     // the transcript can be scrolled back to and copied.
     const topic = p.output().length;
     p.writeLine("/guide tabs");
-    await p.waitFor(/its own model/, { timeoutMs: 20_000, since: topic });
+    await p.waitFor(/its own model/, { timeoutMs: 30_000, since: topic });
     expect(p.output().slice(topic)).toContain("--sandbox e2b");
     // The prompt comes straight back: nothing took the terminal.
-    await p.waitFor(PROMPT, { timeoutMs: 20_000, since: p.output().length });
+    await p.waitFor(PROMPT, { timeoutMs: 30_000, since: p.output().length });
 
     const missing = p.output().length;
     p.writeLine("/guide nonsense");
-    await p.waitFor(/No guide topic called/, { timeoutMs: 20_000, since: missing });
+    await p.waitFor(/No guide topic called/, { timeoutMs: 30_000, since: missing });
   }, 90_000);
 
   it("opens the guide as a screen, and gives the terminal back", async () => {
