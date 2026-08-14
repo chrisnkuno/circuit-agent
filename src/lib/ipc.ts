@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { IpcEvent, NovaMode, NovaSettings, PermissionDecision, ProviderId } from "./settings";
 
 type RequestPayload = Record<string, unknown> & { type: string };
+
 let seq = 0;
 
 export async function ensureSidecar(): Promise<void> {
@@ -21,12 +22,21 @@ export async function setSettings(settings: NovaSettings) {
 
 export async function openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
   return await sidecarRequest<{
-    sessionId: string; root: string; mode: NovaMode; sandbox: boolean; workspace: string; model: string; provider: string;
+    sessionId: string;
+    root: string;
+    mode: NovaMode;
+    sandbox: boolean;
+    workspace: string;
+    model: string;
+    provider: string;
   }>({ type: "session.open", root, mode, sandbox, upload });
 }
 
 export async function listSessions(root: string) {
-  return await sidecarRequest<Array<{ id: string; title: string; updatedAt: number }>>({ type: "session.list", root });
+  return await sidecarRequest<Array<{ id: string; title: string; updatedAt: number }>>({
+    type: "session.list",
+    root,
+  });
 }
 
 export async function resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
@@ -34,7 +44,10 @@ export async function resumeSession(root: string, sessionId: string, mode: NovaM
 }
 
 export async function sendTurn(objective: string) {
-  return await sidecarRequest<{ status: string; summary: string; sessionId: string }>({ type: "turn.send", objective });
+  return await sidecarRequest<{ status: string; summary: string; sessionId: string }>({
+    type: "turn.send",
+    objective,
+  });
 }
 
 export async function setMode(mode: NovaMode) {
@@ -58,7 +71,14 @@ export async function cancelTurn() {
 }
 
 export async function getCost() {
-  return await sidecarRequest<{ report: string; priced: boolean; displayTotal?: string; budgetFraction?: number; warning?: string; exhausted?: boolean }>({ type: "cost.get" });
+  return await sidecarRequest<{
+    report: string;
+    priced: boolean;
+    displayTotal?: string;
+    budgetFraction?: number;
+    warning?: string;
+    exhausted?: boolean;
+  }>({ type: "cost.get" });
 }
 
 export async function getDiff() {
@@ -77,9 +97,15 @@ export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promis
   return await listen<IpcEvent>("sidecar-event", (event) => handler(event.payload));
 }
 
+/** Non-blocking folder picker via the dialog plugin (safe on Linux/GTK). */
 export async function pickFolder(): Promise<string | null> {
-  const selected = await open({ directory: true, multiple: false, title: "Open project folder" });
-  return typeof selected === "string" && selected.trim() ? selected : null;
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Open project folder",
+  });
+  if (typeof selected === "string" && selected.trim()) return selected;
+  return null;
 }
 
 export async function loadPersistedSettings(): Promise<NovaSettings | null> {

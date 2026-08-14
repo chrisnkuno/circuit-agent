@@ -7,17 +7,30 @@
     "core:default",
     "store:default",
     "dialog:default",
+    "updater:default",
     {
       "identifier": "shell:allow-spawn",
       "allow": [
-        { "name": "binaries/nova-sidecar", "sidecar": true, "args": true },
-        { "name": "node", "cmd": "node", "args": true }
+        {
+          "name": "binaries/nova-sidecar",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "node",
+          "cmd": "node",
+          "args": true
+        }
       ]
     },
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "binaries/nova-sidecar", "sidecar": true, "args": true }
+        {
+          "name": "binaries/nova-sidecar",
+          "sidecar": true,
+          "args": true
+        }
       ]
     }
   ]

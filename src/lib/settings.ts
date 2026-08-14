@@ -3,6 +3,7 @@ export type NovaMode = "plan" | "build" | "auto";
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
 
 export const CIRCUITNOTION_DEFAULT_BASE_URL = "https://api.circuitnotion.com/v1";
+
 export const DEFAULT_MODELS: Record<ProviderId, string> = {
   circuitnotion: "gpt-5.6-luna",
   openai: "gpt-5.6-terra",
@@ -27,7 +28,15 @@ export type IpcEvent =
   | { type: "assistant_delta"; text: string }
   | { type: "tool_call"; toolCallId: string; name: string; summary?: string }
   | { type: "tool_result"; toolCallId: string; name: string; ok: boolean; preview?: string }
-  | { type: "approval_needed"; requestId: string; toolCallId: string; toolName: string; summary: string; actionDigest: string; scopeKey: string }
+  | {
+      type: "approval_needed";
+      requestId: string;
+      toolCallId: string;
+      toolName: string;
+      summary: string;
+      actionDigest: string;
+      scopeKey: string;
+    }
   | { type: "turn_status"; status: string; summary?: string }
   | { type: "cost"; report: string; displayTotal?: string; budgetFraction?: number }
   | { type: "checkpoint"; id: string; label?: string }

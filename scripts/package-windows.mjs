@@ -32,14 +32,10 @@ if (platform() === "win32") {
 const out = join(root, "release", "windows");
 mkdirSync(join(out, "binaries"), { recursive: true });
 
-const candidates = [
-  join(root, "src-tauri", "target", "x86_64-pc-windows-msvc", "release", "nova-desktop.exe"),
-  "/tmp/cursor-sandbox-cache/ebaa554b063b0437c8de7df7123692a9/cargo-target/x86_64-pc-windows-msvc/release/nova-desktop.exe",
-];
-const exe = candidates.find((p) => existsSync(p));
+const exe = join(root, "src-tauri", "target", "x86_64-pc-windows-msvc", "release", "nova-desktop.exe");
 const sidecar = join(root, "src-tauri", "binaries", "nova-sidecar-x86_64-pc-windows-msvc.exe");
-if (!exe || !existsSync(sidecar)) {
-  console.error("Missing Nova.exe or sidecar after build");
+if (!existsSync(exe) || !existsSync(sidecar)) {
+  console.error(`Missing ${exe} or ${sidecar} after build. Run this script after a successful build.`);
   process.exit(1);
 }
 copyFileSync(exe, join(out, "Nova.exe"));

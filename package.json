@@ -1,6 +1,6 @@
 {
   "name": "@circuit-nova/nova-desktop",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,8 +14,8 @@
     "build:windows": "npm run sidecar:windows && npm run build && PATH=\"/usr/lib/llvm-21/bin:$PATH\" tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --no-bundle",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
     "package:windows": "node scripts/package-windows.mjs",
+    "tauri:build": "tauri build",
     "typecheck": "tsc -b && tsc -p sidecar/tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -24,6 +24,7 @@
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.3.0",
     "@tauri-apps/plugin-store": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "e2b": "^2.36.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
