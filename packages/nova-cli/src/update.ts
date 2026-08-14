@@ -1,6 +1,8 @@
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
+import { hostOf } from "./endpoints";
+import { classifyNetworkError } from "./network";
 import cliPackage from "../package.json";
 
 export const NOVA_CLI_PACKAGE = "@circuit-nova/nova-cli";
@@ -180,7 +182,10 @@ export async function runSelfUpdate(options: SelfUpdateOptions = {}): Promise<Se
   try {
     latestVersion = await fetchLatestVersion({ environment, fetchImpl: options.fetchImpl });
   } catch (error) {
-    stderr(`Could not check for Nova updates: ${error instanceof Error ? error.message : String(error)}\n`);
+    const registryHost = hostOf(environment.NOVA_UPDATE_REGISTRY?.trim() || DEFAULT_REGISTRY);
+    const diagnosis = classifyNetworkError(error, { host: registryHost, purpose: "the self-update check" });
+    stderr(`Could not check for Nova updates: ${diagnosis ? diagnosis.message : error instanceof Error ? error.message : String(error)}\n`);
+    if (diagnosis?.hint) stderr(`  ${diagnosis.hint}\n`);
     return { status: "failed", currentVersion, code: 1 };
   }
 

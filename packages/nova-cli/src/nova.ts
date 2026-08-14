@@ -26,7 +26,10 @@ import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
 import { installShortcuts, openChooser, openModelPicker, openPalette } from "./shortcuts";
-import { fetchDailyFxRate, resolveCurrencyPreference } from "./local-currency";
+import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
+import { hostOf, providerBaseUrl } from "./endpoints";
+import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
+import { classifyNetworkError } from "./network";
 import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
 import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingKey, type SettingsPrompts } from "./settings";
 import { loadHistory, saveHistory } from "./history";
@@ -163,6 +166,7 @@ type ParsedArgs = {
   historyCommand: HistoryCommand | null;
   listSessions: boolean;
   listProviders: boolean;
+  doctor: boolean;
   update: boolean;
   checkUpdate: boolean;
   settings: boolean;
@@ -246,7 +250,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const settingsRequested = argv[0] === "settings" || argv.includes("--settings");
   const historyRequested = argv[0] === "history";
   const parsed: ParsedArgs = {
-    mode: "build", prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false,
+    mode: "build", prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false, doctor: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
     root: process.cwd(), help: false, pace: "off", ascii: false, theme: undefined, pin: false,
     backend: "local", dockerImage: DEFAULT_DOCKER_IMAGE, upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false, json: false,
@@ -284,7 +288,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--yes" && updateRequested) parsed.updateYes = true;
     else if (argument === "--package-manager" && updateRequested) { parsed.packageManager = argv[index + 1]; index += 1; }
     else if (argument === "--sessions") parsed.listSessions = true;
-    else if (argument === "--providers" || argument === "--doctor") parsed.listProviders = true;
+    else if (argument === "--providers") parsed.listProviders = true;
+    else if (argument === "--doctor") parsed.doctor = true;
     else if (argument === "--resume") {
       // Only swallow the next word when it is actually a session id. Otherwise `nova --resume "fix
       // the test"` silently treats the request as an id, resumes nothing, and drops into the REPL.
@@ -356,6 +361,7 @@ ${style.bold("Model")}
   /model                    Pick a model from a list, with prices, keeping the transcript
   /model <name>             Switch straight to one, e.g. /model opus
   nova --providers          Show which providers are configured, and what is missing
+  nova --doctor             Test every endpoint Nova needs and name the one that fails
   nova settings             Configure keys, URLs, models, pricing and voice input
 
 ${style.bold("Cost")}
@@ -596,6 +602,16 @@ function renderCommandOutput(content: string): void {
     full: panel(body, style_, { title: "output", gutterOnly: true }),
   });
 }
+
+/**
+ * readline runtime state that `@types/node` leaves untyped. The current line, its input stream,
+ * and the closed flag all exist on the interface at runtime (readline is written in plain JS).
+ */
+type ReadlineInternals = {
+  input: NodeJS.ReadableStream;
+  closed: boolean;
+  line: string;
+};
 
 export function renderEvent(event: NovaEvent): void {
   // Every event clears the spinner before printing. If the spinner is still running its next tick
@@ -986,6 +1002,13 @@ async function runJobWorkerProcess(root: string, jobId: string): Promise<number>
 }
 
 async function main(): Promise<number> {
+  // A closed pipe (`nova --help | head`, `nova --providers | less -F`) is not an error. Without
+  // this, the write throws EPIPE and the CLI dies with a stack trace the user never asked for.
+  process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") process.exit(0);
+    throw error;
+  });
+
   // Not a normal invocation — this is the detached process a job spawns for itself. Dispatched
   // ahead of `parseArgs` because its argument shape (a root and a job id, no flags) is nothing
   // like an interactive session's.
@@ -1070,6 +1093,14 @@ async function main(): Promise<number> {
   if (args.listProviders) {
     out.write(`${renderProviders(environment, detectColorDepth(environment, Boolean(process.stdout.isTTY)))}\n`);
     return 0;
+  }
+
+  if (args.doctor) {
+    const environment = process.env as Record<string, string | undefined>;
+    const depth = detectColorDepth(environment, Boolean(process.stdout.isTTY));
+    const probes = await runDoctor(environment);
+    process.stdout.write(`${renderDoctor(probes, depth)}\n`);
+    return doctorExitCode(probes);
   }
 
   if (args.listSessions) {
@@ -1217,17 +1248,20 @@ async function main(): Promise<number> {
   let localCurrencyWarning: string | null = null;
   if (prices && display !== prices.currency) {
     const configured = rates.some((rate) => (rate.from === prices!.currency && rate.to === display) || (rate.to === prices!.currency && rate.from === display));
+    const fxFailures: FxLookupFailure[] = [];
     if (!configured && environment.NOVA_FX_OFFLINE !== "true") {
-      const daily = await fetchDailyFxRate(prices.currency, display);
+      const daily = await fetchDailyFxRate(prices.currency, display, undefined, (failure) => fxFailures.push(failure));
       if (daily) rates.push(daily);
     }
     const convertible = rates.some((rate) => (rate.from === prices!.currency && rate.to === display) || (rate.to === prices!.currency && rate.from === display));
     if (!convertible) {
+      const tried = fxFailures.map((failure) => `${failure.host}: ${failure.diagnosis.message}`).join(" ");
       if (args.budget) {
-        process.stderr.write(`${style.red("Cannot enforce the approved budget.")} No ${prices.currency}→${display} exchange rate is available. Set a manual FX rate, choose --currency ${prices.currency}, or reconnect and retry.\n`);
+        process.stderr.write(`${style.red("Cannot enforce the approved budget.")} No ${prices.currency}→${display} exchange rate is available${tried ? ` — the automatic lookup failed (${tried})` : ""}.\n`);
+        process.stderr.write(`  ${style.dim(`Continue offline with a manual rate: set NOVA_FX_RWF_PER_USD=1320 (or NOVA_FX_FROM/NOVA_FX_TO/NOVA_FX_RATE), or keep costs in the provider currency with --currency ${prices.currency}. Run nova --doctor to see exactly which endpoint is failing.`)}\n`);
         return 1;
       }
-      localCurrencyWarning = `No current ${prices.currency}→${display} rate was available; costs remain in ${prices.currency}.`;
+      localCurrencyWarning = `No current ${prices.currency}→${display} rate was available${tried ? ` (${tried})` : ""}; costs remain in ${prices.currency}.`;
       display = prices.currency;
     }
   }
@@ -1248,6 +1282,8 @@ async function main(): Promise<number> {
     historySize: 200,
     removeHistoryDuplicates: true,
   });
+  // Runtime-only readline state — see `ReadlineInternals`: the typed surface leaves these out.
+  const rl = readline as unknown as Interface & ReadlineInternals;
   // Warmed once the workspace exists and refreshed after each turn, since a turn can create files.
   let projectFiles: string[] = [];
   const refreshProjectFiles = () => {
@@ -2013,7 +2049,19 @@ async function main(): Promise<number> {
         headless?.error(`Stopped at the approved cap for this request.`, { status: "iteration_limit" });
         return false;
       }
-      out.write(`${style.red("error")} ${message}\n`);
+      // A raw transport error ("fetch failed", "getaddrinfo ENOTFOUND …") reads as "the internet
+      // is broken", which is usually wrong — it is one endpoint failing. Name the host, the
+      // failure class, and the next step; anything that is not a network fault prints as before.
+      const diagnosis = classifyNetworkError(error, {
+        host: hostOf(providerBaseUrl(environment, spec.id)),
+        purpose: `the model API (${spec.label})`,
+      });
+      if (diagnosis) {
+        out.write(`${style.red("error")} ${diagnosis.message}\n`);
+        if (diagnosis.hint) out.write(`  ${style.dim(diagnosis.hint)}\n`);
+      } else {
+        out.write(`${style.red("error")} ${message}\n`);
+      }
       lastTurnStatus = "failed";
       headless?.error(message, { status: "failed" });
       return false;
@@ -3159,6 +3207,7 @@ async function main(): Promise<number> {
     }
   }
 
+  process.stdout.write(style.dim("  bye — this session stays saved and resumable ✦\n"));
   await agent.dispose();
   // A tab opened and left open (never closed, never made active again) never got its own explicit
   // dispose — this is the safety net for it, closing whatever the daemon still holds, sandboxes

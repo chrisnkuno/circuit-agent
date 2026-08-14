@@ -1,6 +1,6 @@
 {
   "name": "@circuit-nova/nova-desktop",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -22,6 +22,7 @@
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.3.0",
     "@tauri-apps/plugin-store": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "e2b": "^2.36.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -32,6 +33,8 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "@yao-pkg/pkg": "^6.5.1",
+    "esbuild": "^0.25.12",
     "tsx": "^4.20.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"

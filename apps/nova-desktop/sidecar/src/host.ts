@@ -208,9 +208,14 @@ export class NovaHost {
       workspace,
       approve,
       onEvent,
-      budgets: budget && settings.budget
-        ? { maxRwf: Math.max(1, Math.round(settings.budget * (settings.fxRwfPerUsd ?? 1320))) }
-        : undefined,
+      budgets: {
+        // Raised from the default: a run that takes several actions to finish one request was
+        // aborting mid-way, which reads as the app giving up rather than as a cap being hit.
+        maxToolCallsPerTurn: 16,
+        ...(budget && settings.budget
+          ? { maxRwf: Math.max(1, Math.round(settings.budget * (settings.fxRwfPerUsd ?? 1320))) }
+          : {}),
+      },
     }), record);
     this.root = root;
     this.mode = mode;

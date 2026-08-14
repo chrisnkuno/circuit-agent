@@ -1,6 +1,7 @@
 node_modules/
 dist/
 sidecar/dist/
+release/
 src-tauri/target/
 # Compiled sidecar executables: ~90 MB each, reproducible from source by
 # `npm run sidecar:binary`. Never committed.

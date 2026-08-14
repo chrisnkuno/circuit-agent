@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import {
   ensureSidecar,
   loadPersistedSettings,
@@ -10,6 +11,36 @@ import { defaultSettings, type IpcEvent, type NovaSettings } from "./lib/setting
 import { ChatScreen } from "./screens/Chat";
 import { SettingsScreen } from "./screens/Settings";
 
+function UpdateBanner({
+  update,
+  busy,
+  error,
+  onInstall,
+}: {
+  update: Update | null;
+  busy: boolean;
+  error: string | null;
+  onInstall: () => void;
+}) {
+  if (!update) return null;
+  return (
+    <div className="update-banner">
+      <span className="update-banner-text">
+        Nova {update.version} is available
+        {error ? <span className="update-banner-error"> — {error}</span> : null}
+      </span>
+      <button
+        className="btn primary"
+        type="button"
+        disabled={busy}
+        onClick={onInstall}
+      >
+        {busy ? "Installing…" : "Restart & install"}
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [sidecarReady, setSidecarReady] = useState(false);
@@ -17,8 +48,40 @@ export default function App() {
   const [settings, setSettings] = useState<NovaSettings>(defaultSettings());
   const [bootError, setBootError] = useState<string | null>(null);
   const [events, setEvents] = useState<IpcEvent[]>([]);
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const clearEvents = useCallback(() => setEvents([]), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const next = await checkForUpdate();
+        if (!cancelled && next) setUpdate(next);
+      } catch {
+        // No update server reachable (offline / dev) — ignore silently.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleInstallUpdate() {
+    if (!update || updateBusy) return;
+    setUpdateBusy(true);
+    setUpdateError(null);
+    try {
+      await update.downloadAndInstall();
+      setUpdate(null);
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -90,12 +153,18 @@ export default function App() {
     // `settings-hero` it claimed a full viewport of its own, which put the form a whole screen
     // below the fold — a message reading "you can still enter settings" with the settings
     // scrolled out of sight is worse than no message.
-    return <SettingsScreen initial={settings} onSave={handleSave} notice={bootError} />;
+    return (
+      <>
+        <UpdateBanner update={update} busy={updateBusy} error={updateError} onInstall={handleInstallUpdate} />
+        <SettingsScreen initial={settings} onSave={handleSave} notice={bootError} />
+      </>
+    );
   }
 
   if (bootError && !sidecarReady) {
     return (
       <div className="settings-hero">
+        <UpdateBanner update={update} busy={updateBusy} error={updateError} onInstall={handleInstallUpdate} />
         <div className="settings-card">
           <h1>Nova</h1>
           <p className="error-banner">{bootError}</p>
@@ -108,11 +177,14 @@ export default function App() {
   }
 
   return (
-    <ChatScreen
-      settings={settings}
-      onOpenSettings={() => setShowSettings(true)}
-      events={events}
-      clearEvents={clearEvents}
-    />
+    <div className="app-shell">
+      <UpdateBanner update={update} busy={updateBusy} error={updateError} onInstall={handleInstallUpdate} />
+      <ChatScreen
+        settings={settings}
+        onOpenSettings={() => setShowSettings(true)}
+        events={events}
+        clearEvents={clearEvents}
+      />
+    </div>
   );
 }

@@ -30,4 +30,26 @@ describe("daily FX lookup", () => {
     await expect(fetchDailyFxRate("USD", "EGP", fetchImpl as typeof fetch)).resolves.toBeNull();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  it("reports why the lookup failed so the caller can name the broken endpoint", async () => {
+    const fetchImpl = vi.fn(async () => { throw Object.assign(new Error("getaddrinfo ENOTFOUND cdn.jsdelivr.net"), { code: "ENOTFOUND" }); });
+    const failures: { host: string; kind: string }[] = [];
+    await expect(fetchDailyFxRate("USD", "EGP", fetchImpl as typeof fetch, (failure) => {
+      failures.push({ host: failure.host, kind: failure.diagnosis.kind });
+    })).resolves.toBeNull();
+    expect(failures).toEqual([
+      { host: "cdn.jsdelivr.net", kind: "dns" },
+      { host: "latest.currency-api.pages.dev", kind: "dns" },
+    ]);
+  });
+
+  it("stops at the first successful host", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("latest.currency-api.pages.dev")) throw new Error("offline");
+      return new Response(JSON.stringify({ date: "2026-08-08", usd: { egp: 48.5 } }), { status: 200 });
+    });
+    await expect(fetchDailyFxRate("USD", "EGP", fetchImpl as typeof fetch)).resolves.toMatchObject({ rate: 48.5 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

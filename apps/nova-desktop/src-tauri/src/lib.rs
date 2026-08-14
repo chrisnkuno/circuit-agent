@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -86,21 +89,29 @@ fn sidecar_file_name() -> String {
 fn sidecar_script_path(app: &AppHandle) -> Result<PathBuf, String> {
   let name = sidecar_file_name();
 
-  // Installed: Tauri places an external binary beside the app executable.
+  // Installed: Tauri places an external binary beside the app executable. The portable folder
+  // (release/windows ships Nova.exe + binaries/nova-sidecar.exe together) puts it one level down,
+  // so both are checked before anything else.
   if let Ok(exe) = std::env::current_exe() {
     if let Some(dir) = exe.parent() {
-      let candidate = dir.join(&name);
-      if candidate.exists() {
-        return Ok(candidate);
+      for dir in [dir.to_path_buf(), dir.join("binaries")] {
+        let candidate = dir.join(&name);
+        if candidate.exists() {
+          return Ok(candidate);
+        }
       }
     }
   }
 
-  // Some bundle layouts stage resources separately.
+  // Some bundle layouts stage resources separately. NSIS installs put the external binary at the
+  // resource-dir *root* rather than under `binaries/`, which is what left v0.1.0 unable to find
+  // its own sidecar at startup — so both are checked.
   if let Ok(resource) = app.path().resource_dir() {
-    let candidate = resource.join("binaries").join(&name);
-    if candidate.exists() {
-      return Ok(candidate);
+    for dir in [resource.clone(), resource.join("binaries")] {
+      let candidate = dir.join(&name);
+      if candidate.exists() {
+        return Ok(candidate);
+      }
     }
   }
 
@@ -135,10 +146,16 @@ fn spawn_sidecar_process(script: &PathBuf) -> Result<(Child, ChildStdin), String
     command.env("PATH", path);
   }
 
-  let mut child = command
+  let child = command
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
+    .stderr(Stdio::piped());
+  #[cfg(windows)]
+  {
+    // Spawn the sidecar without a console window (CREATE_NO_WINDOW).
+    let _ = child.creation_flags(0x08000000);
+  }
+  let mut child = child
     .spawn()
     .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
@@ -296,6 +313,7 @@ pub fn run() {
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_store::Builder::default().build())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .manage(state)
     .invoke_handler(tauri::generate_handler![
       sidecar_start,
