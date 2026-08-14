@@ -14,6 +14,8 @@ import { newMarkdownState, renderMarkdownLine, visibleWidth, type MarkdownState 
 const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
 const CYAN = "\x1b[36m";
+const GREEN = "\x1b[32m";
+const YELLOW = "\x1b[33m";
 
 function paint(text: string, code: string, depth: ColorDepth): string {
   return depth === "none" ? text : `${code}${text}${RESET}`;
@@ -286,9 +288,13 @@ export class MarkdownStream {
  * A unicode-box-drawn card, sized to its content — the same "compute a width, then center or pad
  * within it" math `banner.ts` uses for the wordmark, applied to arbitrary line-based content.
  */
-export function box(lines: readonly string[], options: { width?: number; depth: ColorDepth; title?: string }): string {
+export function box(
+  lines: readonly string[],
+  options: { width?: number; depth: ColorDepth; title?: string; titleColor?: "cyan" | "green" | "yellow" },
+): string {
   const terminalWidth = options.width ?? process.stdout.columns ?? 80;
   const titleWidth = options.title ? visibleWidth(options.title) : 0;
+  const titlePaint = options.titleColor === "green" ? GREEN : options.titleColor === "yellow" ? YELLOW : CYAN;
   // Measured in columns, not characters: a todo containing an emoji is two columns wide there and
   // one character long, and padding by the latter is what leaves a border short of its own corner.
   const contentWidth = Math.min(
@@ -297,7 +303,9 @@ export function box(lines: readonly string[], options: { width?: number; depth: 
   );
   const horizontal = "─".repeat(contentWidth + 2);
   const top = options.title
-    ? `╭─ ${paint(options.title, CYAN, options.depth)} ${"─".repeat(Math.max(0, contentWidth - titleWidth - 1))}╮`
+    ? `╭─ ${paint(options.title, titlePaint, options.depth)} ${
+        "─".repeat(Math.max(0, contentWidth - titleWidth - 1))
+      }╮`
     : `╭${horizontal}╮`;
   const bottom = `╰${horizontal}╯`;
   const body = lines.map((line) => {
@@ -318,4 +326,155 @@ function sliceToWidth(text: string, width: number): string {
     used += next;
   }
   return taken;
+}
+
+/** The mode's accent colour in the input bar, so the permission posture is legible at a glance. */
+const MODE_COLORS: Record<string, string> = { plan: YELLOW, auto: GREEN, build: CYAN };
+
+/** Visible columns the `│ › ` prefix of the prompt box occupies. */
+export const PROMPT_PREFIX_COLUMNS = 4;
+
+/**
+ * The input bar that makes the REPL read like a chat app: a titled box parked at the bottom of
+ * the screen, with the cursor on its input row.
+ *
+ * `draw` renders three rows — a border with a live header (mode, workspace), the input row, and
+ * a closing border — and returns the prefix that the caller passes to readline's `question()`,
+ * which is what keeps the left border on screen through readline's own editing redraws. The
+ * closing border is only guaranteed while the line is being typed forward; any full redraw
+ * readline performs (an arrow-key edit, a completion, submit) clears the row below the input, so
+ * the box gracefully opens rather than corrupting.
+ */
+export function renderPromptBox(options: {
+  mode: string;
+  workspace: string;
+  depth: ColorDepth;
+  width: number;
+}): { top: string; prefix: string; bottom: string } {
+  const { mode, workspace, depth } = options;
+  const width = Math.max(12, options.width);
+  const modeColor = MODE_COLORS[mode] ?? CYAN;
+  const head = `${paint("✦", CYAN, depth)} ${paint("nova", CYAN, depth)} · ${paint(mode, modeColor, depth)} · `;
+  // The workspace is the part most likely to overrun a narrow window; give it its own budget
+  // and clip it rather than let it push the right-hand corner off screen. The extra column
+  // keeps the header (plus its ellipsis) within width - 6 so the closing corner always fits.
+  const budget = Math.max(4, width - visibleWidth(head) - 7);
+  const clipped = sliceToWidth(workspace, budget);
+  const shown = visibleWidth(clipped) < visibleWidth(workspace) ? `${clipped}…` : workspace;
+  const title = `${head}${paint(shown, DIM, depth)}`;
+  const filler = Math.max(1, width - visibleWidth(title) - 5);
+  const top = `${paint("╭─", CYAN, depth)} ${title} ${paint("─".repeat(filler), CYAN, depth)}${paint("╮", CYAN, depth)}`;
+  const prefix = `${paint("│", CYAN, depth)} ${paint("›", modeColor, depth)} `;
+  const bottom = `${paint("╰", CYAN, depth)}${paint("─".repeat(width - 2), CYAN, depth)}${paint("╯", CYAN, depth)}`;
+  return { top, prefix, bottom };
+}
+
+/** The part of a line that has wrapped past the first row, given the cursor's start column. */
+export function wrappedRemainder(line: string, startColumns: number, width: number): string {
+  let used = startColumns;
+  for (let index = 0; index < line.length; index += 1) {
+    const next = visibleWidth(line[index]);
+    if (used + next > width) return line.slice(index);
+    used += next;
+  }
+  return "";
+}
+
+/**
+ * Draws and erases the chat-style input bar, tracking only what it printed so anything below
+ * (the turn summary, the banner) is never touched.
+ */
+export class PromptBox {
+  private drawn = false;
+  private borderCleared = false;
+
+  constructor(
+    private readonly stream: NodeJS.WriteStream = process.stdout,
+    private readonly depth: ColorDepth = "none",
+  ) {}
+
+  get isDrawn(): boolean {
+    return this.drawn;
+  }
+
+  /**
+   * Renders the box and parks the cursor at the start of its input row. Returns the prompt
+   * string to hand to readline's `question()`.
+   */
+  draw(mode: string, workspace: string): string {
+    const width = this.stream.columns ?? 80;
+    const { top, prefix, bottom } = renderPromptBox({ mode, workspace, depth: this.depth, width });
+    this.stream.write(`${top}\n`);
+    this.stream.write(`\n${bottom}`);
+    // Back to the input row, column one — question() writes the prefix from there.
+    this.stream.write("\x1b[1A\r");
+    this.drawn = true;
+    this.borderCleared = false;
+    return prefix;
+  }
+
+  /**
+   * Removes the box after a line resolves, leaving the cursor on the row its top border
+   * occupied so the caller can print the next transcript line exactly there.
+   *
+   * The count follows the geometry readline leaves behind at submit: it redraws
+   * `prefix + line` from column one (the prefix survives because `question(prefix)` keeps it as
+   * its prompt), clears everything below the input row, and finishes with a newline. `prefix` is
+   * four columns, so a line of width `W` occupies `floor((4 + W - 1) / width)` rows below the
+   * border — one for the input row, one more for the newline, and one for the border itself.
+   */
+  erase(submitted: string): void {
+    if (!this.drawn) return;
+    // A degenerate stream can report zero columns (a 0x0 pty); without the floor, dividing by
+    // it would spin forever. A real terminal always has a sane width, but one guard keeps the
+    // erase bounded everywhere.
+    const width = Math.max(1, this.stream.columns ?? 80);
+    const rows = Math.floor((PROMPT_PREFIX_COLUMNS + visibleWidth(submitted) - 1) / width) + 3;
+    for (let index = 0; index < rows; index += 1) this.stream.write("\x1b[1A\x1b[2K");
+    this.drawn = false;
+  }
+
+  /**
+   * When the typed line has wrapped past the input row, opens the box by dropping the closing
+   * border and re-showing the wrapped remainder, so the border cannot sit under a line of text.
+   */
+  dropBorder(remainder: string): void {
+    if (!this.drawn || this.borderCleared || remainder === "") return;
+    // The cursor is on the border row the moment wrapping starts; clear it and rewrite the
+    // remainder so the text that already wrapped is not lost.
+    this.stream.write("\r\x1b[2K");
+    this.stream.write(remainder);
+    this.borderCleared = true;
+  }
+}
+
+/**
+ * Wraps plain text at a column budget, breaking at word boundaries and hard-slicing only a word
+ * longer than the whole budget.
+ */
+export function wrapPlain(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const word of text.split(/\s+/)) {
+    if (word === "") continue;
+    const candidate = current === "" ? word : `${current} ${word}`;
+    if (visibleWidth(candidate) <= width) {
+      current = candidate;
+      continue;
+    }
+    if (current !== "") lines.push(current);
+    if (visibleWidth(word) > width) {
+      let rest = word;
+      while (visibleWidth(rest) > width) {
+        const chunk = sliceToWidth(rest, width);
+        lines.push(chunk);
+        rest = rest.slice(chunk.length);
+      }
+      current = rest;
+    } else {
+      current = word;
+    }
+  }
+  if (current !== "") lines.push(current);
+  return lines.length === 0 ? [""] : lines;
 }

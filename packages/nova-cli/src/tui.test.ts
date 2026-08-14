@@ -1,6 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./markdown";
-import { box, formatStatusLine, formatTokens, MarkdownStream, ReplaceableBlock, rowsOccupied, Spinner, StatusBar, thinkingVerb } from "./tui";
+import {
+  box,
+  formatStatusLine,
+  formatTokens,
+  MarkdownStream,
+  PromptBox,
+  renderPromptBox,
+  ReplaceableBlock,
+  rowsOccupied,
+  Spinner,
+  StatusBar,
+  thinkingVerb,
+  wrappedRemainder,
+  wrapPlain,
+} from "./tui";
 
 const ESCAPE = /\x1b\[[0-9;]*m/g;
 const plain = (value: string) => value.replace(ESCAPE, "");
@@ -345,5 +359,153 @@ describe("box", () => {
 
   it("includes the title in the top border when given one", () => {
     expect(plain(box(["a"], { width: 80, depth: "none", title: "todos" })).split("\n")[0]).toContain("todos");
+  });
+
+  it("paints a coloured title only when colour was asked for", () => {
+    expect(box(["a"], { width: 80, depth: "none", title: "you", titleColor: "green" })).not.toMatch(ESCAPE);
+    expect(box(["a"], { width: 80, depth: "truecolor", title: "you", titleColor: "green" })).toMatch(ESCAPE);
+    expect(plain(box(["a"], { width: 80, depth: "truecolor", title: "you", titleColor: "green" })).split("\n")[0]).toContain("you");
+  });
+});
+
+describe("renderPromptBox", () => {
+  const fields = { mode: "build", workspace: "circuit-agent", depth: "none" as const, width: 80 };
+
+  it("draws a full-width three-row box with the mode and workspace in the header", () => {
+    const { top, prefix, bottom } = renderPromptBox(fields);
+    const [topPlain, prefixPlain, bottomPlain] = [plain(top), plain(prefix), plain(bottom)];
+    expect(topPlain).toContain("build");
+    expect(topPlain).toContain("circuit-agent");
+    // The input row is open on the right — the cursor types there — so only its four-column
+    // prefix is drawn; the borders above and below span the full width.
+    expect(prefixPlain).toBe("│ › ");
+    expect(visibleWidth(prefixPlain)).toBe(4);
+    expect(visibleWidth(topPlain)).toBe(80);
+    expect(visibleWidth(bottomPlain)).toBe(80);
+  });
+
+  it("clips an over-long workspace rather than overflowing the right-hand corner", () => {
+    const { top } = renderPromptBox({ ...fields, workspace: "x".repeat(500) });
+    expect(plain(top)).toContain("…");
+    expect(visibleWidth(plain(top))).toBe(80);
+  });
+
+  it("keeps every row inside the width at any width", () => {
+    for (const width of [40, 60, 80, 120]) {
+      const { top, prefix, bottom } = renderPromptBox({ ...fields, width });
+      for (const line of [top, prefix, bottom]) {
+        expect(visibleWidth(plain(line)), `width ${width}`).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  it("colours the border and accents only when colour was asked for", () => {
+    const none = renderPromptBox(fields);
+    const colour = renderPromptBox({ ...fields, depth: "truecolor" });
+    expect(`${none.top}${none.prefix}${none.bottom}`).not.toMatch(ESCAPE);
+    expect(`${colour.top}${colour.prefix}${colour.bottom}`).toMatch(ESCAPE);
+  });
+
+  it("accents each mode with its own colour so the permission posture reads at a glance", () => {
+    expect(renderPromptBox({ ...fields, mode: "plan", depth: "truecolor" }).top).toMatch(/\x1b\[33m/);
+    expect(renderPromptBox({ ...fields, mode: "auto", depth: "truecolor" }).top).toMatch(/\x1b\[32m/);
+    expect(renderPromptBox({ ...fields, mode: "build", depth: "truecolor" }).top).toMatch(/\x1b\[36m/);
+  });
+});
+
+describe("wrappedRemainder", () => {
+  it("returns nothing while the line fits on the input row", () => {
+    expect(wrappedRemainder("a short line", 4, 80)).toBe("");
+    expect(wrappedRemainder("", 4, 80)).toBe("");
+  });
+
+  it("returns the part of the line that spilled onto the next row", () => {
+    // The input row starts four columns in, so at width 20 the first row holds sixteen
+    // characters and the remaining four spill over.
+    expect(wrappedRemainder("x".repeat(20), 4, 20)).toBe("x".repeat(4));
+  });
+
+  it("counts double-width characters as two columns", () => {
+    // Width 12 with a four-column start leaves eight columns: 日本語日 fits, 本 wraps.
+    expect(wrappedRemainder("日本語".repeat(3), 4, 12)).toBe("本語日本語");
+  });
+});
+
+describe("wrapPlain", () => {
+  it("wraps at word boundaries", () => {
+    expect(wrapPlain("the quick brown fox", 10)).toEqual(["the quick", "brown fox"]);
+  });
+
+  it("gives an empty message a single empty line", () => {
+    expect(wrapPlain("", 10)).toEqual([""]);
+    expect(wrapPlain("   ", 10)).toEqual([""]);
+  });
+
+  it("hard-slices a single word longer than the whole budget", () => {
+    expect(wrapPlain("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
+  });
+
+  it("keeps lines within the budget when the text contains double-width characters", () => {
+    for (const line of wrapPlain("日本語のテキストがここにあります", 10)) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(10);
+    }
+  });
+});
+
+describe("PromptBox", () => {
+  it("draws the box and parks the cursor at the start of the input row, returning the prefix", () => {
+    const { stream, output, writes } = fakeStream(60);
+    const promptBox = new PromptBox(stream);
+    expect(promptBox.isDrawn).toBe(false);
+
+    const prefix = promptBox.draw("build", "circuit-agent");
+    expect(prefix).toBe("│ › ");
+    expect(promptBox.isDrawn).toBe(true);
+    expect(writes).toHaveLength(3); // header, closing border, and the cursor reposition
+    const text = output();
+    expect(text).toContain("╭─"); // header row
+    expect(text).toContain("╰"); // closing border
+    expect(text).toContain("\x1b[1A\r"); // back onto the input row, column one
+  });
+
+  it("erases exactly the rows the box and the submitted line occupy", () => {
+    const { stream, writes } = fakeStream(80);
+    const promptBox = new PromptBox(stream);
+    promptBox.draw("build", "circuit-agent");
+    writes.length = 0;
+
+    promptBox.erase("");
+    expect(writes).toHaveLength(3); // input row, newline row, top border
+
+    writes.length = 0;
+    promptBox.draw("build", "circuit-agent");
+    writes.length = 0;
+    promptBox.erase("x".repeat(200)); // wraps onto two extra rows
+    expect(writes).toHaveLength(5);
+    for (const write of writes) expect(write).toBe("\x1b[1A\x1b[2K");
+  });
+
+  it("erasing before anything was drawn is a safe no-op", () => {
+    const { stream, writes } = fakeStream();
+    new PromptBox(stream).erase("");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("drops the closing border once and re-shows the wrapped text", () => {
+    const { stream, output, writes } = fakeStream(60);
+    const promptBox = new PromptBox(stream);
+    promptBox.draw("build", "circuit-agent");
+    writes.length = 0;
+
+    promptBox.dropBorder("the remainder that wrapped");
+    expect(writes).toHaveLength(2);
+    expect(output()).toContain("\r\x1b[2K");
+    expect(output()).toContain("the remainder that wrapped");
+
+    promptBox.dropBorder("more"); // already opened — nothing further is written
+    expect(writes).toHaveLength(2);
+
+    promptBox.erase("");
+    expect(writes).toHaveLength(2 + 3);
   });
 });

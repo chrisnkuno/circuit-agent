@@ -1,5 +1,6 @@
 import { DEFAULT_UPDATE_REGISTRY, FX_ENDPOINTS, hostOf, providerEndpoints, type ProviderEnvironment } from "./endpoints";
 import { classifyNetworkError, type NetworkDiagnosis } from "./network";
+import type { ColorDepth } from "./banner";
 
 /**
  * `nova --doctor`: probes every network endpoint the CLI depends on and reports exactly which
@@ -104,7 +105,8 @@ export function doctorExitCode(probes: readonly DoctorProbe[]): number {
 
 const RESET = "\u001b[0m";
 
-export function renderDoctor(probes: readonly DoctorProbe[], depth: "none" | "16" | "256" | "truecolor"): string {
+/** Renders probe results with the colour depth the terminal actually reports. */
+export function renderDoctor(probes: readonly DoctorProbe[], depth: ColorDepth): string {
   const paint = (code: string) => (text: string) => (depth === "none" ? text : `${code}${text}${RESET}`);
   const green = paint("\u001b[32m");
   const red = paint("\u001b[31m");

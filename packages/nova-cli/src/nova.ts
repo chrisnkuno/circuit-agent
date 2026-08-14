@@ -12,7 +12,7 @@ import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, MarkdownStream, ReplaceableBlock, Spinner, StatusBar } from "./tui";
+import { box, MarkdownStream, PromptBox, PROMPT_PREFIX_COLUMNS, ReplaceableBlock, Spinner, StatusBar, wrappedRemainder, wrapPlain } from "./tui";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
@@ -196,6 +196,13 @@ const toolLines = new ReplaceableBlock();
 let markdown = new MarkdownStream(process.stdout, "none");
 let spinner: Spinner | undefined;
 const activity = { awaitingFirstDelta: false, toolCalls: 0, tokens: 0 };
+/**
+ * Whether the readline interface is holding a pending input question. The input bar is up and a
+ * Ctrl-C must not disturb it; the pending question survives an interface `SIGINT` untouched.
+ */
+let awaitingInput = false;
+/** Whether an approval question is on screen. Same rule: Ctrl-C does not close it mid-answer. */
+let approvalPending = false;
 /** Announced calls awaiting their result, by call id, so each can be rewritten where it sits. */
 const pendingCalls = new Map<string, { line: number; detail: string }>();
 
@@ -225,6 +232,24 @@ function toolLineText(mark: string, name: string, detail: string, summary: strin
   const middle = detail ? `  ${detail}` : "";
   const tail = summary ? style.dim(` · ${summary}`) : "";
   return `${head}${middle}${tail}`;
+}
+
+/**
+ * readline runtime state that `@types/node` leaves untyped. The current line, its input stream,
+ * and the closed flag all exist on the interface at runtime (readline is written in plain JS).
+ */
+type ReadlineInternals = {
+  input: NodeJS.ReadableStream;
+  closed: boolean;
+  line: string;
+};
+
+/**
+ * What a submitted message looks like in the transcript: a chat bubble, sized to its content and
+ * labelled with the speaker, exactly like the input bar that produced it.
+ */
+export function renderUserMessage(text: string, depth: ReturnType<typeof detectColorDepth>, width: number): string {
+  return box(wrapPlain(text, Math.max(8, width - 6)), { depth, width, title: "you", titleColor: "green" });
 }
 
 export function renderEvent(event: NovaEvent): void {
@@ -379,7 +404,13 @@ export function createApprovalPrompt(readline: Interface, interactive: boolean) 
     statusBar.clear();
     endStreamedLine();
     process.stdout.write(`\n  ${style.yellow("?")} Nova wants to ${style.bold(summary)}\n`);
-    const answer = (await readline.question(`    ${style.dim("[y]es / [n]o / [a]lways / [d]eny always: ")}`)).trim().toLowerCase();
+    approvalPending = true;
+    let answer: string;
+    try {
+      answer = (await readline.question(`    ${style.dim("[y]es / [n]o / [a]lways / [d]eny always: ")}`)).trim().toLowerCase();
+    } finally {
+      approvalPending = false;
+    }
     if (answer === "a" || answer === "always") return "allow_always";
     if (answer === "d") return "deny_always";
     if (answer === "n" || answer === "no") return "deny";
@@ -393,7 +424,13 @@ export async function confirmSpendingCap(readline: Interface, interactive: boole
   // the approval. Prompting a pipe would hang or consume the task text as an answer.
   if (!interactive) return true;
   statusBar.clear();
-  const answer = (await readline.question(`  ${style.yellow("?")} Approve a session spend cap of ${style.bold(renderedCap)}? ${style.dim("[Y/n]: ")}`)).trim().toLowerCase();
+  approvalPending = true;
+  let answer: string;
+  try {
+    answer = (await readline.question(`  ${style.yellow("?")} Approve a session spend cap of ${style.bold(renderedCap)}? ${style.dim("[Y/n]: ")}`)).trim().toLowerCase();
+  } finally {
+    approvalPending = false;
+  }
   return answer === "" || answer === "y" || answer === "yes";
 }
 
@@ -494,6 +531,8 @@ async function main(): Promise<number> {
     // Reads the cached project listing below, so completion never blocks on a filesystem walk.
     completer: (line: string) => completeInput(line, projectFiles),
   });
+  // Runtime-only readline state — see `ReadlineInternals`: the typed surface leaves these out.
+  const rl = readline as unknown as Interface & ReadlineInternals;
   // Warmed once the workspace exists and refreshed after each turn, since a turn can create files.
   let projectFiles: string[] = [];
   const refreshProjectFiles = () => {
@@ -599,14 +638,21 @@ async function main(): Promise<number> {
   }
 
   // Ctrl-C interrupts the turn rather than the process, so a long tool loop can be stopped
-  // without losing the session that produced it.
-  process.on("SIGINT", () => {
+  // without losing the session that produced it. In terminal mode readline holds stdin in raw
+  // mode, so the keystroke surfaces as an interface `SIGINT`; the process handler is the safety
+  // net for the rare non-raw delivery. While the input bar (or an approval question) is up, the
+  // pending question survives a `SIGINT` untouched — a stray Ctrl-C must not eat a half-typed
+  // message, and /exit is the way out.
+  const interruptTurn = () => {
+    if (awaitingInput || approvalPending) return;
     agent.cancel();
     activity.awaitingFirstDelta = false;
     spinner?.stop();
     statusBar.clear();
     process.stdout.write(style.yellow("\n  interrupted — finishing the current tool call\n"));
-  });
+  };
+  process.on("SIGINT", interruptTurn);
+  readline.on("SIGINT", interruptTurn);
 
   let streamedAnswer = false;
   const runTurn = async (request: string): Promise<void> => {
@@ -748,12 +794,58 @@ async function main(): Promise<number> {
     process.stdout.write(`${style.dim(`  Set ${PRICE_ENVIRONMENT_HINT}, or run nova --providers.`)}\n`);
   }
 
+  const promptBox = new PromptBox(process.stdout, depth);
+
+  /** What each mode promises, shown the moment you switch. */
+  const MODE_DESCRIPTIONS: Record<string, string> = {
+    plan: "reads and reasons — no writes",
+    build: "edits need approval",
+    auto: "edits apply without approval",
+  };
+
+  /**
+   * Reads one message through the chat-style input bar. The box is drawn and the cursor parked
+   * on its input row; `question(prefix)` keeps the left border alive through readline's own
+   * editing redraws. On submit the box is erased exactly (the count follows the geometry readline
+   * leaves behind, wrapping included) and the message is returned.
+   */
+  const promptUser = async (): Promise<string> => {
+    for (;;) {
+      awaitingInput = true;
+      const prefix = promptBox.draw(mode, where);
+      const onKeypress = () => {
+        // The moment the line wraps past the input row, open the box so its closing border is
+        // not left under a line of text. readline computes the cursor position relative to the
+        // prompt, so `rows` counting up is the wrap signal.
+        if (rl.getCursorPos().rows >= 1) {
+          promptBox.dropBorder(wrappedRemainder(rl.line, PROMPT_PREFIX_COLUMNS, process.stdout.columns ?? 80));
+        }
+      };
+      rl.input.on("keypress", onKeypress);
+      let raw: string;
+      try {
+        raw = await readline.question(prefix);
+      } catch {
+        raw = ""; // readline closed (Ctrl-D): the loop below notices and leaves the session
+      } finally {
+        rl.input.off("keypress", onKeypress);
+        awaitingInput = false;
+      }
+      promptBox.erase(raw);
+      const input = raw.trim();
+      if (input !== "") return input;
+      if (rl.closed) return "";
+      // An empty line is a no-op: redraw the box and wait for a real message.
+    }
+  };
+
   for (;;) {
-    const input = (await readline.question(`\n${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : "nova")}${style.dim(" › ")}`)).trim();
-    if (!input) continue;
+    const input = await promptUser();
+    if (input === "") break; // Ctrl-D — treat like /exit
+    process.stdout.write(`${renderUserMessage(input, depth, process.stdout.columns ?? 80)}\n`);
 
     if (input === "/exit" || input === "/quit") break;
-    if (input === "/help") { process.stdout.write(helpText()); continue; }
+    if (input === "/help") { process.stdout.write(`${box(renderCommandHelp().split("\n"), { depth, title: "commands" })}\n`); continue; }
     if (input === "/plan" || input === "/build" || input === "/auto") {
       mode = input.slice(1) as NovaMode;
       // A new mode is a new permission posture; the transcript carries over so the plan the agent
@@ -763,7 +855,7 @@ async function main(): Promise<number> {
       agent = newAgent();
       const carried = await loadSession(args.root, previous.sessionId);
       if (carried) agent.resume(carried);
-      process.stdout.write(style.dim(`  switched to ${mode} mode\n`));
+      process.stdout.write(style.dim(`  switched to ${mode} mode — ${MODE_DESCRIPTIONS[mode]}\n`));
       continue;
     }
     if (input.startsWith("/model")) {
@@ -798,7 +890,7 @@ async function main(): Promise<number> {
       continue;
     }
     if (input === "/keys") {
-      process.stdout.write(`${renderKeyboardShortcuts()}\n`);
+      process.stdout.write(`${box(renderKeyboardShortcuts().split("\n"), { depth, title: "keys" })}\n`);
       continue;
     }
     if (input === "/undo") {
@@ -850,6 +942,7 @@ async function main(): Promise<number> {
     await runTurn(input);
   }
 
+  process.stdout.write(style.dim("  bye — this session stays saved and resumable ✦\n"));
   await agent.dispose();
   readline.close();
   return 0;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Interface } from "node:readline/promises";
-import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders } from "./nova";
+import { visibleWidth } from "./markdown";
+import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders, renderUserMessage } from "./nova";
 
 const plain = (value: string) => value.replace(/\[[0-9;]*m/g, "");
 
@@ -159,6 +160,29 @@ describe("provider status view", () => {
   it("emits no escape codes when colour is unwanted", () => {
     const rendered = renderProviders({ ANTHROPIC_API_KEY: "k" }, "none");
     expect(rendered).not.toMatch(/\[/);
+  });
+});
+
+describe("renderUserMessage", () => {
+  it("wraps the message in a bordered bubble labelled with the speaker", () => {
+    const rendered = plain(renderUserMessage("fix the failing test", "none", 80));
+    const lines = rendered.split("\n");
+    expect(lines[0]).toContain("you");
+    expect(lines[0]).toContain("╭");
+    expect(lines[lines.length - 1]).toContain("╰");
+    expect(rendered).toContain("fix the failing test");
+  });
+
+  it("wraps a long message instead of letting it overflow the bubble", () => {
+    const rendered = plain(renderUserMessage("the quick brown fox jumps over the lazy dog", "none", 30));
+    for (const line of rendered.split("\n")) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it("colours the speaker's label only when colour is wanted", () => {
+    expect(renderUserMessage("hi", "none", 80)).not.toMatch(/\u001b\[/);
+    expect(renderUserMessage("hi", "truecolor", 80)).toMatch(/\u001b\[/);
   });
 });
 
