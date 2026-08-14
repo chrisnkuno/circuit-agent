@@ -141,10 +141,17 @@ button {
 }
 
 .app-shell {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  /* Flex rather than fixed grid rows: the outer shell holds an optional update banner above the
+     chat shell, so the number of children varies and a two-row grid would collapse without it. */
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 100vh;
+}
+
+.app-shell > .workspace {
+  flex: 1;
+  min-height: 0;
 }
 
 .topbar {
@@ -847,6 +854,28 @@ button {
   font-family: var(--mono);
   font-size: 0.68rem;
   color: var(--muted);
+}
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(135deg, rgba(61, 214, 198, 0.12), rgba(61, 214, 198, 0.05));
+  font-size: 0.85rem;
+}
+
+.update-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-banner-error {
+  color: var(--danger);
 }
 
 @media (max-width: 1180px) {
