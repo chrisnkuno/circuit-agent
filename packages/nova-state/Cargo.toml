@@ -1,0 +1,32 @@
+[package]
+name = "nova-state"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Nova's local, rebuildable history and memory index"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+rusqlite = { version = "0.32", features = ["bundled-full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+sha2 = "0.10"
+tempfile = { version = "3.14", optional = true }
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[features]
+benchmark = ["dep:tempfile"]
+
+[[bin]]
+name = "nova-state-bench"
+path = "src/bin/nova-state-bench.rs"
+required-features = ["benchmark"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

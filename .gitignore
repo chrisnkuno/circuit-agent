@@ -13,6 +13,7 @@ playwright-report/
 test-results/
 .vercel
 .env*
+packages/nova-state/target/
 
 # Nova CLI local state (sessions, checkpoint index)
 .nova/
