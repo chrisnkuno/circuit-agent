@@ -74,6 +74,11 @@ const built = await Bun.build({
   target: "node",
   outdir: path.join(CLI, "dist"),
   naming: "nova.js",
+  // TermUI stays outside the bundle on purpose. The workspace screen is reached through a dynamic
+  // import, and inlining a 5 MB framework would put its parse cost back on every `nova --version`
+  // — the startup path that has no screen and never will. Declared in `dependencies`, so npm has
+  // installed it beside the bundle by the time anyone opens the workspace.
+  external: ["@termuijs/core", "@termuijs/jsx", "@termuijs/widgets"],
 });
 if (!built.success) {
   for (const log of built.logs) console.error(log);

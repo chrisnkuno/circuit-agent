@@ -54,6 +54,8 @@ export type { SafetyAssessment, SensitiveCategory } from "./nova-cli/safety";
 export { CheckpointStore } from "./nova-cli/checkpoints";
 export { CostLedger } from "./nova-cli/cost";
 export { listSessions, loadSession, saveSession } from "./nova-cli/session";
+export { NovaStateClient, NovaStateError, resolveNovaStateBinary, statePlatformKey, tryConnectNovaState, NOVA_STATE_PROTOCOL_VERSION } from "./nova-cli/state-client";
+export type { NovaStateClientOptions, StateContextDocument, StateEvidenceSource, StateIndexReport, StateSearchHit, StateSessionSummary } from "./nova-cli/state-client";
 export { assertTurnTransition, EventJournal, readEventJournal, runtimeEventForJournal, NOVA_PROTOCOL_VERSION } from "./nova-cli/protocol";
 export type { NovaEventEnvelope, NovaProtocolPayload, TurnStatus } from "./nova-cli/protocol";
 export { NovaDaemonClient, NovaSessionDaemon, NOVA_DAEMON_PROTOCOL_VERSION } from "./nova-cli/daemon";

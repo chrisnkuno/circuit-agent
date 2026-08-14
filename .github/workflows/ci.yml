@@ -6,6 +6,64 @@ on:
   pull_request:
 
 jobs:
+  native-state:
+    name: Native state · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/nova-state
+      - run: bun install --frozen-lockfile
+      - name: Format
+        run: cargo fmt --manifest-path packages/nova-state/Cargo.toml -- --check
+      - name: Invariants and behavioral tests
+        run: cargo test --locked --manifest-path packages/nova-state/Cargo.toml
+      - name: Lints
+        run: cargo clippy --locked --manifest-path packages/nova-state/Cargo.toml --all-targets -- -D warnings
+      - name: Build release sidecar
+        run: cargo build --locked --release --manifest-path packages/nova-state/Cargo.toml --bin nova-state
+      - name: Protocol smoke test
+        shell: bash
+        run: |
+          binary="packages/nova-state/target/release/nova-state"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="${binary}.exe"; fi
+          reply=$(echo '{"id":"ci","protocolVersion":1,"method":"ping","params":{}}' | "$binary")
+          echo "$reply"
+          echo "$reply" | grep -q '"readOnlyCanonicalSources":true'
+      - name: CLI native-history and fallback smoke test
+        shell: bash
+        run: |
+          bun run build:packages
+          binary="$PWD/packages/nova-state/target/release/nova-state"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="${binary}.exe"; fi
+          smoke_root="$RUNNER_TEMP/nova-state-cli-smoke"
+          mkdir -p "$smoke_root"
+          node --input-type=module -e 'import { saveSession } from "./packages/agent-core/dist/nova-cli/session.js"; const root = process.argv[1]; await saveSession({ schemaVersion: 2, revision: 0, id: "20260814T120000Z-ci1234", createdAt: Date.now(), updatedAt: Date.now(), root, title: "Native history smoke", messages: [{ role: "user", content: "Find the PaymentIntent retry regression" }, { role: "assistant", content: "Verified the retry behavior" }], approvals: {}, totalRwf: 0 });' "$smoke_root"
+          native_output=$(NOVA_STATE_BINARY="$binary" node packages/nova-cli/dist/nova.mjs history search PaymentIntent retry --cwd "$smoke_root")
+          echo "$native_output"
+          echo "$native_output" | grep -q 'snapshot evidence'
+          fallback_output=$(NOVA_STATE_BINARY="$RUNNER_TEMP/missing-nova-state" node packages/nova-cli/dist/nova.mjs history search PaymentIntent retry --cwd "$smoke_root")
+          echo "$fallback_output"
+          echo "$fallback_output" | grep -q '1 match'
+      - name: Record portable benchmark
+        shell: bash
+        run: cargo run --locked --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 100 --messages 20 --queries 50 > nova-state-benchmark.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-state-benchmark-${{ matrix.os }}
+          path: nova-state-benchmark.json
+
   check:
     runs-on: ubuntu-latest
     steps:

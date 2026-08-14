@@ -17,13 +17,35 @@ import { computeLayout, type ScreenLayout } from "./layout";
 
 export type ScreenStream = { write(text: string): boolean; columns?: number; rows?: number };
 
+export type PinnedScreenOptions = {
+  /**
+   * Whether to hold the scroll region for the whole session.
+   *
+   * Held, the footer stays on a fixed row — and the terminal saves nothing that scrolls past the
+   * top, because scrollback only receives lines when the scrolling region is the entire screen.
+   * That is a real cost and it is now a choice: unheld, the region is set only for the moments the
+   * dropdown needs reserved rows (while the user is typing, when nothing is being printed) and
+   * released immediately after, so every line of actual output scrolls into real history.
+   */
+  holdRegion?: boolean;
+};
+
 export class PinnedScreen {
   private layout: ScreenLayout;
   /** Transcript rows currently lent to the suggestion dropdown. */
   private suggestionRows = 0;
+  private readonly holdRegion: boolean;
+  /** True while a region is set — either held for the session, or borrowed by the dropdown. */
+  private regionActive = false;
 
-  constructor(private readonly stream: ScreenStream) {
+  constructor(private readonly stream: ScreenStream, options: PinnedScreenOptions = {}) {
     this.layout = computeLayout(stream.rows ?? 24, stream.columns ?? 80);
+    this.holdRegion = options.holdRegion ?? true;
+  }
+
+  /** Whether this screen owns a pinned row to draw a status line on. */
+  get pinned(): boolean {
+    return this.holdRegion;
   }
 
   get current(): ScreenLayout {
@@ -32,6 +54,7 @@ export class PinnedScreen {
 
   /** Establishes the pinned footer. Call once, after any startup banner has already printed above it. */
   enter(): void {
+    if (!this.holdRegion) return;
     this.setRegion();
     this.parkInTranscript();
   }
@@ -42,8 +65,14 @@ export class PinnedScreen {
     // count would shrink the region by rows the dropdown no longer occupies.
     this.suggestionRows = 0;
     this.layout = computeLayout(this.stream.rows ?? 24, this.stream.columns ?? 80);
-    this.setRegion();
-    this.parkInTranscript();
+    if (this.holdRegion) {
+      this.setRegion();
+      this.parkInTranscript();
+    } else if (this.regionActive) {
+      // A borrowed region describes rows that the new geometry has moved; give it straight back
+      // rather than leaving the terminal clipped to a rectangle that no longer means anything.
+      this.releaseRegion();
+    }
     return this.layout;
   }
 
@@ -51,6 +80,14 @@ export class PinnedScreen {
     // A region collapsed to zero footer rows (a too-short terminal) gets the full-screen default
     // back — the same sequence `exit()` uses — rather than a degenerate one-row margin.
     this.stream.write(this.layout.footerRows === 0 ? "\x1b[r" : `\x1b[${this.layout.scrollTop};${this.layout.scrollBottom}r`);
+    this.regionActive = this.layout.footerRows !== 0;
+  }
+
+  /** Hands the whole screen back, so scrolled-off lines reach the terminal's scrollback again. */
+  private releaseRegion(): void {
+    if (!this.regionActive) return;
+    this.stream.write("\x1b[r");
+    this.regionActive = false;
   }
 
   /**
@@ -62,7 +99,7 @@ export class PinnedScreen {
    * is undefined behaviour on some terminals — this is what keeps it always defined.
    */
   parkInTranscript(): void {
-    if (this.layout.footerRows === 0) return;
+    if (!this.holdRegion || this.layout.footerRows === 0) return;
     this.stream.write(`\x1b[${this.layout.scrollBottom};1H`);
   }
 
@@ -73,13 +110,15 @@ export class PinnedScreen {
    * a no-op from their point of view rather than a cursor jump they would see and might type into.
    */
   renderStatus(text: string): void {
-    if (!this.layout.statusRow) return;
+    // Without a held region these rows are ordinary transcript; drawing on them would overwrite
+    // whatever had scrolled into them.
+    if (!this.holdRegion || !this.layout.statusRow) return;
     this.stream.write(`\x1b7\x1b[?25l\x1b[${this.layout.statusRow};1H\x1b[2K${text}\x1b8\x1b[?25h`);
   }
 
   /** Clears the input row and parks the cursor there. Call immediately before `readline.question()`. */
   positionInput(): void {
-    if (!this.layout.inputRow) return;
+    if (!this.holdRegion || !this.layout.inputRow) return;
     this.stream.write(`\x1b[${this.layout.inputRow};1H\x1b[2K`);
   }
 
@@ -104,6 +143,10 @@ export class PinnedScreen {
 
     if (wanted > this.suggestionRows) {
       const extra = wanted - this.suggestionRows;
+      // Borrowed, not held: without --pin there is no standing region, so one is set for exactly
+      // as long as the dropdown is on screen. Nothing is printed to the transcript while the user
+      // is typing a command, so no line can be lost to it — and `clearSuggestions` gives it back.
+      this.regionActive = true;
       // Widened back to the full transcript first: the rows being freed are the ones a previous
       // reservation already cut out of the region, and `SU` only scrolls within the current margins.
       this.stream.write(`\x1b7\x1b[${this.layout.scrollTop};${this.layout.scrollBottom}r`);
@@ -127,7 +170,10 @@ export class PinnedScreen {
     this.stream.write("\x1b7\x1b[?25l");
     for (let offset = 0; offset < this.suggestionRows; offset += 1) this.stream.write(`\x1b[${top + offset};1H\x1b[2K`);
     this.suggestionRows = 0;
-    this.stream.write(`\x1b[${this.layout.scrollTop};${this.layout.scrollBottom}r\x1b8\x1b[?25h`);
+    this.stream.write(this.holdRegion
+      ? `\x1b[${this.layout.scrollTop};${this.layout.scrollBottom}r\x1b8\x1b[?25h`
+      : "\x1b[r\x1b8\x1b[?25h");
+    if (!this.holdRegion) this.regionActive = false;
   }
 
   /** The bottom of the transcript right now: the layout's, less whatever the dropdown has reserved. */

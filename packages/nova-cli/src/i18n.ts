@@ -19,18 +19,18 @@ export function resolveControlLanguage(value: string | undefined): ControlLangua
   return base in CONTROL_LANGUAGES ? base : "en";
 }
 
-type Labels = { help: string; exit: string; settings: string; voice: string; choose: string; saved: string; keyboard: string; remember: string };
+type Labels = { help: string; guide: string; exit: string; settings: string; voice: string; choose: string; saved: string; keyboard: string; remember: string };
 const LABELS: Record<ControlLanguage, Labels> = {
-  en: { help: "commands", exit: "leave", settings: "settings", voice: "voice", choose: "Choose a setting", saved: "saved", keyboard: "Keyboard shortcuts", remember: "remember" },
-  zh: { help: "命令", exit: "退出", settings: "设置", voice: "语音", choose: "选择设置", saved: "已保存", keyboard: "键盘快捷键", remember: "记住" },
-  hi: { help: "कमांड", exit: "बाहर निकलें", settings: "सेटिंग्स", voice: "आवाज़", choose: "सेटिंग चुनें", saved: "सहेजा गया", keyboard: "कीबोर्ड शॉर्टकट", remember: "याद रखें" },
-  es: { help: "comandos", exit: "salir", settings: "ajustes", voice: "voz", choose: "Elige un ajuste", saved: "guardado", keyboard: "Atajos de teclado", remember: "recordar" },
-  fr: { help: "commandes", exit: "quitter", settings: "réglages", voice: "voix", choose: "Choisissez un réglage", saved: "enregistré", keyboard: "Raccourcis clavier", remember: "mémoriser" },
-  ar: { help: "الأوامر", exit: "خروج", settings: "الإعدادات", voice: "الصوت", choose: "اختر إعدادًا", saved: "تم الحفظ", keyboard: "اختصارات لوحة المفاتيح", remember: "تذكّر" },
-  bn: { help: "কমান্ড", exit: "প্রস্থান", settings: "সেটিংস", voice: "ভয়েস", choose: "একটি সেটিং বেছে নিন", saved: "সংরক্ষিত", keyboard: "কীবোর্ড শর্টকাট", remember: "মনে রাখুন" },
-  pt: { help: "comandos", exit: "sair", settings: "configurações", voice: "voz", choose: "Escolha uma configuração", saved: "salvo", keyboard: "Atalhos de teclado", remember: "lembrar" },
-  ru: { help: "команды", exit: "выход", settings: "настройки", voice: "голос", choose: "Выберите настройку", saved: "сохранено", keyboard: "Горячие клавиши", remember: "запомнить" },
-  ur: { help: "کمانڈز", exit: "باہر نکلیں", settings: "ترتیبات", voice: "آواز", choose: "ترتیب منتخب کریں", saved: "محفوظ ہوگیا", keyboard: "کی بورڈ شارٹ کٹس", remember: "یاد رکھیں" },
+  en: { help: "commands", guide: "guide", exit: "leave", settings: "settings", voice: "voice", choose: "Choose a setting", saved: "saved", keyboard: "Keyboard shortcuts", remember: "remember" },
+  zh: { help: "命令", guide: "指南", exit: "退出", settings: "设置", voice: "语音", choose: "选择设置", saved: "已保存", keyboard: "键盘快捷键", remember: "记住" },
+  hi: { help: "कमांड", guide: "गाइड", exit: "बाहर निकलें", settings: "सेटिंग्स", voice: "आवाज़", choose: "सेटिंग चुनें", saved: "सहेजा गया", keyboard: "कीबोर्ड शॉर्टकट", remember: "याद रखें" },
+  es: { help: "comandos", guide: "guía", exit: "salir", settings: "ajustes", voice: "voz", choose: "Elige un ajuste", saved: "guardado", keyboard: "Atajos de teclado", remember: "recordar" },
+  fr: { help: "commandes", guide: "guide", exit: "quitter", settings: "réglages", voice: "voix", choose: "Choisissez un réglage", saved: "enregistré", keyboard: "Raccourcis clavier", remember: "mémoriser" },
+  ar: { help: "الأوامر", guide: "دليل", exit: "خروج", settings: "الإعدادات", voice: "الصوت", choose: "اختر إعدادًا", saved: "تم الحفظ", keyboard: "اختصارات لوحة المفاتيح", remember: "تذكّر" },
+  bn: { help: "কমান্ড", guide: "গাইড", exit: "প্রস্থান", settings: "সেটিংস", voice: "ভয়েস", choose: "একটি সেটিং বেছে নিন", saved: "সংরক্ষিত", keyboard: "কীবোর্ড শর্টকাট", remember: "মনে রাখুন" },
+  pt: { help: "comandos", guide: "guia", exit: "sair", settings: "configurações", voice: "voz", choose: "Escolha uma configuração", saved: "salvo", keyboard: "Atalhos de teclado", remember: "lembrar" },
+  ru: { help: "команды", guide: "руководство", exit: "выход", settings: "настройки", voice: "голос", choose: "Выберите настройку", saved: "сохранено", keyboard: "Горячие клавиши", remember: "запомнить" },
+  ur: { help: "کمانڈز", guide: "گائیڈ", exit: "باہر نکلیں", settings: "ترتیبات", voice: "آواز", choose: "ترتیب منتخب کریں", saved: "محفوظ ہوگیا", keyboard: "کی بورڈ شارٹ کٹس", remember: "یاد رکھیں" },
 };
 
 export function controlLabel(language: ControlLanguage, key: keyof Labels): string {

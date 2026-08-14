@@ -126,6 +126,12 @@ describe("argument parsing", () => {
     expect(parseArgs(["-v"]).version).toBe(true);
   });
 
+  it("parses model-free history subcommands without turning them into prompts", () => {
+    expect(parseArgs(["history"])).toMatchObject({ historyCommand: { kind: "list" }, prompt: null });
+    expect(parseArgs(["history", "search", "payment", "retry"])).toMatchObject({ historyCommand: { kind: "search", query: "payment retry" }, prompt: null });
+    expect(parseArgs(["history", "status", "--cwd", "."])).toMatchObject({ historyCommand: { kind: "status" }, prompt: null, root: process.cwd() });
+  });
+
   it("recognises both self-update entry forms and their safe controls", () => {
     expect(parseArgs(["update"])).toMatchObject({ update: true, checkUpdate: false, updateYes: false, prompt: null });
     expect(parseArgs(["--update", "--yes", "--package-manager", "pnpm"])).toMatchObject({
@@ -492,6 +498,16 @@ describe("main() — branches that resolve before any interactive input is neede
     const { code, stdout } = await run(["--sessions", "--cwd", tmpRoot]);
     expect(code).toBe(0);
     expect(stdout).toContain("No sessions in this project yet.");
+  });
+
+  it("history works without model credentials and reports its active storage path", async () => {
+    const listed = await run(["history", "--cwd", tmpRoot]);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain("no past sessions");
+
+    const status = await run(["history", "status", "--cwd", tmpRoot]);
+    expect(status.code).toBe(0);
+    expect(status.stdout).toMatch(/native SQLite \+ FTS5|portable JSON history/);
   });
 
   it("refuses to run with no model provider configured, and says so on stderr", async () => {

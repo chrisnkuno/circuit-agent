@@ -21,6 +21,7 @@
       },
       "devDependencies": {
         "@playwright/test": "^1.62.0",
+        "@termuijs/testing": "^0.1.7",
         "@types/node": "^22.0.0",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -56,7 +57,7 @@
     },
     "packages/agent-core": {
       "name": "@circuit-nova/nova-core",
-      "version": "0.3.0",
+      "version": "0.5.0",
       "dependencies": {
         "openai": "^6.49.0",
         "zod": "^4.4.3",
@@ -72,9 +73,24 @@
     },
     "packages/nova-cli": {
       "name": "@circuit-nova/nova-cli",
-      "version": "0.3.0",
+      "version": "0.7.0",
       "bin": {
-        "nova": "./dist/nova.js",
+        "nova": "dist/nova.mjs",
+      },
+      "dependencies": {
+        "@termuijs/core": "0.1.7",
+        "@termuijs/jsx": "0.1.7",
+        "@termuijs/widgets": "0.1.7",
+      },
+      "optionalDependencies": {
+        "@circuit-nova/state-darwin-arm64": "0.1.0",
+        "@circuit-nova/state-darwin-x64": "0.1.0",
+        "@circuit-nova/state-linux-arm64-gnu": "0.1.0",
+        "@circuit-nova/state-linux-arm64-musl": "0.1.0",
+        "@circuit-nova/state-linux-x64-gnu": "0.1.0",
+        "@circuit-nova/state-linux-x64-musl": "0.1.0",
+        "@circuit-nova/state-win32-arm64": "0.1.0",
+        "@circuit-nova/state-win32-x64": "0.1.0",
       },
     },
   },
@@ -150,6 +166,14 @@
     "@circuit-nova/nova-core": ["@circuit-nova/nova-core@workspace:packages/agent-core"],
 
     "@circuit-nova/nova-desktop": ["@circuit-nova/nova-desktop@workspace:apps/nova-desktop"],
+
+    "@circuit-nova/state-linux-arm64-gnu": ["@circuit-nova/state-linux-arm64-gnu@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-z5u6xkhZ4qra7W10Gbw6BqhWJPmQP7c/ZuMOInZSNpVNjsN77/KeGV5nylDgNCu9zZnhCivxvVwsmITRlKxgpg=="],
+
+    "@circuit-nova/state-linux-arm64-musl": ["@circuit-nova/state-linux-arm64-musl@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-vvwS1WDjCnJ+ahCCabh1PjpcuLpmSAvP4ErQqCmDqZSTGAnckax47Gm1LMrTL85SaJR3g+jPUbfpROHqZ14/Hw=="],
+
+    "@circuit-nova/state-linux-x64-gnu": ["@circuit-nova/state-linux-x64-gnu@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-vtMwuJcDuoed8f14hmWaES19QL5UzCVevh1gSYjYQVjA1AbFL5254bxgZoBgMbYL4W6BqKVXQBEb2uNn+aqVNA=="],
+
+    "@circuit-nova/state-linux-x64-musl": ["@circuit-nova/state-linux-x64-musl@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-5+RiGvUrMdSrhjN9LoqZDODvM0Xb7sq37r7DpiVA7N7Kql2e5+MNRUekkm3xwWuJlqLTWijyX7q+beUqYZmu3g=="],
 
     "@connectrpc/connect": ["@connectrpc/connect@2.1.2", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA=="],
 
@@ -394,6 +418,16 @@
     "@tauri-apps/plugin-shell": ["@tauri-apps/plugin-shell@2.3.5", "", { "dependencies": { "@tauri-apps/api": "^2.10.1" } }, "sha512-jewtULhiQ7lI7+owCKAjc8tYLJr92U16bPOeAa472LHJdgaibLP83NcfAF2e+wkEcA53FxKQAZ7byDzs2eeizg=="],
 
     "@tauri-apps/plugin-store": ["@tauri-apps/plugin-store@2.4.4", "", { "dependencies": { "@tauri-apps/api": "^2.11.0" } }, "sha512-oxSMaj/QpVfJcBMYX5aOQV94fWvga0MwQMfD6TLlbK2dh+ShPWAzefd8HWXhvOKjPRJdGVAkW7ZGO76JzzjaDA=="],
+
+    "@termuijs/core": ["@termuijs/core@0.1.7", "", {}, "sha512-gVFlizo4+gyvC1DY/RhREkNW157R4tvL4Z2S5I+JGuCbLFfdf07q6hGp3KpbMHO48s6Nny+6hS2QKVQb3QJP/g=="],
+
+    "@termuijs/jsx": ["@termuijs/jsx@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7", "@termuijs/motion": "0.1.7", "@termuijs/widgets": "0.1.7" } }, "sha512-oTL1AQGZwUM8k12sV8PT2DAuuolFqTaJ3A+wgltdrtRR0kreODq0EDjHQ6iZWb4BQV3/5VyBHHykK/9yGkMr4w=="],
+
+    "@termuijs/motion": ["@termuijs/motion@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7" } }, "sha512-j+gCcBYNFYw3RmC2zETXRT2AyJf5TxHV6hf0QQv3H2nvyZAxEyduhDcPlVwFzlhfRvSdXdPI9JtMLaHbLyRnFg=="],
+
+    "@termuijs/testing": ["@termuijs/testing@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7", "@termuijs/jsx": "0.1.7", "@termuijs/motion": "0.1.7", "@termuijs/widgets": "0.1.7" } }, "sha512-9K4N+mn1nhf+SGbYcQnE7WVIV2WyQQ08OSSkWw3+qLJqdHrlndBBFeuklYux0j3/rkMY6sfsMtG8YYVcjN0dtg=="],
+
+    "@termuijs/widgets": ["@termuijs/widgets@0.1.7", "", { "dependencies": { "@termuijs/core": "0.1.7", "@termuijs/motion": "0.1.7" } }, "sha512-Duo/hEzkWXa5yTuIlK6cBxgPyni1UoaqAXkMwIsJS0Mut3AqoJ/E0us9Ca1P+RphDfFLRcuqQebbS0LPdfFM+w=="],
 
     "@types/babel__core": ["@types/babel__core@7.20.5", "", { "dependencies": { "@babel/parser": "^7.20.7", "@babel/types": "^7.20.7", "@types/babel__generator": "*", "@types/babel__template": "*", "@types/babel__traverse": "*" } }, "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA=="],
 

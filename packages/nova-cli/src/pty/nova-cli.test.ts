@@ -219,8 +219,13 @@ describe("nova CLI under a real pty", () => {
     // escape sequences a real terminal receives, not on the pure layout math `layout.test.ts` and
     // `screen.test.ts` already cover against a fake stream — that math could be correct and the
     // wiring into `nova.ts` still wrong.
+    //
+    // `--pin` is now required to get it: a held region is exactly what stops a terminal saving
+    // scrolled-off lines to its scrollback, so the footer became something you ask for rather than
+    // something that silently costs you the session's history. `scrollback.test.ts` holds the other
+    // half of that bargain — that nothing reserves a region unless this flag is passed.
     it("sets a scroll region excluding the bottom rows once the prompt is up", async () => {
-      const p = boot();
+      const p = boot({ args: ["--pin"] });
       await p.waitFor(PROMPT, { timeoutMs: 30_000 });
 
       // rows=30 (the harness default), footer=2 (status + input) → scrollBottom=28 — see
@@ -250,7 +255,7 @@ describe("nova CLI under a real pty", () => {
     }, 30_000);
 
     it("reissues the scroll region at the new size on resize, not the stale one", async () => {
-      const p = boot();
+      const p = boot({ args: ["--pin"] });
       await p.waitFor(PROMPT, { timeoutMs: 30_000 });
 
       const before = p.output().length;

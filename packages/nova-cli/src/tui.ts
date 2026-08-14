@@ -1,4 +1,5 @@
 import type { ColorDepth } from "./banner";
+import { terminalStream, type OutputStream } from "./output";
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { newMarkdownState, renderMarkdownLine, visibleWidth, type MarkdownState } from "./markdown";
 
@@ -171,7 +172,7 @@ export function formatStatusLine(fields: StatusFields, width: number, depth: Col
 export class StatusBar {
   private linesDrawn = 0;
 
-  constructor(private readonly stream: NodeJS.WriteStream = process.stdout) {}
+  constructor(private readonly stream: OutputStream = terminalStream) {}
 
   /** Redraws the bar in place: erase what was there, write the new line. */
   render(fields: StatusFields, depth: ColorDepth, glyphs: GlyphSet = UNICODE_GLYPHS): void {
@@ -179,6 +180,20 @@ export class StatusBar {
     const width = this.stream.columns ?? 80;
     const line = formatStatusLine(fields, width, depth, glyphs);
     this.stream.write(`${line}\n`);
+    this.linesDrawn = 1;
+  }
+
+  /**
+   * Draws an already-composed line, with the same erase-then-write discipline.
+   *
+   * For the idle footer, whose text is assembled by the session (mode, tabs, cost) rather than from
+   * `StatusFields`. Without a pinned row to put it on, this is where that line lives — and unlike a
+   * `DECSTBM` region, a bar that erases and redraws itself leaves the terminal's scrollback alone.
+   */
+  renderLine(text: string): void {
+    this.clear();
+    if (text === "") return;
+    this.stream.write(`${text}\n`);
     this.linesDrawn = 1;
   }
 
@@ -215,7 +230,7 @@ export class ReplaceableBlock {
   private rows = 0;
 
   constructor(
-    private readonly stream: NodeJS.WriteStream = process.stdout,
+    private readonly stream: OutputStream = terminalStream,
     private readonly columns: () => number = () => process.stdout.columns ?? 80,
   ) {}
 
@@ -268,7 +283,7 @@ export class MarkdownStream {
   private state: MarkdownState = newMarkdownState();
 
   constructor(
-    private readonly stream: NodeJS.WriteStream = process.stdout,
+    private readonly stream: OutputStream = terminalStream,
     private readonly depth: ColorDepth = "none",
     private readonly columns: () => number = () => process.stdout.columns ?? 80,
     /**

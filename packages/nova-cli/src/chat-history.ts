@@ -27,6 +27,10 @@ export type HistoryEntry = {
   /** Turns, not messages: what a person counts when they ask "how long was that one". */
   turns: number;
   messages: number;
+  /** Lowercased conversation/tool text used only for local recall, never rendered. */
+  searchText?: string;
+  /** Native FTS evidence for a search result; absent for the portable JSON fallback. */
+  evidence?: { source: "snapshot" | "journal"; snippet: string; why: string[] };
 };
 
 export function countTurns(messages: readonly AgentMessage[]): number {
@@ -48,24 +52,40 @@ export function relativeTime(timestamp: number, now = Date.now()): string {
 }
 
 export function summarizeSession(record: SessionRecord): HistoryEntry {
+  const searchText = record.messages.flatMap((message): string[] => {
+    if (message.role === "system") return [];
+    if (message.role === "tool") return [message.name, message.content];
+    if (message.role === "assistant" && "toolCalls" in message) {
+      return [message.content, ...message.toolCalls.flatMap((call) => [call.name, JSON.stringify(call.arguments ?? {})])];
+    }
+    return [message.content];
+  }).join("\n").toLowerCase();
   return {
     id: record.id,
     title: record.title,
     updatedAt: record.updatedAt,
     turns: countTurns(record.messages),
     messages: record.messages.length,
+    searchText,
   };
 }
 
 /**
- * Sessions whose title or opening request matches, most recent first.
+ * Sessions whose actual conversation matches, most recent first.
  *
- * Matching is case-insensitive substring over the title, because a session title *is* the first
- * line of the request that started it — the words someone remembers typing are the words in it.
+ * Raw session messages are already local and durable, so searching them needs neither an embedding
+ * API nor an LLM summary. Tool names and arguments are included: people often remember the command
+ * or file that failed more readily than the words they used to open the session.
  */
 export function searchHistory(entries: readonly HistoryEntry[], query: string): HistoryEntry[] {
   const needle = query.trim().toLowerCase();
-  const matched = needle === "" ? [...entries] : entries.filter((entry) => entry.title.toLowerCase().includes(needle));
+  const queryTerms = needle.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+  const matched = needle === "" ? [...entries] : entries.filter((entry) => {
+    const haystack = `${entry.title.toLowerCase()}\n${entry.searchText ?? ""}`;
+    // All remembered words may occur across markdown or tool JSON punctuation. Requiring every
+    // term preserves phrase-like precision without making `money test` miss `**money** test`.
+    return queryTerms.length > 0 && queryTerms.every((term) => haystack.includes(term));
+  });
   return matched.sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
@@ -77,13 +97,20 @@ export function renderHistoryList(entries: readonly HistoryEntry[], style: Secti
   const width = Math.max(0, ...entries.map((entry) => entry.title.length));
   const titleWidth = Math.min(width, Math.max(16, style.width - 34));
 
-  const lines = entries.map((entry) => {
+  const lines = entries.flatMap((entry) => {
     const active = entry.id === options.current;
     const mark = active ? paint(glyphs.circleFull, CYAN, style.depth) : " ";
     const title = clip(entry.title || "untitled", titleWidth, glyphs).padEnd(titleWidth);
     const meta = `${relativeTime(entry.updatedAt, now)} ${glyphs.middot} ${entry.turns} turn${entry.turns === 1 ? "" : "s"}`;
     const row = `${GUTTER}${mark} ${active ? paintAll(title, [BOLD], style.depth) : title}  ${paint(meta, DIM, style.depth)}`;
-    return clip(row, style.width, glyphs);
+    const rendered = [clip(row, style.width, glyphs)];
+    if (entry.evidence) {
+      const snippet = entry.evidence.snippet.replace(/\s+/g, " ").trim();
+      if (snippet) rendered.push(clip(`${GUTTER}  ${glyphs.boxVertical} ${snippet}`, style.width, glyphs));
+      const reason = entry.evidence.why.find((item) => !item.startsWith("evidence source:"));
+      rendered.push(clip(`${GUTTER}  ${glyphs.boxVertical} ${entry.evidence.source} evidence${reason ? ` ${glyphs.middot} ${reason}` : ""}`, style.width, glyphs));
+    }
+    return rendered;
   });
   // The teaching line is clipped like everything else: it is the least important row on screen and
   // must never be the one that wraps and pushes the list out of alignment.
@@ -153,6 +180,7 @@ export function renderReplay(record: SessionRecord, style: SectionStyle, options
 export type HistoryCommand =
   | { kind: "list" }
   | { kind: "search"; query: string }
+  | { kind: "status" }
   | { kind: "show"; id: string; turns?: number }
   | { kind: "resume"; id?: string }
   | { kind: "invalid"; reason: string };
@@ -165,6 +193,7 @@ export function parseHistoryCommand(input: string): HistoryCommand | null {
   if (!match) return null;
   const rest = (match[1] ?? "").trim();
   if (rest === "" || rest === "list") return { kind: "list" };
+  if (rest === "status" || rest === "doctor") return { kind: "status" };
 
   const [verb, ...others] = rest.split(/\s+/);
   const argument = others.join(" ").trim();
@@ -181,5 +210,5 @@ export function parseHistoryCommand(input: string): HistoryCommand | null {
     const turns = /^\d+$/.test(argument) ? Number(argument) : undefined;
     return { kind: "show", id: verb, ...(turns === undefined ? {} : { turns }) };
   }
-  return { kind: "invalid", reason: `/history takes a session id, "search <text>", or "resume" — not "${verb}".` };
+  return { kind: "invalid", reason: `/history takes a session id, "search <text>", "status", or "resume" — not "${verb}".` };
 }

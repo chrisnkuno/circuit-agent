@@ -238,6 +238,7 @@ export class NovaSessionDaemon {
   setModelSpendLimit(clientId: string, sessionId: string, remaining: number): void { this.requireAttached(clientId, sessionId).agent.setModelSpendLimit(remaining); }
   todos(clientId: string, sessionId: string): TodoItem[] { return this.requireAttached(clientId, sessionId).agent.todos; }
   diffStat(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffStat(); }
+  diffPatch(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffPatch(); }
   undo(clientId: string, sessionId: string, scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.requireAttached(clientId, sessionId).agent.undo(scope); }
   inspectTools(clientId: string, sessionId: string): ReturnType<NovaAgent["inspectTools"]> { return this.requireAttached(clientId, sessionId).agent.inspectTools(); }
 
@@ -317,6 +318,7 @@ export class NovaDaemonClient {
   estimate(objective: string): Promise<AgentCostPrediction> { return this.daemon.estimate(this.id, this.sessionId, objective); }
   setModelSpendLimit(remaining: number): void { this.daemon.setModelSpendLimit(this.id, this.sessionId, remaining); }
   diffStat(): Promise<string> { return this.daemon.diffStat(this.id, this.sessionId); }
+  diffPatch(): Promise<string> { return this.daemon.diffPatch(this.id, this.sessionId); }
   undo(scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.daemon.undo(this.id, this.sessionId, scope); }
   inspectTools(): ReturnType<NovaAgent["inspectTools"]> { return this.daemon.inspectTools(this.id, this.sessionId); }
   decideApproval(id: string, decision: PermissionDecision): void { this.daemon.decideApproval(this.id, id, decision); }

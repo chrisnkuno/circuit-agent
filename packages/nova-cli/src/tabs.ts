@@ -37,6 +37,12 @@ export type TabView = {
   status: TabStatus;
   unread: number;
   active: boolean;
+  /** The model this tab talks to, short form — tabs may each use a different one. */
+  model?: string;
+  /** Where this tab's work runs. Omitted or "local" means this machine. */
+  backend?: "local" | "e2b" | "docker";
+  /** What this tab has spent, already formatted in the display currency. */
+  cost?: string;
 };
 
 export class WorkspaceController<T> {
@@ -138,8 +144,22 @@ export class WorkspaceController<T> {
     if (tab) tab.status = "running";
   }
 
-  get views(): TabView[] {
-    return this.tabs.map((tab) => ({ id: tab.id, title: tab.title, status: tab.status, unread: tab.unread, active: tab.id === this.activeId }));
+  /**
+   * A description of every tab, for the strip and the workspace.
+   *
+   * `describe` lets the host attach what only it knows — the model, the location, the running total
+   * — without `WorkspaceController` having to know what a model or a ledger is. Keeping it generic
+   * is what makes it testable without constructing a provider.
+   */
+  views(describe?: (payload: T) => Partial<Omit<TabView, "id" | "title" | "status" | "unread" | "active">>): TabView[] {
+    return this.tabs.map((tab) => ({
+      id: tab.id,
+      title: tab.title,
+      status: tab.status,
+      unread: tab.unread,
+      active: tab.id === this.activeId,
+      ...(describe ? describe(tab.payload) : {}),
+    }));
   }
 }
 
@@ -149,21 +169,61 @@ export class WorkspaceController<T> {
  * Rendered only when there is more than one tab: a single-tab session should look exactly like it
  * did before tabs existed, since a strip that always says "1 nova" is noise on every prompt.
  */
-export function renderTabStrip(views: readonly TabView[], options: { width?: number; glyphs?: GlyphSet } = {}): string {
+export type TabStripOptions = {
+  width?: number;
+  glyphs?: GlyphSet;
+  /** Show each tab's model and location. Off by default: one tab has nothing to compare against. */
+  detail?: boolean;
+};
+
+/** The short form of a model id — `claude-sonnet-5`, not `anthropic/claude-sonnet-5-20260101`. */
+export function shortModel(model: string): string {
+  const tail = model.split("/").pop() ?? model;
+  return tail.replace(/-\d{8}$/, "");
+}
+
+/** A one-glyph mark for where a tab runs, so location is visible without spending a word on it. */
+export function locationMark(backend: TabView["backend"], glyphs: GlyphSet): string {
+  if (!backend || backend === "local") return "";
+  return backend === "e2b" ? glyphs.circleHalf : glyphs.boxVertical;
+}
+
+/**
+ * The tab strip.
+ *
+ * Rendered only when there is more than one tab: a single-tab session should look exactly like it
+ * did before tabs existed, since a strip that always says "1 nova" is noise on every prompt.
+ *
+ * With `detail`, each cell also carries its model and a mark for where it runs. That is the
+ * difference between tabs as scratch space and tabs as a control panel: when one is on Sonnet
+ * against your checkout and another is on an open model in a remote sandbox, which is which is the
+ * single most important thing on the screen, and reading it from the title is guesswork.
+ */
+export function renderTabStrip(views: readonly TabView[], options: TabStripOptions = {}): string {
   if (views.length <= 1) return "";
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const cells = views.map((view) => {
     const marker = view.status === "running" ? glyphs.circleFull : view.status === "failed" ? glyphs.cross : view.unread > 0 ? glyphs.bullet : " ";
-    return `${view.active ? "[" : " "}${view.id}${marker}${view.title}${view.active ? "]" : " "}`;
+    const where = locationMark(view.backend, glyphs);
+    const detail = options.detail && view.model ? `${glyphs.middot}${shortModel(view.model)}` : "";
+    const body = `${view.id}${marker}${view.title}${detail}${where ? ` ${where}` : ""}`;
+    return `${view.active ? "[" : " "}${body}${view.active ? "]" : " "}`;
   });
   const line = cells.join(" ");
   const width = options.width ?? 80;
   return line.length <= width ? line : `${line.slice(0, Math.max(0, width - glyphs.ellipsis.length))}${glyphs.ellipsis}`;
 }
 
+export type TabSpec = {
+  title?: string;
+  provider?: string;
+  model?: string;
+  backend?: "local" | "e2b" | "docker";
+};
+
 export type TabCommand =
   | { kind: "list" }
-  | { kind: "new"; title?: string }
+  | ({ kind: "new" } & TabSpec)
   | { kind: "next" }
   | { kind: "previous" }
   | { kind: "close"; id?: number }
@@ -171,7 +231,35 @@ export type TabCommand =
   | { kind: "rename"; title: string }
   | { kind: "invalid"; reason: string };
 
-/** Parses `/tab`, `/tab new [title]`, `/tab next|prev|close [n]`, `/tab 2`, `/tab rename <title>`. */
+/**
+ * Pulls `--model`, `--provider` and `--sandbox` out of a `/tab new` line.
+ *
+ * Flags are removed from the words as they are read, so whatever is left is the title — which means
+ * `/tab new review --model gpt-5.6` and `/tab new --model gpt-5.6 review` are the same command.
+ * Nobody remembers which order a CLI wanted.
+ */
+export function extractTabSpec(words: readonly string[]): TabSpec {
+  const spec: TabSpec = {};
+  const rest: string[] = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    const inline = /^--(model|provider|sandbox|backend|on)=(.+)$/.exec(word);
+    const name = inline ? inline[1] : /^--(model|provider|sandbox|backend|on)$/.exec(word)?.[1];
+    if (!name) { rest.push(word); continue; }
+    const value = inline ? inline[2] : words[index + 1];
+    if (!inline) index += 1;
+    if (!value) continue;
+    if (name === "model") spec.model = value;
+    else if (name === "provider") spec.provider = value;
+    else if (value === "local" || value === "e2b" || value === "docker") spec.backend = value;
+    // A --sandbox with no recognised location is dropped rather than guessed at: starting work in
+    // the wrong place is the one mistake here that costs money and touches the wrong files.
+  }
+  const title = rest.join(" ").trim();
+  return { ...spec, ...(title ? { title } : {}) };
+}
+
+/** Parses `/tab`, `/tab new [title] [--model m] [--sandbox e2b]`, `/tab next|prev|close [n]`, `/tab 2`, `/tab rename <title>`. */
 export function parseTabCommand(input: string): TabCommand | null {
   const match = /^\/tabs?(?:\s+([\s\S]*))?$/.exec(input.trim());
   if (!match) return null;
@@ -181,7 +269,7 @@ export function parseTabCommand(input: string): TabCommand | null {
   const [verb, ...words] = rest.split(" ");
   const argument = words.join(" ");
   switch (verb.toLowerCase()) {
-    case "new": return { kind: "new", ...(argument ? { title: argument } : {}) };
+    case "new": return { kind: "new", ...extractTabSpec(words) };
     case "next": return { kind: "next" };
     case "prev": case "previous": return { kind: "previous" };
     case "rename": return argument ? { kind: "rename", title: argument } : { kind: "invalid", reason: "Give the tab a name: /tab rename <title>" };

@@ -196,6 +196,10 @@ export class NovaAgent {
   }
 
   /** What changed since the last checkpoint, for `/diff`. */
+  diffPatch(): Promise<string> {
+    return this.checkpoints.diffPatch();
+  }
+
   diffStat(): Promise<string> {
     return this.checkpoints.diffStat();
   }

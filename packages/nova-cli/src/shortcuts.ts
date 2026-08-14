@@ -3,6 +3,8 @@ import { KeyBindingRegistry, type KeypressEvent } from "./keybindings";
 import { paletteEntries, runCommandPalette, type PaletteKey, type RunPaletteOptions } from "./palette";
 import { runModelPicker, type PickerResult, type RunModelPickerOptions } from "./model-picker";
 import { runChooser, type ChooserItem, type ChooserPaint, type RunChooserOptions } from "./chooser";
+import { rowsOccupied } from "./tui";
+import type { OutputStream } from "./output";
 
 /**
  * Where feature keys meet the terminal.
@@ -53,18 +55,33 @@ function submit(readline: Interface, command: string): void {
 }
 
 /**
- * Paints over its own previous frame.
+ * Draws a menu frame in place, and takes it away again.
  *
- * Small enough not to be worth `ReplaceableBlock`, which is built for lines interleaved with a
- * running transcript; the palette owns the bottom of the screen for as long as it is open.
+ * Two things here were wrong for as long as menus have existed, and both showed up as the same
+ * symptom — a settings menu still sitting on screen after it had been answered:
+ *
+ * - **Rows, not lines.** The erase counted `\n`s, but a row longer than the terminal wraps onto
+ *   two or more of them. Every wrapped description left one line behind on each repaint, which is
+ *   why a wide menu on a narrow window smeared and a narrow one looked fine.
+ * - **Nothing erased the last frame.** Each repaint cleared its predecessor, so the final frame —
+ *   the one on screen when the user pressed Enter — was never anyone's predecessor and simply
+ *   stayed. `erase()` is what the borrowing code calls on the way out.
  */
-function painter(output: NodeJS.WriteStream): (frame: string) => void {
+function painter(output: OutputStream): { paint: (frame: string) => void; erase: () => void } {
   let rows = 0;
-  return (frame) => {
+  const erase = () => {
     for (let row = 0; row < rows; row += 1) output.write("\x1b[1A\x1b[2K");
-    output.write("\r");
-    output.write(`${frame}\n`);
-    rows = frame.split("\n").length;
+    if (rows > 0) output.write("\r");
+    rows = 0;
+  };
+  return {
+    erase,
+    paint: (frame) => {
+      erase();
+      output.write(`${frame}\n`);
+      const columns = output.columns ?? 80;
+      rows = frame.split("\n").reduce((total, line) => total + rowsOccupied(line, columns), 0);
+    },
   };
 }
 
@@ -104,9 +121,13 @@ export async function withBorrowedKeyboard<T>(
     }
   }
 
+  const surface = painter(host.output);
   try {
-    return await body(keys(), painter(host.output));
+    return await body(keys(), surface.paint);
   } finally {
+    // The menu comes down with the keyboard. Leaving the last frame on screen is what made an
+    // answered menu look like it was still asking.
+    surface.erase();
     host.input.off("keypress", collect);
     for (const listener of borrowed) host.input.on("keypress", listener as never);
   }

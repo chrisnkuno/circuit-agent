@@ -82,6 +82,13 @@ describe("searching", () => {
   it("returns nothing rather than everything when nothing matches", () => {
     expect(searchHistory(entries, "kubernetes")).toEqual([]);
   });
+
+  it("finds decisions, tool names and commands inside the conversation, not only its title", () => {
+    const indexed = summarizeSession(session());
+    expect(searchHistory([indexed], "money test")).toHaveLength(1);
+    expect(searchHistory([indexed], "npm test")).toHaveLength(1);
+    expect(searchHistory([indexed], "run_command")).toHaveLength(1);
+  });
 });
 
 describe("the list view", () => {
@@ -114,6 +121,17 @@ describe("the list view", () => {
       const rendered = plain(renderHistoryList(entries, style(width)));
       for (const line of rendered.split("\n")) expect(visibleWidth(line), `width ${width}`).toBeLessThanOrEqual(width);
     }
+  });
+
+  it("shows native match evidence without exceeding the terminal width", () => {
+    const withEvidence: HistoryEntry = {
+      ...entries[0],
+      evidence: { source: "journal", snippet: "Ran [PaymentIntent] retry tests", why: ["FTS5 lexical match in tool result", "evidence source: journal"] },
+    };
+    const rendered = plain(renderHistoryList([withEvidence], style(52)));
+    expect(rendered).toContain("journal evidence");
+    expect(rendered).toContain("PaymentIntent");
+    for (const line of rendered.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(52);
   });
 });
 
@@ -158,6 +176,8 @@ describe("the /history grammar", () => {
   it("searches for free text", () => {
     expect(parseHistoryCommand("/history search failing tests")).toEqual({ kind: "search", query: "failing tests" });
     expect(parseHistoryCommand("/history search")).toMatchObject({ kind: "invalid" });
+    expect(parseHistoryCommand("/history status")).toEqual({ kind: "status" });
+    expect(parseHistoryCommand("/history doctor")).toEqual({ kind: "status" });
   });
 
   it("reads back a session by id, optionally only its last few turns", () => {

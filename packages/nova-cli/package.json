@@ -1,7 +1,7 @@
 {
   "name": "@circuit-nova/nova-cli",
-  "version": "0.6.0",
-  "description": "Nova — a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with guarded approvals, git checkpoints, and real cost accounting.",
+  "version": "0.7.0",
+  "description": "Nova \u2014 a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with guarded approvals, git checkpoints, and real cost accounting.",
   "keywords": [
     "cli",
     "coding-agent",
@@ -30,5 +30,20 @@
   "scripts": {
     "build": "bun run ../../scripts/build-packages.ts",
     "prepublishOnly": "bun run ../../scripts/build-packages.ts"
+  },
+  "dependencies": {
+    "@termuijs/core": "0.1.7",
+    "@termuijs/jsx": "0.1.7",
+    "@termuijs/widgets": "0.1.7"
+  },
+  "optionalDependencies": {
+    "@circuit-nova/state-darwin-arm64": "0.1.0",
+    "@circuit-nova/state-darwin-x64": "0.1.0",
+    "@circuit-nova/state-linux-arm64-gnu": "0.1.0",
+    "@circuit-nova/state-linux-arm64-musl": "0.1.0",
+    "@circuit-nova/state-linux-x64-gnu": "0.1.0",
+    "@circuit-nova/state-linux-x64-musl": "0.1.0",
+    "@circuit-nova/state-win32-arm64": "0.1.0",
+    "@circuit-nova/state-win32-x64": "0.1.0"
   }
 }

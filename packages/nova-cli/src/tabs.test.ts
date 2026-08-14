@@ -107,13 +107,13 @@ describe("unread work", () => {
     const workspace = controller(["a", "b"]);
     workspace.activate(2);
     workspace.finished(1, "failed");
-    expect(workspace.views.find((view) => view.id === 1)).toMatchObject({ status: "failed", unread: 1 });
+    expect(workspace.views().find((view) => view.id === 1)).toMatchObject({ status: "failed", unread: 1 });
   });
 });
 
 describe("the strip", () => {
   it("stays out of the way until there is more than one tab", () => {
-    expect(renderTabStrip(controller().views)).toBe("");
+    expect(renderTabStrip(controller().views())).toBe("");
   });
 
   it("marks the active tab, running work and unread turns", () => {
@@ -122,7 +122,7 @@ describe("the strip", () => {
     workspace.started(2);
     workspace.finished(3, "idle");
 
-    const strip = renderTabStrip(workspace.views);
+    const strip = renderTabStrip(workspace.views());
     expect(strip).toContain("[1 refactor]");
     expect(strip).toContain("2●tests");
     expect(strip).toContain("3•docs");
@@ -130,7 +130,7 @@ describe("the strip", () => {
 
   it("truncates rather than wrapping onto a second row", () => {
     const workspace = controller(["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc"]);
-    expect(renderTabStrip(workspace.views, { width: 20 })).toHaveLength(20);
+    expect(renderTabStrip(workspace.views(), { width: 20 })).toHaveLength(20);
   });
 });
 

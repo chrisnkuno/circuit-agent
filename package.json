@@ -18,6 +18,9 @@
     "nova": "bun run packages/nova-cli/src/nova.ts",
     "build:cli": "bun run scripts/build-cli.ts",
     "build:packages": "bun run scripts/build-packages.ts",
+    "build:state": "cargo build --release --manifest-path packages/nova-state/Cargo.toml --bin nova-state",
+    "test:state": "cargo test --manifest-path packages/nova-state/Cargo.toml",
+    "bench:state": "cargo run --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 500 --messages 40 --queries 200",
     "bench": "bun run scripts/bench.ts"
   },
   "dependencies": {
@@ -37,6 +40,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
+    "@termuijs/testing": "^0.1.7",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

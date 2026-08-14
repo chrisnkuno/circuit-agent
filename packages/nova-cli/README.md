@@ -19,6 +19,9 @@ nova --auto                 Auto-apply ordinary edits; sensitive actions still a
 nova --allow-sensitive      Approve a flagged task preflight; tool guards remain active
 nova --sandbox              Work in a remote sandbox; your files are never touched
 nova --resume               Continue the last session
+nova history                Browse past sessions without starting a model
+nova history search "text"  Search indexed snapshot and journal evidence
+nova history status         Show native-index or portable-fallback status
 nova --providers            Show which model providers are configured
 nova --location EG          Use the country's local currency (locale-detected by default)
 nova --currency EGP         Override with any supported ISO currency
@@ -103,6 +106,22 @@ Use `--yes` for an explicitly unattended update. Without it, Nova refuses to mut
 **Costs are honest.** Sub-cent amounts display as `$0.0034` rather than `$0.00`, converted amounts name the daily rate and its date, and an unpriced model says so instead of showing zero. Automatic conversion uses the keyless daily [exchange-api](https://github.com/fawazahmed0/exchange-api) endpoints with their fallback host; set `NOVA_FX_OFFLINE=true` to disable lookup.
 
 **Estimates are token-based.** Before a turn, Nova counts the actual system prompt, conversation history, objective, and tool schemas, then forecasts cumulative input growth across the expected agent loop. `nova --estimate "task"` performs that preflight without starting a sandbox or calling a model. Provider-reported usage remains the final accounting truth.
+
+## Memory and recall
+
+Nova keeps durable memory in plain markdown you can inspect, commit, edit, or delete: project knowledge lives in `.nova/memory.md`; personal preferences live beside your Nova settings. `# we use bun, not npm` records a project fact. `/memory` shows both stores and their budgets.
+
+Memory is deliberately smaller than history. Core facts marked with `--core` are always recalled; everything else is selected locally for the current request by matching repository names, commands, files, and domain terms. Already-recalled entries are not sent again in the same thread. This keeps prompt cost bounded without an embedding service or sending memory to another provider.
+
+```text
+/memory add --kind convention we use bun, not npm
+/memory add --core --user --kind preference keep explanations concise
+/memory replace use bun => use bun 1.3 and never npm
+/memory recall package scripts
+/memory forget 2
+```
+
+Kinds are `preference`, `convention`, `decision`, `lesson`, and `fact`. Memory writes reject invisible formatting and instruction-shaped injection content. A unique text fragment can replace an entry, avoiding fragile row numbers when correcting knowledge. `/history search <text>` uses the local native SQLite + FTS5 index when its platform package is installed, returning ranked snapshot or journal evidence with context. It falls back automatically to verified session JSON when the native engine is unavailable. `/history status` shows which path is active. This is the larger episodic layer for details that do not deserve permanent prompt space.
 
 ## Voice, language and keyboard input
 

@@ -54,6 +54,7 @@ export type GlyphSet = {
   collapsed: string;
   expanded: string;
   arrowUp: string;
+  arrowRight: string;
   arrowDown: string;
   /** Diff gutter marks. */
   plus: string;
@@ -94,6 +95,7 @@ export const UNICODE_GLYPHS: GlyphSet = {
   collapsed: "▸",
   expanded: "▾",
   arrowUp: "↑",
+  arrowRight: "→",
   arrowDown: "↓",
   plus: "+",
   minus: "-",
@@ -141,6 +143,7 @@ export const ASCII_GLYPHS: GlyphSet = {
   collapsed: ">",
   expanded: "v",
   arrowUp: "^",
+  arrowRight: "->",
   arrowDown: "v",
   plus: "+",
   minus: "-",

@@ -124,6 +124,23 @@ export class CheckpointStore {
     return this.checkpoints[this.checkpoints.length - 1];
   }
 
+  /**
+   * The actual patch since the last checkpoint, for `/diff`.
+   *
+   * Three lines of context rather than git's default of three-with-function-headers off: the
+   * function header (`-W` would give the whole function) is what makes a hunk locatable without
+   * opening the file, and costs one line per hunk.
+   */
+  async diffPatch(): Promise<string> {
+    const checkpoint = this.latest();
+    if (!checkpoint) return "";
+    const result = await this.git(
+      ["diff", "--unified=3", "--function-context=false", "--no-color", checkpoint.tree, "--", ...EXCLUDE_NOVA],
+      { cwd: this.root },
+    );
+    return result.exitCode === 0 ? result.stdout : "";
+  }
+
   /** A stat summary of what changed since the last checkpoint, for `/diff`. Empty before any turn. */
   async diffStat(): Promise<string> {
     const checkpoint = this.latest();

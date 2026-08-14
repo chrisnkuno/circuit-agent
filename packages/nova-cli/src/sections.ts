@@ -1,4 +1,5 @@
 import type { ColorDepth } from "./banner";
+import type { Palette } from "./theme";
 import { BOLD, CYAN, DIM, GREEN, RED, YELLOW, paint, paintAll } from "./ansi";
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { visibleWidth } from "./markdown";
@@ -31,17 +32,44 @@ export type SectionStyle = {
   width: number;
   depth: ColorDepth;
   glyphs?: GlyphSet;
+  /**
+   * The colours to paint the tones in. Omitted, the tones fall back to the plain ANSI eight, which
+   * is what every caller expected before themes existed and what a test wants when it is checking
+   * layout rather than colour.
+   */
+  palette?: Palette;
 };
 
 export type Tone = "neutral" | "good" | "bad" | "warn" | "accent";
 
-const TONE_CODE: Record<Tone, string> = {
+const FALLBACK_TONE_CODE: Record<Tone, string> = {
   neutral: DIM,
   good: GREEN,
   bad: RED,
   warn: YELLOW,
   accent: CYAN,
 };
+
+/**
+ * The escape code for a tone.
+ *
+ * Tones, not colours, are what the renderers ask for — `accent` rather than cyan — which is the
+ * whole reason a theme can change the look of the transcript without any of them being edited.
+ * `neutral` stays DIM even under a theme: it is a *weight*, and a theme that recoloured it would
+ * turn the transcript's subordinate text into another voice competing with the main one.
+ */
+function toneCode(tone: Tone, style: SectionStyle): string {
+  if (style.depth === "none") return "";
+  const palette = style.palette;
+  if (!palette) return FALLBACK_TONE_CODE[tone];
+  switch (tone) {
+    case "neutral": return DIM;
+    case "good": return palette.success || FALLBACK_TONE_CODE.good;
+    case "bad": return palette.error || FALLBACK_TONE_CODE.bad;
+    case "warn": return palette.warning || FALLBACK_TONE_CODE.warn;
+    case "accent": return palette.primary || FALLBACK_TONE_CODE.accent;
+  }
+}
 
 /** The left margin every transcript line shares, so nothing sits flush against the terminal edge. */
 export const GUTTER = "  ";
@@ -67,7 +95,10 @@ export function rule(style: SectionStyle, options: { label?: string; tone?: Tone
   const trailingWidth = visibleWidth(trailing);
 
   if (!options.label) {
-    return `${GUTTER}${paint(glyphs.boxHorizontal.repeat(width), DIM, style.depth)}`;
+    // A trailing summary is honoured with or without a label. Dropping it when the label happened
+    // to be absent was silent data loss: the caller asked for text to be shown and got a bare line.
+    const bare = Math.max(0, width - trailingWidth);
+    return `${GUTTER}${paint(glyphs.boxHorizontal.repeat(bare), DIM, style.depth)}${trailing ? paint(trailing, DIM, style.depth) : ""}`;
   }
   const lead = glyphs.boxHorizontal.repeat(2);
   // The label is clipped to what is left after the lead and the trailing summary. A rule that grows
@@ -79,7 +110,7 @@ export function rule(style: SectionStyle, options: { label?: string; tone?: Tone
   return [
     GUTTER,
     paint(lead, DIM, style.depth),
-    label ? paintAll(label, [TONE_CODE[tone], BOLD], style.depth) : "",
+    label ? paintAll(label, [toneCode(tone, style), BOLD], style.depth) : "",
     paint(glyphs.boxHorizontal.repeat(fill), DIM, style.depth),
     trailing ? paint(trailing, DIM, style.depth) : "",
   ].join("");
@@ -95,17 +126,17 @@ export function rule(style: SectionStyle, options: { label?: string; tone?: Tone
 export function heading(text: string, level: 1 | 2 | 3, style: SectionStyle, tone: Tone = "accent"): string {
   if (level === 1) {
     return [
-      `${GUTTER}${paintAll(text, [TONE_CODE[tone], BOLD], style.depth)}`,
+      `${GUTTER}${paintAll(text, [toneCode(tone, style), BOLD], style.depth)}`,
       rule(style, { tone }),
     ].join("\n");
   }
-  if (level === 2) return `${GUTTER}${paintAll(text, [TONE_CODE[tone], BOLD], style.depth)}`;
+  if (level === 2) return `${GUTTER}${paintAll(text, [toneCode(tone, style), BOLD], style.depth)}`;
   return `${GUTTER}${paint(text, DIM, style.depth)}`;
 }
 
 /** A subordinate line: dim, indented one step past its heading. */
 export function note(text: string, style: SectionStyle, tone: Tone = "neutral"): string {
-  return `${GUTTER}${GUTTER}${paint(text, TONE_CODE[tone], style.depth)}`;
+  return `${GUTTER}${GUTTER}${paint(text, toneCode(tone, style), style.depth)}`;
 }
 
 export type PanelOptions = {
@@ -131,9 +162,9 @@ export function panel(lines: readonly string[], style: SectionStyle, options: Pa
   const available = Math.max(8, style.width - GUTTER.length - 4);
 
   if (options.gutterOnly) {
-    const edge = paint(glyphs.boxVertical, TONE_CODE[tone], depth);
+    const edge = paint(glyphs.boxVertical, toneCode(tone, style), depth);
     const head = options.title
-      ? [`${GUTTER}${paintAll(options.title, [TONE_CODE[tone], BOLD], depth)}${options.badge ? paint(`  ${options.badge}`, DIM, depth) : ""}`]
+      ? [`${GUTTER}${paintAll(options.title, [toneCode(tone, style), BOLD], depth)}${options.badge ? paint(`  ${options.badge}`, DIM, depth) : ""}`]
       : [];
     return [...head, ...lines.map((line) => `${GUTTER}${edge} ${clip(line, available, glyphs)}`)].join("\n");
   }
@@ -156,7 +187,7 @@ export function panel(lines: readonly string[], style: SectionStyle, options: Pa
   const top = [
     GUTTER,
     paint(glyphs.boxTopLeft + horizontal, DIM, depth),
-    titleShown ? paintAll(titleShown, [TONE_CODE[tone], BOLD], depth) : "",
+    titleShown ? paintAll(titleShown, [toneCode(tone, style), BOLD], depth) : "",
     paint(horizontal.repeat(fill), DIM, depth),
     badgeCell ? paint(badgeCell, DIM, depth) : "",
     paint(glyphs.boxTopRight, DIM, depth),
