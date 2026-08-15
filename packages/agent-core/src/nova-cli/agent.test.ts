@@ -71,6 +71,30 @@ describe("NovaAgent", () => {
     expect(toolEvents).toHaveLength(3);
   });
 
+  it("shows the approval prompt a preview of exactly what an edit or write would change", async () => {
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "edit_file", arguments: { path: "app.ts", oldText: "3000", newText: "8080" } }] },
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c2", name: "write_file", arguments: { path: "new.ts", content: "export const x = 1;\n" } }] },
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c3", name: "run_command", arguments: { command: "npm test" } }] },
+      { finishReason: "stop", content: "Done." },
+    ]);
+    const diffs: (string[] | undefined)[] = [];
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async (request) => { diffs.push(request.diff); return "allow"; },
+      workspace: new LocalWorkspace(root, undefined, async () => ({ exitCode: 0, stdout: "ok", stderr: "" })),
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+
+    await agent.send("change the port and add a file");
+    // edit_file: the exact substring swap, not the whole file.
+    expect(diffs[0]).toEqual(["- 3000", "+ 8080"]);
+    // write_file to a path that does not exist yet: every line reads as added.
+    expect(diffs[1]).toEqual(["+ export const x = 1;", "+ "]); // trailing newline is a trailing blank line
+    // A tool with no textual before/after (run_command) gets no diff at all.
+    expect(diffs[2]).toBeUndefined();
+  });
+
   it("refuses to call an unverified edit complete", async () => {
     // Inherited from the hosted runtime and worth keeping honest here: changing the workspace and
     // then declaring success without running anything is the single most common way an agent lies.

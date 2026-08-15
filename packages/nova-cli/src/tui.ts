@@ -16,9 +16,25 @@ const DIM = "\x1b[2m";
 const CYAN = "\x1b[36m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
+const MAGENTA = "\x1b[35m";
 
 function paint(text: string, code: string, depth: ColorDepth): string {
   return depth === "none" ? text : `${code}${text}${RESET}`;
+}
+
+/**
+ * The blast-radius mark a tool line carries, so what a call is *capable of* is legible before
+ * reading its arguments — a `run_command` line looks different from a `read_file` line at a
+ * glance, not just on close inspection.
+ *
+ * Keyed to the runtime's own `ToolEffect` ("none" | "workspace" | "external"), so the mark is
+ * exactly as trustworthy as the permission system that gates the call, not a separate heuristic
+ * guessing at danger from the tool name or arguments.
+ */
+export function effectGlyph(effect: "none" | "workspace" | "external", depth: ColorDepth): string {
+  if (effect === "workspace") return paint("✎", YELLOW, depth); // writes to disk
+  if (effect === "external") return paint("◎", MAGENTA, depth); // leaves the sandbox
+  return ""; // read-only: no mark earns its keep on the common case
 }
 
 /** Braille-free, theme-matched: the same star glyphs the banner lights up, cycling in place. */
@@ -135,6 +151,20 @@ export class StatusBar {
     }
     this.linesDrawn = 0;
   }
+}
+
+const SPARK_LEVELS = "▁▂▃▄▅▆▇█";
+
+/**
+ * A one-line shape for a series of numbers — session cost or tokens per turn — so the trend reads
+ * without a chart. Values are relative to the series' own max, not to any absolute scale: this
+ * answers "is it climbing" at a glance, which is the only question a status line has room for.
+ */
+export function sparkline(values: readonly number[]): string {
+  if (values.length === 0) return "";
+  const max = Math.max(...values);
+  if (max <= 0) return SPARK_LEVELS[0].repeat(values.length);
+  return values.map((value) => SPARK_LEVELS[Math.min(SPARK_LEVELS.length - 1, Math.floor((Math.max(0, value) / max) * (SPARK_LEVELS.length - 1)))]).join("");
 }
 
 /** How many terminal rows a printed string occupies at a given width. */

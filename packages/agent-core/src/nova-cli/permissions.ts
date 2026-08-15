@@ -48,6 +48,14 @@ export type ApprovalRequest = {
   /** Versioned authorization key persisted by `allow_always` / `deny_always`. */
   scopeKey: string;
   policyVersion: typeof APPROVAL_POLICY_VERSION;
+  /**
+   * A capped, hunked preview of exactly what this call would change, when one could be computed —
+   * attached by the caller (`agent.ts`), which is the layer that has workspace access. Not part of
+   * `actionDigest`: the digest already covers `call.arguments` in full, and the diff is a pure,
+   * always-recomputed display of that same data, so what a human approves and what the digest binds
+   * stay provably the same thing without needing the diff folded in.
+   */
+  diff?: string[];
 };
 
 export type ApprovalPrompt = (request: ApprovalRequest) => Promise<PermissionDecision>;

@@ -5,7 +5,8 @@ import { affordableOutputTokens, priceActualModelUsage, type ModelPriceCatalog }
 import type { ModelUsage } from "../providers/model";
 import type { ExaSearchClient } from "../providers/exa";
 import { CheckpointStore, type Checkpoint, type GitRunner } from "./checkpoints";
-import { capabilitiesForMode, PermissionLedger, type ApprovalPrompt, type NovaMode } from "./permissions";
+import { computeDiffLines } from "./diff";
+import { capabilitiesForMode, PermissionLedger, type ApprovalPrompt, type ApprovalRequest, type NovaMode } from "./permissions";
 import { buildNovaSystemPrompt, collectProjectContext, type ProjectContext } from "./prompt";
 import { assertTurnTransition, EventJournal, runtimeEventForJournal, type TurnStatus } from "./protocol";
 import {
@@ -127,7 +128,7 @@ export class NovaAgent {
           policyVersion: request.policyVersion,
         },
       }, { durable: true });
-      const decision = await options.approve(request);
+      const decision = await options.approve({ ...request, diff: await this.previewDiff(request) });
       await this.journal.append({ type: "approval_decided", turnId, actionDigest: request.actionDigest, decision }, { durable: true });
       if (decision === "allow" || decision === "allow_always") await this.activeTransition?.("running", true);
       return decision;
@@ -136,6 +137,32 @@ export class NovaAgent {
 
   get sessionId(): string {
     return this.session.id;
+  }
+
+  /**
+   * What a pending `write_file` or `edit_file` call would actually change, for the approval
+   * prompt to show. Only this layer has both the call's arguments and workspace access, which is
+   * why the diff is computed here rather than inside `PermissionLedger`.
+   */
+  private async previewDiff(request: ApprovalRequest): Promise<string[] | undefined> {
+    const args = (request.call.arguments ?? {}) as Record<string, unknown>;
+    if (request.tool.name === "edit_file") {
+      // oldText/newText are already exactly the changed region — no file read needed.
+      return computeDiffLines(String(args.oldText ?? ""), String(args.newText ?? ""));
+    }
+    if (request.tool.name === "write_file") {
+      const path = typeof args.path === "string" ? args.path : undefined;
+      const newContent = typeof args.content === "string" ? args.content : "";
+      if (!path) return undefined;
+      let oldContent = "";
+      try {
+        oldContent = (await this.workspace.readFile(path)).content;
+      } catch {
+        // No existing file: diffing against "" renders every line as added, correctly.
+      }
+      return computeDiffLines(oldContent, newContent);
+    }
+    return undefined;
   }
 
   /** Restores a previous session's transcript and standing approvals. */

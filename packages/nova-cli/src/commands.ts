@@ -79,9 +79,25 @@ export function completeFileMention(line: string, files: readonly string[]): [st
   return [[...prefixed, ...contained].slice(0, 50).map((file) => `@${file}`), `@${match[2]}`];
 }
 
-/** The completer readline is given: commands at the start of a line, file mentions anywhere in it. */
-export function completeInput(line: string, files: readonly string[] = []): [string[], string] {
-  return completeFileMention(line, files) ?? completeCommand(line);
+/**
+ * Completes free text against this session's own history: the request being typed might be one
+ * already asked, close to word for word, and Tab should find it rather than make you retype it.
+ * Skipped for `/commands` and `@mentions`, which already have their own, more specific completion.
+ */
+export function completeHistory(line: string, history: readonly string[]): [string[], string] | null {
+  if (line === "" || line.startsWith("/") || MENTION.test(line)) return null;
+  const lower = line.toLowerCase();
+  // Most recent first: asking for something again usually means the most recent phrasing of it.
+  const matches = [...new Set([...history].reverse().filter((entry) => entry !== line && entry.toLowerCase().startsWith(lower)))];
+  return matches.length > 0 ? [matches, line] : null;
+}
+
+/**
+ * The completer readline is given: file mentions anywhere in the line, then this session's own
+ * history for free text, then commands at the start of a line.
+ */
+export function completeInput(line: string, files: readonly string[] = [], history: readonly string[] = []): [string[], string] {
+  return completeFileMention(line, files) ?? completeHistory(line, history) ?? completeCommand(line);
 }
 
 export function isKnownCommand(name: string): boolean {
@@ -122,7 +138,7 @@ export function suggestCommand(name: string): string | undefined {
 }
 
 export const KEYBOARD_SHORTCUTS = [
-  ["Tab", "Complete a slash command"],
+  ["Tab", "Complete a slash command, @file, or a request you've asked before"],
   ["Ctrl-C", "Interrupt the current turn"],
   ["Up / Down", "Previous / next input"],
 ] as const;

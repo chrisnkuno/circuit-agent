@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./markdown";
 import {
   box,
+  effectGlyph,
   formatStatusLine,
   formatTokens,
   MarkdownStream,
@@ -12,6 +13,7 @@ import {
   ReplaceableBlock,
   rowsOccupied,
   Spinner,
+  sparkline,
   StatusBar,
   thinkingVerb,
   wrappedRemainder,
@@ -396,6 +398,48 @@ describe("renderFilesTouched", () => {
     const lines = rendered.split("\n").filter((line) => line.includes("src/"));
     expect(lines).toHaveLength(2);
     expect(rendered.indexOf("src/a.ts")).toBeLessThan(rendered.indexOf("src/b.ts"));
+  });
+});
+
+describe("effectGlyph", () => {
+  it("marks nothing for a read-only call", () => {
+    expect(effectGlyph("none", "truecolor")).toBe("");
+  });
+
+  it("marks a workspace-writing call, uncoloured when colour is off", () => {
+    expect(plain(effectGlyph("workspace", "truecolor"))).not.toBe("");
+    expect(effectGlyph("workspace", "none")).not.toMatch(ESCAPE);
+  });
+
+  it("marks an external call differently from a workspace one", () => {
+    expect(plain(effectGlyph("external", "truecolor"))).not.toBe(plain(effectGlyph("workspace", "truecolor")));
+  });
+});
+
+describe("sparkline", () => {
+  it("is empty for an empty series", () => {
+    expect(sparkline([])).toBe("");
+  });
+
+  it("scales to the series' own maximum, not an absolute one", () => {
+    expect(sparkline([0, 5, 10])).toBe(sparkline([0, 50, 100]));
+  });
+
+  it("reads flat when every value is the same", () => {
+    const line = sparkline([3, 3, 3]);
+    expect(new Set(line)).toHaveProperty("size", 1);
+  });
+
+  it("does not divide by zero when the whole series is zero", () => {
+    expect(sparkline([0, 0, 0])).toHaveLength(3);
+  });
+
+  it("rises left to right for a rising series", () => {
+    const levels = "▁▂▃▄▅▆▇█";
+    const line = sparkline([1, 2, 3, 4]);
+    const indices = [...line].map((glyph) => levels.indexOf(glyph));
+    expect(indices).toEqual([...indices].sort((left, right) => left - right));
+    expect(indices[0]).toBeLessThan(indices.at(-1)!);
   });
 });
 

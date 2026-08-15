@@ -91,6 +91,32 @@ describe("cost ledger", () => {
     expect(ledger.budgetWarning()).toContain("--budget");
   });
 
+  it("forecasts turns remaining from the average cost per turn so far, once there is a trend", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", budget: fromUnits(1, "USD") });
+    ledger.record({ usage: usage(100_000, 0), iterations: 1, toolCalls: 1, elapsedMs: 1_000 }); // $0.50, one turn — no trend yet
+    expect(ledger.turnsRemaining).toBe(1); // still computable, just not shown in the warning below (only one turn so far)
+    expect(ledger.budgetWarning()).toBeUndefined();
+
+    ledger.record({ usage: usage(70_000, 0), iterations: 1, toolCalls: 1, elapsedMs: 1_000 }); // $0.85 total, avg $0.425/turn
+    // $0.15 left ÷ $0.425/turn average rounds down to zero more turns at this pace.
+    expect(ledger.turnsRemaining).toBe(0);
+    expect(ledger.budgetWarning()).toContain("more turn");
+    expect(ledger.formatReport()).toContain("more turn");
+  });
+
+  it("reports zero turns remaining once the budget is already gone", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", budget: fromUnits(1, "USD") });
+    ledger.record({ usage: usage(300_000, 0), iterations: 1, toolCalls: 1, elapsedMs: 1_000 }); // $1.50, over budget
+    expect(ledger.turnsRemaining).toBe(0);
+  });
+
+  it("has no forecast to give when there is no budget or no price", () => {
+    expect(new CostLedger({ prices: opus, display: "USD" }).turnsRemaining).toBeUndefined();
+    const unpriced = new CostLedger({ display: "USD", budget: fromUnits(1, "USD") });
+    unpriced.record({ usage: usage(100_000, 0), iterations: 1, toolCalls: 1, elapsedMs: 1_000 });
+    expect(unpriced.turnsRemaining).toBeUndefined();
+  });
+
   it("enforces a budget stated in the display currency against costs priced in another", () => {
     // The user says "stop at RWF 1,000"; the provider bills in USD. Both must be true at once.
     const ledger = new CostLedger({ prices: opus, display: "RWF", rates: [rwfPerUsd], budget: fromUnits(1_000, "RWF") });

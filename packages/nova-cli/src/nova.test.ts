@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Interface } from "node:readline/promises";
+import { NovaAgent } from "@circuit-nova/nova-core/nova-cli/agent";
+import type { AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "@circuit-nova/nova-core";
 import { visibleWidth } from "./markdown";
-import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders, renderUserMessage } from "./nova";
+import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders, renderUserMessage, replaySession } from "./nova";
 
 const plain = (value: string) => value.replace(/\[[0-9;]*m/g, "");
 
@@ -73,6 +75,12 @@ describe("argument parsing", () => {
     // then drops into the REPL with the user's actual request thrown away.
     expect(parseArgs(["--resume", "keep", "going"])).toMatchObject({ resume: "latest", prompt: "keep going" });
     expect(parseArgs(["--resume", "fix the failing test"])).toMatchObject({ resume: "latest", prompt: "fix the failing test" });
+  });
+
+  it("reads --replay the same way it reads --resume, so a request never gets swallowed as an id", () => {
+    expect(parseArgs(["--replay"]).replay).toBe("latest");
+    expect(parseArgs(["--replay", "20260808T000000Z-abc123"]).replay).toBe("20260808T000000Z-abc123");
+    expect(parseArgs(["--replay", "show me what happened"])).toMatchObject({ replay: "latest", prompt: "show me what happened" });
   });
 
   it("bounds the sandbox lifetime flag and the image preset", () => {
@@ -223,6 +231,33 @@ describe("renderEvent", () => {
     expect(final).toContain("✓");
     expect(final).toContain("src/app.ts"); // the argument survives into the completed line
     expect(final).toContain("3 lines");
+  });
+
+  it("marks a workspace-writing call differently from a read-only one", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "a.ts" } } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "x" } });
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c2", toolName: "write_file", effect: "workspace", arguments: { path: "b.ts" } } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c2", toolName: "write_file", isError: false, effect: "workspace", content: "wrote" } });
+    restore();
+    expect(writes[0]).not.toContain("✎");
+    expect(writes.at(-1)).toContain("✎");
+  });
+
+  it("groups concurrent calls into a lane, retroactively marking the one already on screen", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "a.ts" } } });
+    // c1's line is not yet part of a batch — no lane bar.
+    expect(writes[0]).not.toContain("┃");
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c2", toolName: "read_file", effect: "none", arguments: { path: "b.ts" } } });
+    // Announcing c2 while c1 is still open retroactively bars c1's line and bars c2's own.
+    const rewriteOfC1 = writes.find((chunk) => chunk.includes("a.ts") && chunk.includes("┃"));
+    expect(rewriteOfC1).toBeDefined();
+    expect(writes.at(-1)).toContain("┃");
+    expect(writes.at(-1)).toContain("b.ts");
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "x" } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c2", toolName: "read_file", isError: false, effect: "none", content: "y" } });
+    restore();
   });
 
   it("prints the result on its own line when something interleaved after the announcement", () => {
@@ -415,6 +450,79 @@ describe("main() — branches that resolve before any interactive input is neede
       expect(stderr).toContain("No terminal attached");
     } finally {
       if (originalIsTTY) Object.defineProperty(process.stdin, "isTTY", originalIsTTY);
+    }
+  });
+
+  it("--replay needs no provider at all, and says plainly when there is nothing to replay", async () => {
+    const { code, stdout } = await run(["--cwd", tmpRoot, "--replay"]);
+    expect(code).toBe(1);
+    expect(stdout).toContain("No sessions to replay");
+  });
+});
+
+describe("replaySession", () => {
+  const usage = { inputTokens: 10, outputTokens: 5, totalTokens: 15, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+  const instant = async () => {}; // no real waiting — the pacing logic itself is not what's under test here
+
+  /** A model whose turns are scripted, mirroring agent-core's own test fixture. */
+  function scriptedModel(turns: Array<Partial<AgentModelTurn>>): AgentTurnProvider {
+    let index = 0;
+    return {
+      async complete(request: AgentModelRequest) {
+        void request;
+        const turn = turns[Math.min(index, turns.length - 1)];
+        index += 1;
+        return { responseId: `r${index}`, model: "nova-test", finishReason: "stop", content: "Done.", toolCalls: [], usage, ...turn } as AgentModelTurn;
+      },
+    };
+  }
+
+  it("plays a saved session's tool calls and final answer back through the same renderer a live run uses", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const root = await mkdtemp(path.join(os.tmpdir(), "nova-replay-"));
+    await writeFile(path.join(root, "app.ts"), "export const port = 3000;\n");
+    try {
+      const model = scriptedModel([
+        { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "app.ts" } }] },
+        { finishReason: "stop", content: "The port is 3000." },
+      ]);
+      const agent = new NovaAgent({
+        root, model, prices: { inputRwfPerMillionTokens: 1, outputRwfPerMillionTokens: 1 }, mode: "plan", approve: async () => "deny",
+      });
+      await agent.send("what port is it on?");
+
+      configureRendering("none", true);
+      const { writes, restore } = captureStdout();
+      const code = await replaySession(root, agent.sessionId, "none", { sleep: instant, width: 80 });
+      restore();
+
+      expect(code).toBe(0);
+      const output = writes.join("");
+      expect(output).toContain("what port is it on?"); // the user's original request, replayed as a bubble
+      expect(output).toContain("read_file"); // the tool-call timeline, verbatim
+      expect(output).toContain("The port is 3000."); // the final answer, typed back out
+      expect(output).toContain("end of replay");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports plainly when the session id does not exist", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const root = await mkdtemp(path.join(os.tmpdir(), "nova-replay-empty-"));
+    try {
+      configureRendering("none", true);
+      const { writes, restore } = captureStdout();
+      const code = await replaySession(root, "20260101T000000Z-abcdef", "none", { sleep: instant });
+      restore();
+      expect(code).toBe(1);
+      expect(writes.join("")).toContain("No session");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

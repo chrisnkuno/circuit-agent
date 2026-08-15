@@ -4,15 +4,16 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agent";
-import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
+import type { ApprovalRequest, NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { listSessions, loadSession } from "@circuit-nova/nova-core/nova-cli/session";
+import { readEventJournal } from "@circuit-nova/nova-core/nova-cli/protocol";
 import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, MarkdownStream, PromptBox, PROMPT_PREFIX_COLUMNS, renderAgentLabel, renderFilesTouched, ReplaceableBlock, Spinner, StatusBar, wrappedRemainder, wrapPlain } from "./tui";
+import { box, effectGlyph, MarkdownStream, PromptBox, PROMPT_PREFIX_COLUMNS, renderAgentLabel, renderFilesTouched, ReplaceableBlock, sparkline, Spinner, StatusBar, wrappedRemainder, wrapPlain } from "./tui";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
@@ -32,6 +33,10 @@ import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
  */
 
 const RESET = "[0m";
+/** ASCII bell — most terminals either sound it or, once configured, raise a desktop notification. */
+const BEL = "\x07";
+/** How long a turn has to run before finishing it is worth a nudge back to the terminal. */
+const NOTIFY_AFTER_MS = 10_000;
 
 /**
  * Whether output is going somewhere that can render colour and be drawn on.
@@ -57,6 +62,8 @@ type ParsedArgs = {
   mode: NovaMode;
   prompt: string | null;
   resume: string | null;
+  /** A session to play back from its durable event journal, rather than continue. */
+  replay: string | null;
   listSessions: boolean;
   listProviders: boolean;
   doctor: boolean;
@@ -88,7 +95,7 @@ const SESSION_ID = /^\d{8}T\d{6}Z-[a-z0-9]{6}$/;
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const updateRequested = argv[0] === "update" || argv.includes("--update") || argv.includes("--check-update");
   const parsed: ParsedArgs = {
-    mode: "build", prompt: null, resume: null, listSessions: false, listProviders: false, doctor: false,
+    mode: "build", prompt: null, resume: null, replay: null, listSessions: false, listProviders: false, doctor: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false,
     root: process.cwd(), help: false,
     backend: "local", upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined,
@@ -116,6 +123,11 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       const next = argv[index + 1];
       if (next && (next === "latest" || SESSION_ID.test(next))) { parsed.resume = next; index += 1; }
       else parsed.resume = "latest";
+    }
+    else if (argument === "--replay") {
+      const next = argv[index + 1];
+      if (next && (next === "latest" || SESSION_ID.test(next))) { parsed.replay = next; index += 1; }
+      else parsed.replay = "latest";
     }
     else if (argument === "--cwd") { parsed.root = path.resolve(argv[index + 1] ?? "."); index += 1; }
     else if (argument === "--sandbox") {
@@ -152,6 +164,7 @@ ${style.bold("nova")} — a coding agent in your terminal
   nova --plan               Plan mode: read and reason, never write
   nova --auto               Auto mode: edits apply without per-call approval
   nova --resume [id]        Continue a previous session ("latest" by default)
+  nova --replay [id]        Play a previous session back at typing speed, then exit
   nova --sessions           List sessions in this project
   nova --cwd <dir>          Work in a different project root
   nova update               Check, confirm, and install the latest Nova CLI
@@ -205,7 +218,7 @@ let awaitingInput = false;
 /** Whether an approval question is on screen. Same rule: Ctrl-C does not close it mid-answer. */
 let approvalPending = false;
 /** Announced calls awaiting their result, by call id, so each can be rewritten where it sits. */
-const pendingCalls = new Map<string, { line: number; detail: string }>();
+const pendingCalls = new Map<string, { line: number; detail: string; toolName: string; effect: "none" | "workspace" | "external"; lane: boolean }>();
 /** Paths successfully written or edited this turn, for the "files modified" footer. */
 let touchedFiles = new Set<string>();
 
@@ -230,9 +243,16 @@ function forgetToolLines(): void {
   pendingCalls.clear();
 }
 
-/** Composes one tool line: a mark, the tool, what it was called with, and how it went. */
-function toolLineText(mark: string, name: string, detail: string, summary: string): string {
-  const head = `  ${mark} ${style.cyan(name)}`;
+/**
+ * Composes one tool line: a mark, the tool's blast-radius glyph, the tool, what it was called
+ * with, and how it went. `lane` swaps the two-space indent for a connecting bar when this call
+ * is part of a batch fired concurrently with others still in flight, so the batch reads as one
+ * group of lanes rather than a coincidence of adjacent lines.
+ */
+function toolLineText(mark: string, name: string, detail: string, summary: string, effect: "none" | "workspace" | "external", lane: boolean): string {
+  const indent = lane ? style.dim("┃") : " ";
+  const glyph = effectGlyph(effect, renderDepth);
+  const head = `${indent} ${mark}${glyph ? ` ${glyph}` : ""} ${style.cyan(name)}`;
   const middle = detail ? `  ${detail}` : "";
   const tail = summary ? style.dim(` · ${summary}`) : "";
   return `${head}${middle}${tail}`;
@@ -304,10 +324,21 @@ export function renderEvent(event: NovaEvent): void {
   }
   if (runtime.type === "tool_call") {
     const detail = describeToolCall(runtime.toolName, runtime.arguments);
+    // A second call announced while the first is still open makes both part of one concurrent
+    // batch — retroactively mark the still-open ones too, so the whole group reads as a lane
+    // rather than the first line looking like an unrelated call that happened to be nearby.
+    const lane = pendingCalls.size > 0;
+    if (lane) {
+      for (const [id, entry] of pendingCalls) {
+        if (entry.lane || entry.line < 0) continue;
+        const text = toolLineText(style.dim("⋯"), entry.toolName, style.dim(entry.detail), "", entry.effect, true);
+        if (toolLines.update(entry.line, text)) pendingCalls.set(id, { ...entry, lane: true });
+      }
+    }
     // Announcing then rewriting needs a cursor. Piped, the announcement would be a duplicate line
     // nobody can erase, so only the completed line below is printed.
-    const line = liveTerminal ? toolLines.append(toolLineText(style.dim("⋯"), runtime.toolName, style.dim(detail), "")) : -1;
-    pendingCalls.set(runtime.toolCallId, { line, detail });
+    const line = liveTerminal ? toolLines.append(toolLineText(style.dim("⋯"), runtime.toolName, style.dim(detail), "", runtime.effect, lane)) : -1;
+    pendingCalls.set(runtime.toolCallId, { line, detail, toolName: runtime.toolName, effect: runtime.effect, lane });
     return;
   }
   if (runtime.type === "tool_result") {
@@ -323,13 +354,101 @@ export function renderEvent(event: NovaEvent): void {
     // parallel-safe calls correctly too: several are announced before the first result returns, so
     // the line to rewrite is usually not the last one printed.
     const pending = pendingCalls.get(runtime.toolCallId);
-    const completed = toolLineText(mark, runtime.toolName, style.dim(pending?.detail ?? ""), summary);
+    const completed = toolLineText(mark, runtime.toolName, style.dim(pending?.detail ?? ""), summary, runtime.effect, pending?.lane ?? false);
     if (pending === undefined || pending.line < 0 || !toolLines.update(pending.line, completed)) {
       process.stdout.write(`${completed}\n`);
     }
     pendingCalls.delete(runtime.toolCallId);
     return;
   }
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Real time between two journal entries, compressed into a pace a person can actually watch. */
+function replayPace(fromIso: string, toIso: string): number {
+  const delta = Date.parse(toIso) - Date.parse(fromIso);
+  if (!Number.isFinite(delta) || delta <= 0) return 40;
+  return Math.min(500, Math.max(40, delta)); // a multi-minute tool call is not worth a real wait
+}
+
+/** Drip-feeds already-final text through the same live markdown renderer a streamed turn uses. */
+async function typeOut(text: string, depth: ReturnType<typeof detectColorDepth>, width: number, sleep: (ms: number) => Promise<void>): Promise<void> {
+  const stream = new MarkdownStream(process.stdout, depth, () => width, true);
+  for (const token of text.split(/(\s+)/)) {
+    if (token === "") continue;
+    stream.push(token);
+    if (token.trim() !== "") await sleep(12);
+  }
+  stream.end();
+}
+
+/**
+ * Plays a saved session back through the same renderer a live run uses, at roughly the pace it
+ * originally happened.
+ *
+ * The durable event journal (`readEventJournal`) captures the tool-call timeline verbatim — every
+ * call, result and approval decision, in order, with real timestamps — but deliberately does not
+ * journal token-level `assistant_delta`s, only each turn's final text (in the session record). So
+ * tool activity replays at its original granularity; prose replays as a typing simulation over
+ * the text that was actually said, not a literal re-stream. Checkpoints are not journaled either
+ * and are silently absent from a replay for the same reason.
+ */
+export async function replaySession(
+  root: string,
+  sessionId: string,
+  depth: ReturnType<typeof detectColorDepth>,
+  options: { sleep?: (ms: number) => Promise<void>; width?: number } = {},
+): Promise<number> {
+  const sleep = options.sleep ?? defaultSleep;
+  const width = options.width ?? process.stdout.columns ?? 80;
+  const [record, envelopes] = await Promise.all([loadSession(root, sessionId), readEventJournal(root, sessionId)]);
+  if (!record && envelopes.length === 0) {
+    process.stdout.write(style.yellow(`  No session ${sessionId} found in ${root}.\n`));
+    return 1;
+  }
+
+  const turnOrder: string[] = [];
+  for (const envelope of envelopes) {
+    if (!turnOrder.includes(envelope.payload.turnId)) turnOrder.push(envelope.payload.turnId);
+  }
+  const userTurns = (record?.messages ?? []).filter((message) => message.role === "user").map((message) => message.content);
+  const spokenTurns = (record?.messages ?? [])
+    .filter((message) => message.role === "assistant" && !("toolCalls" in message) && message.content.trim() !== "")
+    .map((message) => message.content);
+
+  process.stdout.write(style.dim(`  ◂ replaying ${sessionId}${record ? ` — ${record.title}` : ""}\n\n`));
+
+  let previousTimestamp: string | undefined;
+  const turns = Math.max(turnOrder.length, userTurns.length, spokenTurns.length);
+  for (let index = 0; index < turns; index += 1) {
+    if (userTurns[index] !== undefined) {
+      process.stdout.write(`${renderUserMessage(userTurns[index], depth, width)}\n`);
+      await sleep(150);
+    }
+    const turnId = turnOrder[index];
+    const turnEnvelopes = turnId ? envelopes.filter((envelope) => envelope.payload.turnId === turnId) : [];
+    for (const envelope of turnEnvelopes) {
+      if (previousTimestamp) await sleep(replayPace(previousTimestamp, envelope.timestamp));
+      previousTimestamp = envelope.timestamp;
+      const payload = envelope.payload;
+      if (payload.type === "runtime") renderEvent({ type: "runtime", event: payload.event });
+      else if (payload.type === "compaction") {
+        renderEvent({ type: "compaction", tokensBefore: 0, messagesBefore: payload.messagesBefore, messagesAfter: payload.messagesAfter });
+      } else if (payload.type === "approval_decided") {
+        const allowed = payload.decision === "allow" || payload.decision === "allow_always";
+        process.stdout.write(`  ${allowed ? style.green("✓ approved") : style.red("✗ denied")}\n`);
+      }
+    }
+    if (spokenTurns[index] !== undefined) {
+      endStreamedLine();
+      process.stdout.write(`${renderAgentLabel(depth)}\n`);
+      await typeOut(spokenTurns[index], depth, width, sleep);
+      process.stdout.write("\n\n");
+    }
+  }
+  process.stdout.write(style.dim("  ◂ end of replay\n"));
+  return 0;
 }
 
 /**
@@ -397,9 +516,17 @@ export function readFxRates(environment: Record<string, string | undefined>): Fx
   return configured;
 }
 
+/** Colours a diff preview line by its leading mark, so an approval reads at a glance. */
+function paintDiffLine(line: string): string {
+  if (line === "⋯") return style.dim(line);
+  if (line.startsWith("+")) return style.green(line);
+  if (line.startsWith("-")) return style.red(line);
+  return style.dim(line);
+}
+
 /** The approval gate, as a person experiences it. */
 export function createApprovalPrompt(readline: Interface, interactive: boolean) {
-  return async ({ summary }: { summary: string }): Promise<PermissionDecision> => {
+  return async ({ summary, diff }: Pick<ApprovalRequest, "summary" | "diff">): Promise<PermissionDecision> => {
     // Without a terminal there is nobody to ask, and a prompt written to a pipe would either hang
     // or read the next line of piped input as an answer. Denying is the only honest result — and
     // it is reported, so the run does not look like the model simply chose not to act.
@@ -416,6 +543,11 @@ export function createApprovalPrompt(readline: Interface, interactive: boolean) 
     statusBar.clear();
     endStreamedLine();
     process.stdout.write(`\n  ${style.yellow("?")} Nova wants to ${style.bold(summary)}\n`);
+    // What you approve is what gets executed — see the exact change before answering, not just the
+    // one-line summary. Recomputed fresh every time, from the same arguments the digest binds.
+    if (diff && diff.length > 0) {
+      process.stdout.write(`${box(diff.map(paintDiffLine), { depth: renderDepth, title: "preview", titleColor: "yellow" })}\n`);
+    }
     approvalPending = true;
     let answer: string;
     try {
@@ -497,6 +629,17 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (args.replay) {
+    const id = args.replay === "latest" ? (await listSessions(args.root, 1))[0]?.id : args.replay;
+    if (!id) {
+      process.stdout.write(style.yellow("No sessions to replay.\n"));
+      return 1;
+    }
+    const replayDepth = detectColorDepth(process.env as Record<string, string | undefined>, Boolean(process.stdout.isTTY));
+    configureRendering(replayDepth, Boolean(process.stdout.isTTY));
+    return replaySession(args.root, id, replayDepth);
+  }
+
   const environment = process.env as Record<string, string | undefined>;
   const resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
   if ("error" in resolved) {
@@ -537,11 +680,14 @@ async function main(): Promise<number> {
     return 1;
   }
 
+  // Every free-text request this session, most recent last — Tab-completable, so asking for
+  // something close to what you asked before does not mean retyping it.
+  const inputHistory: string[] = [];
   const readline = createInterface({
     input: process.stdin,
     output: process.stdout,
     // Reads the cached project listing below, so completion never blocks on a filesystem walk.
-    completer: (line: string) => completeInput(line, projectFiles),
+    completer: (line: string) => completeInput(line, projectFiles, inputHistory),
   });
   // Runtime-only readline state — see `ReadlineInternals`: the typed surface leaves these out.
   const rl = readline as unknown as Interface & ReadlineInternals;
@@ -747,6 +893,11 @@ async function main(): Promise<number> {
       process.stdout.write(style.dim(`\n  ${result.status} · ${ledger.formatTurn(turn)}\n`));
       const warning = ledger.budgetWarning();
       if (warning) process.stdout.write(`  ${style.yellow(warning)}\n`);
+      // A turn long enough to plausibly have been left running while its person did something
+      // else earns a nudge back — the terminal bell, which every emulator either sounds or (more
+      // often, once configured) turns into an actual desktop notification. Short turns stay silent:
+      // a bell on every reply is a bell nobody listens to anymore.
+      if (ttyMode && turn.elapsedMs >= NOTIFY_AFTER_MS) process.stdout.write(BEL);
       refreshProjectFiles(); // a turn can create files, and the next mention should complete them
     } catch (error) {
       activity.awaitingFirstDelta = false;
@@ -862,6 +1013,7 @@ async function main(): Promise<number> {
   for (;;) {
     const input = await promptUser();
     if (input === "") break; // Ctrl-D — treat like /exit
+    inputHistory.push(input);
     process.stdout.write(`${renderUserMessage(input, depth, process.stdout.columns ?? 80)}\n`);
 
     if (input === "/exit" || input === "/quit") break;
@@ -936,7 +1088,11 @@ async function main(): Promise<number> {
       continue;
     }
     if (input === "/cost") {
-      process.stdout.write(`${ledger.formatReport()}\n`);
+      const history = ledger.history;
+      // The shape of spend across turns, not just the total — a flat line and a spike to the
+      // same total are two very different sessions to have had.
+      const trend = history.length > 1 ? `  ${style.dim(`spend  ${sparkline(history.map((turn) => turn.cost?.micros ?? 0))}`)}\n` : "";
+      process.stdout.write(`${ledger.formatReport()}\n${trend}`);
       continue;
     }
     if (input === "/where") {

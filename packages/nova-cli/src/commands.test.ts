@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, completeCommand, completeFileMention, completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { COMMANDS, completeCommand, completeFileMention, completeHistory, completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
 
 describe("command registry", () => {
   it("lists every command exactly once, each starting with a slash", () => {
@@ -86,6 +86,36 @@ describe("file mention completion", () => {
   });
 });
 
+describe("completeHistory", () => {
+  const history = ["fix the login bug", "fix the failing test", "add a health check"];
+
+  it("finds previous requests that start with what's typed so far", () => {
+    const [matches] = completeHistory("fix the", history)!;
+    expect(matches).toContain("fix the login bug");
+    expect(matches).toContain("fix the failing test");
+    expect(matches).not.toContain("add a health check");
+  });
+
+  it("prefers the most recently asked match first", () => {
+    const [matches] = completeHistory("fix the", history)!;
+    expect(matches[0]).toBe("fix the failing test"); // asked after "fix the login bug"
+  });
+
+  it("finds nothing for empty input, slash commands, or an @mention", () => {
+    expect(completeHistory("", history)).toBeNull();
+    expect(completeHistory("/plan", history)).toBeNull();
+    expect(completeHistory("read @src/app", history)).toBeNull();
+  });
+
+  it("does not suggest the line back to itself", () => {
+    expect(completeHistory("fix the login bug", history)).toBeNull();
+  });
+
+  it("finds nothing when nothing in history matches", () => {
+    expect(completeHistory("write a new feature", history)).toBeNull();
+  });
+});
+
 describe("completeInput", () => {
   const files = ["src/app.ts"];
 
@@ -94,8 +124,13 @@ describe("completeInput", () => {
     expect(completeInput("please read @src/", files)[0]).toContain("@src/app.ts");
   });
 
-  it("offers nothing for ordinary prose", () => {
+  it("offers nothing for ordinary prose with no matching history", () => {
     expect(completeInput("fix the failing test", files)[0]).toEqual([]);
+  });
+
+  it("offers matching history for ordinary prose when history is given", () => {
+    const matches = completeInput("fix the", files, ["fix the login bug"])[0];
+    expect(matches).toContain("fix the login bug");
   });
 
   it("prefers the mention when a line has both a command and a mention", () => {
