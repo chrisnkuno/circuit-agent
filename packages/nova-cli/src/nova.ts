@@ -7,7 +7,8 @@ import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agen
 import type { ApprovalRequest, NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { listSessions, loadSession } from "@circuit-nova/nova-core/nova-cli/session";
 import { readEventJournal } from "@circuit-nova/nova-core/nova-cli/protocol";
-import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, PROVIDERS, resolveProvider, type ResolvedProvider } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { loadCredentials, saveCredential } from "./credentials";
 import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
@@ -184,6 +185,9 @@ ${style.bold("Model")}
   nova --model <id>         Model to run (defaults to the provider's)
   nova --providers          Show which providers are configured, and what is missing
   nova --doctor             Test every endpoint Nova needs and name the one that fails
+                            No provider configured? Run nova at a terminal and it will ask for a
+                            key interactively (saved to ~/.nova/credentials.json). /settings
+                            changes it later without restarting.
 
 ${style.bold("Cost")}
   nova --location EG        Select a country (auto-detected from your locale by default)
@@ -578,6 +582,42 @@ export async function confirmSpendingCap(readline: Interface, interactive: boole
   return answer === "" || answer === "y" || answer === "yes";
 }
 
+/**
+ * Asks for a provider and an API key, saves it to `~/.nova/credentials.json`, and applies it to
+ * this process immediately — the interactive alternative to failing at startup with "set one of
+ * ANTHROPIC_API_KEY, OPENAI_API_KEY, ...". A real environment variable always takes precedence
+ * (set once, deliberately, by whoever manages that machine); this is for the person who just
+ * wants to paste a key and go, the same way `gh auth login` or `heroku login` works.
+ *
+ * Takes its own `Interface` rather than reusing the caller's readline: it runs both at first-run,
+ * before the main REPL readline exists, and later from `/settings`, where reusing the live one
+ * with `.question()` is simplest and safest — either way the caller owns creating and closing it.
+ */
+export async function runProviderSetup(readline: Interface, environment: Record<string, string | undefined>): Promise<void> {
+  process.stdout.write(`\n  ${style.bold("Pick a model provider")} — the key is saved once, to ~/.nova/credentials.json, and used on every future run.\n\n`);
+  PROVIDER_IDS.forEach((id, index) => {
+    const spec = PROVIDERS[id];
+    process.stdout.write(`    ${index + 1}. ${spec.label}  ${style.dim(`(${spec.requires.join(", ")})`)}\n`);
+  });
+  const choice = (await readline.question(`\n  Provider [1-${PROVIDER_IDS.length}, blank to cancel]: `)).trim();
+  if (choice === "") return;
+  const providerId = PROVIDER_IDS[Number(choice) - 1];
+  if (!providerId) {
+    process.stdout.write(style.yellow(`  Not a choice between 1 and ${PROVIDER_IDS.length} — nothing saved.\n`));
+    return;
+  }
+  const spec = PROVIDERS[providerId];
+  const keyName = spec.requires[0];
+  const key = (await readline.question(`  Paste your ${spec.label} API key (${keyName}): `)).trim();
+  if (key === "") {
+    process.stdout.write(style.yellow("  No key entered — nothing saved.\n"));
+    return;
+  }
+  await saveCredential(keyName, key);
+  environment[keyName] = key; // takes effect for the rest of this process without a restart
+  process.stdout.write(style.green(`  Saved. ${spec.label} is configured.\n`));
+}
+
 async function main(): Promise<number> {
   // A closed pipe (`nova --help | head`, `nova --providers | less -F`) is not an error. Without
   // this, the write throws EPIPE and the CLI dies with a stack trace the user never asked for.
@@ -585,6 +625,13 @@ async function main(): Promise<number> {
     if (error.code === "EPIPE") process.exit(0);
     throw error;
   });
+
+  // A key saved earlier through setup or /settings fills in for whatever the real environment
+  // does not already provide. An explicit environment variable always wins — it was set on
+  // purpose, by whoever manages this machine, and must not be silently shadowed by a stale save.
+  for (const [name, value] of Object.entries(await loadCredentials())) {
+    if (!process.env[name]) process.env[name] = value;
+  }
 
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -641,7 +688,19 @@ async function main(): Promise<number> {
   }
 
   const environment = process.env as Record<string, string | undefined>;
-  const resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
+  let resolved: ResolvedProvider | { error: string } = resolveProvider(environment, { provider: args.provider, model: args.model });
+  // Nobody to ask without a terminal — that path fails exactly as before, naming the variables to
+  // set. With one, offer to fix it on the spot rather than sending the person away to edit their
+  // shell profile before Nova will even start.
+  if ("error" in resolved && Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY)) {
+    const setup = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      await runProviderSetup(setup, environment);
+    } finally {
+      setup.close();
+    }
+    resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
+  }
   if ("error" in resolved) {
     process.stderr.write(`${style.red("Nova is not configured.")} ${resolved.error}\n`);
     return 1;
@@ -1085,6 +1144,12 @@ async function main(): Promise<number> {
     }
     if (input === "/providers") {
       process.stdout.write(`${renderProviders(environment, depth)}\n`);
+      continue;
+    }
+    if (input === "/settings") {
+      // Same flow as first-run setup, reusing this REPL's own readline rather than opening a
+      // second one — safe here because the prompt box is already closed at this point in the loop.
+      await runProviderSetup(readline, environment);
       continue;
     }
     if (input === "/cost") {

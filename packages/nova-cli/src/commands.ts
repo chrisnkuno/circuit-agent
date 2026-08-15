@@ -31,6 +31,7 @@ export const COMMANDS = defineCommands({
   "/pull": { args: "[dir]", description: "Copy sandbox files here" },
   "/where": { description: "Show the current workspace" },
   "/providers": { description: "Which model providers are configured" },
+  "/settings": { description: "Add or change a provider API key" },
   "/cost": { description: "Token and cost breakdown for this session" },
   "/sessions": { description: "List sessions in this project" },
   "/keys": { description: "Keyboard shortcuts" },

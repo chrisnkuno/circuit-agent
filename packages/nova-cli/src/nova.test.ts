@@ -3,7 +3,8 @@ import type { Interface } from "node:readline/promises";
 import { NovaAgent } from "@circuit-nova/nova-core/nova-cli/agent";
 import type { AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "@circuit-nova/nova-core";
 import { visibleWidth } from "./markdown";
-import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders, renderUserMessage, replaySession } from "./nova";
+import { configureRendering, confirmSpendingCap, createApprovalPrompt, parseArgs, readFxRates, renderEvent, renderProviders, renderUserMessage, replaySession, runProviderSetup } from "./nova";
+import { loadCredentials } from "./credentials";
 
 const plain = (value: string) => value.replace(/\[[0-9;]*m/g, "");
 
@@ -313,6 +314,68 @@ describe("renderEvent", () => {
   });
 });
 
+describe("runProviderSetup", () => {
+  const originalHome = process.env.HOME;
+  let home: string;
+
+  /** A readline stub that answers each `question()` call with the next scripted answer. */
+  function scriptedReadline(answers: string[]): Interface {
+    let index = 0;
+    return { question: async () => answers[Math.min(index++, answers.length - 1)] ?? "" } as unknown as Interface;
+  }
+
+  beforeEach(async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    home = await mkdtemp(path.join(os.tmpdir(), "nova-setup-"));
+    process.env.HOME = home; // saveCredential() reads os.homedir(), which reads $HOME
+  });
+
+  afterEach(async () => {
+    process.env.HOME = originalHome;
+    const { rm } = await import("node:fs/promises");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("saves the chosen provider's key and applies it to this process immediately", async () => {
+    const environment: Record<string, string | undefined> = {};
+    const { restore } = captureStdout();
+    await runProviderSetup(scriptedReadline(["1", "sk-ant-test"]), environment); // 1 = Anthropic
+    restore();
+    expect(environment.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+    expect(await loadCredentials(home)).toEqual({ ANTHROPIC_API_KEY: "sk-ant-test" });
+  });
+
+  it("saves nothing when the provider choice is left blank", async () => {
+    const environment: Record<string, string | undefined> = {};
+    const { restore } = captureStdout();
+    await runProviderSetup(scriptedReadline([""]), environment);
+    restore();
+    expect(environment).toEqual({});
+    expect(await loadCredentials(home)).toEqual({});
+  });
+
+  it("saves nothing for an out-of-range choice", async () => {
+    const environment: Record<string, string | undefined> = {};
+    const { writes, restore } = captureStdout();
+    await runProviderSetup(scriptedReadline(["99"]), environment);
+    restore();
+    expect(environment).toEqual({});
+    expect(writes.join("")).toContain("Not a choice");
+  });
+
+  it("saves nothing when the key itself is left blank", async () => {
+    const environment: Record<string, string | undefined> = {};
+    const { writes, restore } = captureStdout();
+    await runProviderSetup(scriptedReadline(["1", ""]), environment);
+    restore();
+    expect(environment).toEqual({});
+    expect(writes.join("")).toContain("No key entered");
+    expect(await loadCredentials(home)).toEqual({});
+  });
+});
+
 describe("createApprovalPrompt", () => {
   function fakeReadline(answer: string): Interface {
     return { question: async () => answer } as unknown as Interface;
@@ -380,6 +443,11 @@ describe("main() — branches that resolve before any interactive input is neede
     for (const key of Object.keys(process.env)) {
       if (/^(ANTHROPIC|OPENAI|CIRCUITNOTION|E2B|NOVA)_/.test(key)) delete process.env[key];
     }
+    // `main()` now reads `~/.nova/credentials.json` on startup (`loadCredentials()` uses
+    // `os.homedir()`, which reads `$HOME`) — redirected here so a test never depends on, or
+    // leaks into, whatever the developer running the suite has actually saved.
+    process.env.HOME = tmpRoot;
+    process.env.USERPROFILE = tmpRoot;
   });
 
   afterEach(async () => {
