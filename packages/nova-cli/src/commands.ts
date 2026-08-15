@@ -39,13 +39,23 @@ export const COMMANDS = defineCommands({
   "/exit": { description: "Leave" },
 });
 
-/** Renders `/help` from the same table `completer` reads, so they cannot disagree. */
-export function renderCommandHelp(): string {
-  const width = Math.max(...COMMANDS.map((command) => command.name.length + (command.args ? command.args.length + 1 : 0)));
-  return COMMANDS.map((command) => {
+/** One aligned `name [args]  description` line per command, name+args columns lined up. */
+export function renderCommands(commands: readonly Command[]): string {
+  const width = Math.max(...commands.map((command) => command.name.length + (command.args ? command.args.length + 1 : 0)));
+  return commands.map((command) => {
     const head = command.args ? `${command.name} ${command.args}` : command.name;
     return `  ${head.padEnd(width + 2)}${command.description}`;
   }).join("\n");
+}
+
+/** Renders `/help` from the same table `completer` reads, so they cannot disagree. */
+export function renderCommandHelp(): string {
+  return renderCommands(COMMANDS);
+}
+
+/** Every command whose name starts with what's been typed so far, in table order. */
+export function matchingCommands(prefix: string): Command[] {
+  return COMMANDS.filter((command) => command.name.startsWith(prefix));
 }
 
 /**
@@ -55,8 +65,7 @@ export function renderCommandHelp(): string {
  */
 export function completeCommand(line: string): [string[], string] {
   if (!line.startsWith("/")) return [[], line];
-  const matches = COMMANDS.map((command) => command.name).filter((name) => name.startsWith(line));
-  return [matches, line];
+  return [matchingCommands(line).map((command) => command.name), line];
 }
 
 /** The `@path` fragment being typed at the end of a line, if there is one. */

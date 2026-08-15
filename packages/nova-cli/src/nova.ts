@@ -17,7 +17,7 @@ import { detectColorDepth, renderBanner, renderTagline } from "./banner";
 import { box, effectGlyph, MarkdownStream, PromptBox, PROMPT_PREFIX_COLUMNS, renderAgentLabel, renderFilesTouched, ReplaceableBlock, sparkline, Spinner, StatusBar, wrappedRemainder, wrapPlain } from "./tui";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
-import { completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { completeInput, isKnownCommand, matchingCommands, renderCommandHelp, renderCommands, renderKeyboardShortcuts, suggestCommand } from "./commands";
 import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
 import { hostOf, providerBaseUrl } from "./endpoints";
 import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
@@ -1173,10 +1173,21 @@ async function main(): Promise<number> {
 
     if (input.startsWith("/") && !isKnownCommand(input.split(/\s+/)[0])) {
       // Without this the typo is simply sent to the model, which costs a round trip to be told
-      // it makes no sense.
+      // it makes no sense. A bare "/" or an unrecognized prefix ("/mod") gets the actual list of
+      // commands it could still mean, not just a pointer to go look one up — the closest safe
+      // approximation of a live suggestion menu, since it prints after the line is already
+      // submitted rather than trying to redraw anything while readline still owns the input row.
       const name = input.split(/\s+/)[0];
-      const suggestion = suggestCommand(name);
-      process.stdout.write(`  ${style.yellow(`Unknown command ${name}.`)}${style.dim(suggestion ? ` Did you mean ${suggestion}?` : " Type /help for the list.")}\n`);
+      // "/" alone matches every command name by prefix, so this also covers "typed / and hit
+      // enter to see what's there" with no special case needed.
+      const candidates = matchingCommands(name);
+      if (candidates.length > 0) {
+        const title = name === "/" ? "commands" : "did you mean";
+        process.stdout.write(`${box(renderCommands(candidates).split("\n"), { depth, title, titleColor: "yellow" })}\n`);
+      } else {
+        const suggestion = suggestCommand(name);
+        process.stdout.write(`  ${style.yellow(`Unknown command ${name}.`)}${style.dim(suggestion ? ` Did you mean ${suggestion}?` : " Type /help for the list.")}\n`);
+      }
       continue;
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, completeCommand, completeFileMention, completeHistory, completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
+import { COMMANDS, completeCommand, completeFileMention, completeHistory, completeInput, isKnownCommand, matchingCommands, renderCommandHelp, renderCommands, renderKeyboardShortcuts, suggestCommand } from "./commands";
 
 describe("command registry", () => {
   it("lists every command exactly once, each starting with a slash", () => {
@@ -14,6 +14,39 @@ describe("command registry", () => {
       expect(help).toContain(command.name);
       expect(help).toContain(command.description);
     }
+  });
+});
+
+describe("matchingCommands", () => {
+  it("finds every command sharing a typed prefix, as full command objects with descriptions", () => {
+    const matches = matchingCommands("/model");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ name: "/model", description: expect.stringContaining("Switch model") });
+  });
+
+  it("returns every command for a bare slash — the fallback shown when nothing more specific matched", () => {
+    expect(matchingCommands("/")).toHaveLength(COMMANDS.length);
+  });
+
+  it("finds nothing for a prefix no command starts with", () => {
+    expect(matchingCommands("/nonexistent")).toEqual([]);
+  });
+});
+
+describe("renderCommands", () => {
+  it("renders a subset of commands, not the whole table", () => {
+    const rendered = renderCommands(matchingCommands("/model"));
+    expect(rendered).toContain("/model");
+    expect(rendered).not.toContain("/settings");
+  });
+
+  it("aligns the description column across commands with different name lengths", () => {
+    const rendered = renderCommands([
+      { name: "/a", description: "first" },
+      { name: "/much-wordier", description: "second" },
+    ]);
+    const lines = rendered.split("\n");
+    expect(lines[0].indexOf("first")).toBe(lines[1].indexOf("second"));
   });
 });
 
