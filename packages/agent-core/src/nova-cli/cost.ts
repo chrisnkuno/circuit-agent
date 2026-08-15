@@ -1,6 +1,7 @@
 import { addMoney, convertTo, formatMoney, priceUsage, zero, type Currency, type FxRate, type Money, type TokenPrices } from "../money";
 import { priceUnits, selectPrice, type PriceRecord } from "../pricing";
 import type { ModelUsage } from "../providers/model";
+import type { NovaMode } from "./permissions";
 
 /**
  * What this session is costing, while it is still cheap to change course.
@@ -78,11 +79,13 @@ export type AgentCostPrediction = {
  * turn count systematically underestimates input. This models that cumulative growth explicitly
  * and widens the range for broad verbs that usually require more inspection and verification.
  */
-export function predictAgentUsage(input: { initialInputTokens: number; objective: string; mode: "plan" | "build" | "auto" }): AgentCostPrediction {
+export function predictAgentUsage(input: { initialInputTokens: number; objective: string; mode: NovaMode }): AgentCostPrediction {
   if (!Number.isSafeInteger(input.initialInputTokens) || input.initialInputTokens < 1) throw new Error("initialInputTokens must be a positive integer");
   const objective = input.objective.toLowerCase();
   const broad = /\b(migrate|refactor|redesign|audit|all|entire|cross-platform|production|architecture|extensive)\b/.test(objective);
   const narrow = /\b(explain|find|rename|one line|small|single|typo)\b/.test(objective);
+  // Defender falls in with build: it reads broadly like a scan, but every effectful call still
+  // goes through the same per-call approval build does, not auto's wider single-pass cadence.
   const base = input.mode === "plan" ? 3 : input.mode === "auto" ? 7 : 6;
   const expectedIterations = Math.max(1, Math.min(12, base + (broad ? 2 : 0) - (narrow ? 1 : 0)));
   const toolResultTokensPerIteration = input.mode === "plan" ? 850 : 1_350;
@@ -227,6 +230,26 @@ export class CostLedger {
     return spent.micros / budget.micros;
   }
 
+  /**
+   * How many more turns like the ones so far the remaining budget affords, at the average cost
+   * per turn observed this session.
+   *
+   * Deliberately not a time-based projection — how fast turns arrive says nothing about what they
+   * cost, and a number derived from that would look precise while meaning nothing. Average cost
+   * per turn (including non-model spend, since `displayTotal` already folds that in) is the one
+   * honest signal this session has produced about itself.
+   */
+  get turnsRemaining(): number | undefined {
+    const budget = this.options.budget;
+    const spent = this.displayTotal;
+    if (!budget || budget.micros <= 0 || !spent || this.turns.length === 0) return undefined;
+    const remaining = budget.micros - spent.micros;
+    if (remaining <= 0) return 0;
+    const averagePerTurn = spent.micros / this.turns.length;
+    if (averagePerTurn <= 0) return undefined; // every priced turn cost nothing — no rate to project
+    return Math.floor(remaining / averagePerTurn);
+  }
+
   /** One line for after each turn: what this cost, and what the session has cost so far. */
   formatTurn(turn: TurnCost): string {
     const parts = [`${turn.iterations} turns`, `${turn.toolCalls} tools`];
@@ -294,7 +317,9 @@ export class CostLedger {
 
     const fraction = this.budgetFraction;
     if (fraction !== undefined && this.options.budget && total) {
-      lines.push(`  budget  ${formatMoney(total)} of ${formatMoney(this.options.budget)} (${Math.round(fraction * 100)}%)`);
+      const remaining = this.turnsRemaining;
+      const forecast = remaining !== undefined && this.turns.length > 1 ? `, ~${remaining} more turn${remaining === 1 ? "" : "s"} at this rate` : "";
+      lines.push(`  budget  ${formatMoney(total)} of ${formatMoney(this.options.budget)} (${Math.round(fraction * 100)}%${forecast})`);
     }
     if (this.turns.length > 1) {
       lines.push("", "Per request:");
@@ -317,7 +342,11 @@ export class CostLedger {
     const budget = this.options.budget;
     if (fraction === undefined || !budget) return undefined;
     if (fraction >= 1) return `Budget of ${formatMoney(budget)} is spent. Raise it with --budget to continue.`;
-    if (fraction >= 0.8) return `${Math.round(fraction * 100)}% of the ${formatMoney(budget)} budget spent.`;
+    if (fraction >= 0.8) {
+      const remaining = this.turnsRemaining;
+      const forecast = remaining !== undefined && this.turns.length > 1 ? ` — roughly ${remaining} more turn${remaining === 1 ? "" : "s"} at this rate` : "";
+      return `${Math.round(fraction * 100)}% of the ${formatMoney(budget)} budget spent${forecast}.`;
+    }
     return undefined;
   }
 

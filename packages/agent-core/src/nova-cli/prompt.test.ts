@@ -134,6 +134,16 @@ describe("buildNovaSystemPrompt", () => {
     expect(buildNovaSystemPrompt(context, "plan", [])).toContain("cannot write files or run commands");
     expect(buildNovaSystemPrompt(context, "build", [])).toContain("approved by the user before it runs");
     expect(buildNovaSystemPrompt(context, "auto", [])).toContain("run without individual approval");
+    expect(buildNovaSystemPrompt(context, "defender", [])).toContain("every effectful call is approved by the user");
+  });
+
+  it("appends the security playbooks only in defender mode, not the others", () => {
+    const defenderPrompt = buildNovaSystemPrompt(context, "defender", []);
+    expect(defenderPrompt).toContain("## Injection");
+    expect(defenderPrompt).toContain("## Secrets & credential hygiene");
+    expect(defenderPrompt).toContain("## Input validation, fuzzing & invariant-based testing");
+    expect(defenderPrompt).toContain("## Logging, monitoring & deterrence");
+    expect(buildNovaSystemPrompt(context, "build", [])).not.toContain("## Injection");
   });
 
   it("includes project signals only when they exist, rather than printing empty labels", () => {

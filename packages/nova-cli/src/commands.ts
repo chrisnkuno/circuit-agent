@@ -22,10 +22,11 @@ export function defineCommands<T extends Record<string, Omit<Command, "name">>>(
 }
 
 export const COMMANDS = defineCommands({
-  "/mode": { args: "[plan|build|auto]", description: "Show or switch the permission mode" },
+  "/mode": { args: "[plan|build|auto|defender]", description: "Show or switch the permission mode" },
   "/plan": { description: "Switch to plan mode — read and reason, no writes" },
   "/build": { description: "Switch to build mode — edits need approval" },
   "/auto": { description: "Auto-apply ordinary edits; sensitive actions still ask" },
+  "/defender": { description: "Switch to defender mode — find and fix real security issues, every change still asks" },
   "/models": { args: "[refresh]", description: "Every model each provider actually offers, with prices — or add a key for one you can't use yet" },
   "/model": { args: "[name | N | provider model]", description: "Open the model picker, or switch straight to a name, keeping the transcript" },
   "/undo": { args: "[code|conversation]", description: "Revert the last turn — files, the conversation, or both (default)" },
@@ -152,15 +153,22 @@ export function isKnownCommand(name: string): boolean {
   return COMMANDS.some((command) => command.name === name);
 }
 
-export type ModeCommand = { type: "show" } | { type: "switch"; mode: "plan" | "build" | "auto" } | { type: "invalid" };
+export type ModeCommand = { type: "show" } | { type: "switch"; mode: "plan" | "build" | "auto" | "defender" } | { type: "invalid" };
+
+const MODE_NAMES = ["plan", "build", "auto", "defender"] as const;
+type ModeName = (typeof MODE_NAMES)[number];
+function isModeName(value: string): value is ModeName {
+  return (MODE_NAMES as readonly string[]).includes(value);
+}
 
 /** Stable mode command grammar shared by the TUI and its tests. */
 export function parseModeCommand(input: string): ModeCommand | null {
-  if (input === "/plan" || input === "/build" || input === "/auto") return { type: "switch", mode: input.slice(1) as "plan" | "build" | "auto" };
+  const bareModeCommand = input.startsWith("/") ? input.slice(1) : "";
+  if (isModeName(bareModeCommand)) return { type: "switch", mode: bareModeCommand };
   const match = /^\/mode(?:\s+(\S+))?$/.exec(input);
   if (!match) return null;
   if (!match[1]) return { type: "show" };
-  return match[1] === "plan" || match[1] === "build" || match[1] === "auto" ? { type: "switch", mode: match[1] } : { type: "invalid" };
+  return isModeName(match[1]) ? { type: "switch", mode: match[1] } : { type: "invalid" };
 }
 
 function editDistance(left: string, right: string): number {

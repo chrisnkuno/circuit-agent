@@ -18,6 +18,7 @@ const DIM = "\x1b[2m";
 const CYAN = "\x1b[36m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
+const RED = "\x1b[31m";
 
 function paint(text: string, code: string, depth: ColorDepth): string {
   return depth === "none" ? text : `${code}${text}${RESET}`;
@@ -101,6 +102,19 @@ function formatElapsed(ms: number): string {
 export function formatTokens(tokens: number): string {
   if (tokens < 1_000) return `${tokens} tokens`;
   return `${(tokens / 1_000).toFixed(1)}k tokens`;
+}
+
+/**
+ * A one-line shape for a series of numbers — session cost or tokens per turn — so the trend reads
+ * without a chart. Values are relative to the series' own max, not to any absolute scale: this
+ * answers "is it climbing" at a glance, which is the only question a status line has room for.
+ */
+export function sparkline(values: readonly number[], glyphs: GlyphSet = UNICODE_GLYPHS): string {
+  const levels = glyphs.sparkLevels;
+  if (values.length === 0) return "";
+  const max = Math.max(...values);
+  if (max <= 0) return levels[0].repeat(values.length);
+  return values.map((value) => levels[Math.min(levels.length - 1, Math.floor((Math.max(0, value) / max) * (levels.length - 1)))]).join("");
 }
 
 /**
@@ -407,7 +421,7 @@ function sliceToWidth(text: string, width: number): string {
 }
 
 /** The mode's accent colour in the input bar, so the permission posture is legible at a glance. */
-const MODE_COLORS: Record<string, string> = { plan: YELLOW, auto: GREEN, build: CYAN };
+const MODE_COLORS: Record<string, string> = { plan: YELLOW, auto: GREEN, build: CYAN, defender: RED };
 
 /** Visible columns the `│ › ` prefix of the prompt box occupies. */
 export const PROMPT_PREFIX_COLUMNS = 4;

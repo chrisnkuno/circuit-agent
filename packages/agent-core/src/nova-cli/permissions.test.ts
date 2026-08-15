@@ -29,6 +29,20 @@ describe("mode capabilities", () => {
     expect(capabilitiesForMode("build")).toContain(NOVA_CAPABILITIES.write);
     expect(capabilitiesForMode("build")).toContain(NOVA_CAPABILITIES.terminal);
   });
+
+  it("gives defender mode the full tool set, since it has to be able to run a scanner and propose a fix", () => {
+    expect(capabilitiesForMode("defender")).toEqual(capabilitiesForMode("build"));
+  });
+});
+
+describe("defender mode", () => {
+  it("never auto-approves anything, unlike auto mode — a scanner that silently patches what it finds is not one anyone can trust", async () => {
+    const calls: unknown[] = [];
+    const ledger = new PermissionLedger("defender", async (request) => { calls.push(request); return "allow"; });
+    const outcome = await ledger.decide(call("write_file", { path: "app.ts", content: "x" }), tool({ name: "write_file", effect: "workspace" }));
+    expect(outcome).toBe("approved"); // the human said yes
+    expect(calls).toHaveLength(1); // but only because it was asked — never a silent fast path
+  });
 });
 
 describe("action digest", () => {

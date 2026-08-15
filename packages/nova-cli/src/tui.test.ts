@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ASCII_GLYPHS } from "./glyphs";
+import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./glyphs";
 import { visibleWidth } from "./markdown";
 import {
   activityLabel,
@@ -13,6 +13,7 @@ import {
   renderPromptBox,
   ReplaceableBlock,
   rowsOccupied,
+  sparkline,
   Spinner,
   StatusBar,
   thinkingVerb,
@@ -92,6 +93,36 @@ describe("formatTokens", () => {
     expect(formatTokens(999)).toBe("999 tokens");
     expect(formatTokens(1_200)).toBe("1.2k tokens");
     expect(formatTokens(45_600)).toBe("45.6k tokens");
+  });
+});
+
+describe("sparkline", () => {
+  it("is empty for an empty series", () => {
+    expect(sparkline([])).toBe("");
+  });
+
+  it("scales to the series' own maximum, not an absolute one", () => {
+    expect(sparkline([0, 5, 10])).toBe(sparkline([0, 50, 100]));
+  });
+
+  it("reads flat when every value is the same", () => {
+    expect(new Set([...sparkline([3, 3, 3])]).size).toBe(1);
+  });
+
+  it("does not divide by zero when the whole series is zero", () => {
+    expect(sparkline([0, 0, 0])).toHaveLength(3);
+  });
+
+  it("rises left to right for a rising series", () => {
+    const levels = UNICODE_GLYPHS.sparkLevels;
+    const indices = [...sparkline([1, 2, 3, 4])].map((glyph) => levels.indexOf(glyph));
+    expect(indices).toEqual([...indices].sort((left, right) => left - right));
+    expect(indices[0]).toBeLessThan(indices.at(-1)!);
+  });
+
+  it("stays in the ASCII set when given the ASCII glyph set", () => {
+    const line = sparkline([1, 5, 2], ASCII_GLYPHS);
+    for (const character of line) expect(character.codePointAt(0)).toBeLessThan(128);
   });
 });
 
@@ -449,6 +480,7 @@ describe("renderPromptBox", () => {
     expect(renderPromptBox({ ...fields, mode: "plan", depth: "truecolor" }).top).toMatch(/\x1b\[33m/);
     expect(renderPromptBox({ ...fields, mode: "auto", depth: "truecolor" }).top).toMatch(/\x1b\[32m/);
     expect(renderPromptBox({ ...fields, mode: "build", depth: "truecolor" }).top).toMatch(/\x1b\[36m/);
+    expect(renderPromptBox({ ...fields, mode: "defender", depth: "truecolor" }).top).toMatch(/\x1b\[31m/);
   });
 
   it("carries the status line on the top border, so the bar costs no extra row", () => {

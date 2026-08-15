@@ -4,7 +4,7 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agent";
-import { NovaSessionDaemon, type DaemonNotification, type NovaDaemonClient } from "@circuit-nova/nova-core/nova-cli/daemon";
+import { NovaSessionDaemon, type DaemonApprovalRequest, type DaemonNotification, type NovaDaemonClient } from "@circuit-nova/nova-core/nova-cli/daemon";
 import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
 import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, formatStatusLine, MarkdownStream, promptStatusRoom, renderPromptBox, ReplaceableBlock, Spinner, StatusBar, wrapPlain } from "./tui";
+import { box, formatStatusLine, MarkdownStream, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -142,6 +142,9 @@ const role = (pick: () => string, fallback: string) => (value: string) => {
 const style = {
   dim: wrap("\x1b[2m"),
   bold: wrap("\x1b[1m"),
+  // Not themed: the "this call leaves the sandbox" mark is a rare, informational blast-radius
+  // signal, not part of the transcript's usual colour vocabulary a theme should be free to recolour.
+  magenta: wrap("\x1b[35m"),
   cyan: role(() => palette.primary, "\x1b[36m"),
   green: role(() => palette.success, "\x1b[32m"),
   yellow: role(() => palette.warning, "\x1b[33m"),
@@ -262,6 +265,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     if (argument === "--plan" || argument === "-p") parsed.mode = "plan";
     else if (argument === "--auto" || argument === "-y") parsed.mode = "auto";
     else if (argument === "--build") parsed.mode = "build";
+    else if (argument === "--defender") parsed.mode = "defender";
     else if (argument === "--help" || argument === "-h") parsed.help = true;
     else if (argument === "--version" || argument === "-v") parsed.version = true;
     else if (argument === "--settings") parsed.settings = true;
@@ -334,6 +338,7 @@ ${style.bold("nova")} — a coding agent in your terminal
   nova "add a health check" Run one request and exit
   nova --plan               Plan mode: read and reason, never write
   nova --auto               Auto mode: ordinary edits apply; sensitive actions ask
+  nova --defender           Defender mode: find and fix real security issues, every change still asks
   nova --allow-sensitive    Approve a flagged task preflight (tool guards still apply)
   nova --json "task"        One turn, JSONL on stdout for another program to read
   nova --resume [id]        Continue a previous session ("latest" by default)
@@ -469,7 +474,17 @@ const activity: { awaitingFirstDelta: boolean; toolCalls: number; tokens: number
  * shows what a write actually contained — by then the call event is long gone, and re-reading the
  * file to find out would be both a round trip and a different answer.
  */
-const pendingCalls = new Map<string, { line: number; detail: string; name: string; arguments: Record<string, unknown> }>();
+const pendingCalls = new Map<string, {
+  line: number;
+  detail: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  effect: "none" | "workspace" | "external";
+  /** Part of a batch fired while another call was still open — drawn with a connecting bar. */
+  lane: boolean;
+}>();
+/** Paths successfully written or edited this turn, for the "files modified" footer. */
+let touchedFiles = new Set<string>();
 
 /** Points the renderer at the colour depth, glyph repertoire and terminal the session actually has. */
 export function configureRendering(
@@ -501,9 +516,16 @@ function forgetToolLines(): void {
   pendingCalls.clear();
 }
 
-/** Composes one tool line: a mark, the tool, what it was called with, and how it went. */
-function toolLineText(mark: string, name: string, detail: string, summary: string): string {
-  const head = `  ${mark} ${style.cyan(name)}`;
+/**
+ * Composes one tool line: a mark, the tool's blast-radius glyph, the tool, what it was called
+ * with, and how it went. `lane` swaps the two-space indent for a connecting bar when this call is
+ * part of a batch fired concurrently with others still in flight, so the batch reads as one group
+ * of lanes rather than a coincidence of adjacent lines.
+ */
+function toolLineText(mark: string, name: string, detail: string, summary: string, effect: "none" | "workspace" | "external", lane: boolean): string {
+  const indent = lane ? style.dim(glyphs.boxVertical) : " ";
+  const effectGlyph = effect === "workspace" ? style.yellow(glyphs.effectWorkspace) : effect === "external" ? style.magenta(glyphs.effectExternal) : "";
+  const head = `${indent} ${mark}${effectGlyph ? ` ${effectGlyph}` : ""} ${style.cyan(name)}`;
   const middle = detail ? `  ${detail}` : "";
   const tail = summary ? style.dim(` · ${summary}`) : "";
   return `${head}${middle}${tail}`;
@@ -680,10 +702,21 @@ export function renderEvent(event: NovaEvent): void {
   }
   if (runtime.type === "tool_call") {
     const detail = describeToolCall(runtime.toolName, runtime.arguments);
+    // A second call announced while the first is still open makes both part of one concurrent
+    // batch — retroactively mark the still-open ones too, so the whole group reads as a lane
+    // rather than the first line looking like an unrelated call that happened to be nearby.
+    const lane = pendingCalls.size > 0;
+    if (lane) {
+      for (const [id, entry] of pendingCalls) {
+        if (entry.lane || entry.line < 0) continue;
+        const text = toolLineText(style.dim(glyphs.pending), entry.name, style.dim(entry.detail), "", entry.effect, true);
+        if (toolLines.update(entry.line, text)) pendingCalls.set(id, { ...entry, lane: true });
+      }
+    }
     // Announcing then rewriting needs a cursor. Piped, the announcement would be a duplicate line
     // nobody can erase, so only the completed line below is printed.
-    const line = liveTerminal ? toolLines.append(toolLineText(style.dim(glyphs.pending), runtime.toolName, style.dim(detail), "")) : -1;
-    pendingCalls.set(runtime.toolCallId, { line, detail, name: runtime.toolName, arguments: runtime.arguments });
+    const line = liveTerminal ? toolLines.append(toolLineText(style.dim(glyphs.pending), runtime.toolName, style.dim(detail), "", runtime.effect, lane)) : -1;
+    pendingCalls.set(runtime.toolCallId, { line, detail, name: runtime.toolName, arguments: runtime.arguments, effect: runtime.effect, lane });
     activity.phase = "operation";
     activity.operation = runtime.toolName;
     // A model can stream an explanation and then begin a long command. The first delta stopped
@@ -699,7 +732,7 @@ export function renderEvent(event: NovaEvent): void {
     // parallel-safe calls correctly too: several are announced before the first result returns, so
     // the line to rewrite is usually not the last one printed.
     const pending = pendingCalls.get(runtime.toolCallId);
-    const completed = toolLineText(mark, runtime.toolName, style.dim(pending?.detail ?? ""), summary);
+    const completed = toolLineText(mark, runtime.toolName, style.dim(pending?.detail ?? ""), summary, runtime.effect, pending?.lane ?? false);
     if (pending === undefined || pending.line < 0 || !toolLines.update(pending.line, completed)) {
       out.write(`${completed}\n`);
     }
@@ -715,6 +748,9 @@ export function renderEvent(event: NovaEvent): void {
       if (runtime.toolName === "write_file" || runtime.toolName === "edit_file") {
         toolLines.forget();
         renderWrittenCode(runtime.toolName, pending.arguments);
+        // Feeds the end-of-turn "files modified" footer.
+        const path = typeof pending.arguments.path === "string" ? pending.arguments.path : undefined;
+        if (path) touchedFiles.add(path);
       } else if (runtime.toolName === "run_command") {
         toolLines.forget();
         renderCommandOutput(runtime.content);
@@ -839,8 +875,17 @@ export function readFxRates(environment: Record<string, string | undefined>): Fx
  * is looping over, so that flag alone leaves it blocked forever on an answer nobody can give
  * anymore. Aborting the question is what actually returns control to the prompt.
  */
+/** What a pending `write_file`/`edit_file` approval would actually change — no file read needed: `write_file` carries its whole new content, `edit_file` carries the exact before/after snippet. */
+function renderApprovalPreview(preview: DaemonApprovalRequest["preview"]): string | undefined {
+  if (!preview) return undefined;
+  const rendered = preview.toolName === "write_file"
+    ? renderFileChange({ path: preview.path, kind: "write", content: preview.content }, sectionStyle(), { maxLines: FOLD_AFTER_LINES })
+    : renderFileChange({ path: preview.path, kind: "edit", before: preview.oldText, after: preview.newText }, sectionStyle(), { maxLines: FOLD_AFTER_LINES });
+  return rendered.text;
+}
+
 export function createApprovalPrompt(readline: Interface, interactive: boolean, signal: () => AbortSignal | undefined) {
-  return async ({ summary, safety }: { summary: string; safety?: SafetyAssessment }): Promise<PermissionDecision> => {
+  return async ({ summary, safety, preview }: { summary: string; safety?: SafetyAssessment; preview?: DaemonApprovalRequest["preview"] }): Promise<PermissionDecision> => {
     // Without a terminal there is nobody to ask, and a prompt written to a pipe would either hang
     // or read the next line of piped input as an answer. Denying is the only honest result — and
     // it is reported, so the run does not look like the model simply chose not to act.
@@ -857,6 +902,11 @@ export function createApprovalPrompt(readline: Interface, interactive: boolean, 
     statusBar.clear();
     endStreamedLine();
     out.write(`\n  ${style.yellow("?")} Nova wants to ${style.bold(summary)}\n`);
+    // What you approve is what gets executed — see the exact change before answering, not just
+    // the one-line summary. Reuses the same renderer the post-write receipt already shows, built
+    // straight from the call's own arguments, so nothing here can differ from what actually runs.
+    const previewText = renderApprovalPreview(preview);
+    if (previewText) out.write(`${previewText}\n`);
     if (safety?.sensitive) out.write(`    ${style.yellow("Safety guard:")} ${safety.reasons.join(", ")}\n`);
     let answer: string;
     try {
@@ -1531,9 +1581,9 @@ async function main(): Promise<number> {
   ): Promise<NovaDaemonClient> => {
     const client = daemon.connect({
       onNotification: handleDaemonNotification,
-      // The daemon's approval type is the flattened cross-boundary shape; the terminal prompt only
-      // ever read `summary` and `safety` off the richer in-process one, so the adapter is this thin.
-      approve: (request) => approvalPrompt({ summary: request.summary, safety: request.safety }),
+      // The daemon's approval type is the flattened cross-boundary shape; the terminal prompt reads
+      // `summary`, `safety` and (for a pending write/edit) `preview` off it.
+      approve: (request) => approvalPrompt({ summary: request.summary, safety: request.safety, preview: request.preview }),
     });
     await client.open(({ onEvent, approve }) => new NovaAgent({
       root: args.root,
@@ -1986,6 +2036,7 @@ async function main(): Promise<number> {
     activity.tokens = 0;
     activity.phase = "thinking";
     activity.operation = undefined;
+    touchedFiles = new Set();
     forgetToolLines();
     markdown.reset();
     if (ttyMode) {
@@ -2056,6 +2107,10 @@ async function main(): Promise<number> {
       // When the answer streamed, it is already on screen — reprinting it verbatim is noise.
       if (!(result.status === "completed" && streamedAnswer)) {
         out.write(`\n${result.status === "completed" ? asMarkdown(result.summary) : style.yellow(result.summary)}\n`);
+      }
+
+      if (touchedFiles.size > 0) {
+        out.write(`${panel([...touchedFiles].sort(), sectionStyle(), { title: "files modified", tone: "good" })}\n`);
       }
 
       const turn = ledger.record({
@@ -2302,7 +2357,7 @@ async function main(): Promise<number> {
       // part of the prompt and the box keeps its side through every edit. Without one there is no
       // box to have a side of, and the old inline label is still the right thing — with the leading
       // blank line it has always had on a session with no screen of any kind to separate it from.
-      const label = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : "nova")}${style.dim(` ${glyphs.caret} `)}`;
+      const label = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : mode === "defender" ? "defender" : "nova")}${style.dim(` ${glyphs.caret} `)}`;
       const promptLabel = screen?.pinned ? promptFrame(idleStatusLine()).prefix : screen ? label : `\n${label}`;
       rawInput = await readline.question(promptLabel);
     } catch (error) {
@@ -2329,12 +2384,12 @@ async function main(): Promise<number> {
     if (input === "/help") { out.write(helpText(language)); continue; }
     const modeCommand = parseModeCommand(input);
     if (modeCommand?.type === "show") {
-      const posture = mode === "plan" ? "read-only; write and command tools are unavailable" : mode === "build" ? "workspace changes ask for approval" : "ordinary workspace changes are pre-approved; sensitive and external actions still ask";
+      const posture = mode === "plan" ? "read-only; write and command tools are unavailable" : mode === "build" ? "workspace changes ask for approval" : mode === "defender" ? "security review; every change still asks for approval" : "ordinary workspace changes are pre-approved; sensitive and external actions still ask";
       out.write(`  ${style.cyan(mode)} · ${style.dim(posture)}\n`);
       continue;
     }
     if (modeCommand?.type === "invalid") {
-      out.write(style.yellow("  Choose /mode plan, /mode build, or /mode auto.\n"));
+      out.write(style.yellow("  Choose /mode plan, /mode build, /mode auto, or /mode defender.\n"));
       continue;
     }
     if (modeCommand?.type === "switch") {
@@ -2353,7 +2408,7 @@ async function main(): Promise<number> {
       await previous.relinquish();
       const carried = await loadSession(args.root, previousSessionId);
       agent = await openClient(carried ?? undefined);
-      const posture = mode === "plan" ? "read-only; no write tools" : mode === "build" ? "edits and commands require approval" : "ordinary edits and commands are pre-approved; sensitive and external actions require approval";
+      const posture = mode === "plan" ? "read-only; no write tools" : mode === "build" ? "edits and commands require approval" : mode === "defender" ? "security review; every fix still requires approval" : "ordinary edits and commands are pre-approved; sensitive and external actions require approval";
       out.write(style.dim(`  switched to ${mode} mode · ${posture}\n`));
       continue;
     }
@@ -3213,7 +3268,11 @@ async function main(): Promise<number> {
       continue;
     }
     if (input === "/cost") {
-      out.write(`${ledger.formatReport()}\n`);
+      const history = ledger.history;
+      // The shape of spend across turns, not just the total — a flat line and a spike to the
+      // same total are two very different sessions to have had.
+      const trend = history.length > 1 ? `  ${style.dim(`spend  ${sparkline(history.map((turn) => turn.cost?.micros ?? 0), glyphs)}`)}\n` : "";
+      out.write(`${ledger.formatReport()}\n${trend}`);
       continue;
     }
     if (input === "/where") {

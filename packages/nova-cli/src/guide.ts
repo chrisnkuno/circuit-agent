@@ -67,16 +67,17 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     title: "Permission modes",
     summary: "How much Nova may do without asking.",
     body: [
-      "Three modes, and you can change them at any time. Plan reads and reasons but cannot write or run commands. Build is the default: edits are proposed and you approve them. Auto applies ordinary workspace edits without asking, while anything sensitive or reaching outside the workspace still stops for you.",
+      "Four modes, and you can change them at any time. Plan reads and reasons but cannot write or run commands. Build is the default: edits are proposed and you approve them. Auto applies ordinary workspace edits without asking, while anything sensitive or reaching outside the workspace still stops for you. Defender turns Nova into a security reviewer — full tool access to actually scan and fix, but never auto-approved, the same posture as Build.",
       "The mode is per tab, so one piece of work can be on a short leash while another runs freely.",
     ],
     examples: [
       { input: "/plan", effect: "read-only: no writes, no commands" },
       { input: "/build", effect: "edits ask first (the default)" },
       { input: "/auto", effect: "ordinary edits apply; sensitive actions still ask" },
+      { input: "/defender", effect: "security review — find and fix real issues; every change still asks" },
       { input: "/mode", effect: "show which mode you are in" },
     ],
-    covers: ["/mode", "/plan", "/build", "/auto"],
+    covers: ["/mode", "/plan", "/build", "/auto", "/defender"],
   },
   {
     id: "tabs",

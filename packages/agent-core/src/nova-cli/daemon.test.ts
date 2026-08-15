@@ -142,4 +142,35 @@ describe("NovaSessionDaemon", () => {
     await client.send("push it", "command_push");
     expect(seenSafety).toMatchObject({ sensitive: true, categories: expect.arrayContaining(["production"]) });
   });
+
+  it("carries what an edit_file or write_file call would change, for a client to preview before deciding", async () => {
+    let seenPreviews: unknown[] = [];
+    const model = modelWith((_request, call) => {
+      if (call === 1) return { finishReason: "tool_calls", content: "", toolCalls: [{ id: "edit_1", name: "edit_file", arguments: { path: "app.ts", oldText: "1", newText: "2" } }] };
+      if (call === 2) return { finishReason: "tool_calls", content: "", toolCalls: [{ id: "write_1", name: "write_file", arguments: { path: "new.ts", content: "export const x = 1;\n" } }] };
+      return { content: "Done." };
+    });
+    const client = daemon.connect({
+      id: "preview-check",
+      approve: async (request) => { seenPreviews.push(request.preview); return "allow" as const; },
+    });
+    await client.open(factory(model));
+    await client.send("edit and add a file", "command_preview");
+    expect(seenPreviews[0]).toEqual({ toolName: "edit_file", path: "app.ts", oldText: "1", newText: "2" });
+    expect(seenPreviews[1]).toEqual({ toolName: "write_file", path: "new.ts", content: "export const x = 1;\n" });
+  });
+
+  it("carries no preview for a tool with no textual before/after, like run_command", async () => {
+    let seenPreview: unknown = "not set";
+    const model = modelWith((_request, call) => call === 1
+      ? { finishReason: "tool_calls", content: "", toolCalls: [{ id: "run_1", name: "run_command", arguments: { command: "npm test" } }] }
+      : { content: "Ran it." });
+    const client = daemon.connect({
+      id: "no-preview-check",
+      approve: async (request) => { seenPreview = request.preview; return "allow" as const; },
+    });
+    await client.open(factory(model));
+    await client.send("run the tests", "command_run");
+    expect(seenPreview).toBeUndefined();
+  });
 });

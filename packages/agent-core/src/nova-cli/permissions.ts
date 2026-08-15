@@ -9,13 +9,17 @@ import { assessToolSafety, type SafetyAssessment } from "./safety";
  * an agent makes are not bad edits, they are confident edits made before it understood the problem.
  * A mode that physically cannot write forces the understanding to happen first.
  *
- * - `plan`  — read, search and think. No writes, no commands. Nothing to approve because nothing
- *             can change.
- * - `build` — full tool set, with every effectful call gated on a human decision.
- * - `auto`  — full tool set, workspace edits pre-approved, external actions still gated. For a
- *             disposable checkout or a trusted loop, never the default.
+ * - `plan`     — read, search and think. No writes, no commands. Nothing to approve because nothing
+ *                can change.
+ * - `build`    — full tool set, with every effectful call gated on a human decision.
+ * - `auto`     — full tool set, workspace edits pre-approved, external actions still gated. For a
+ *                disposable checkout or a trusted loop, never the default.
+ * - `defender` — full tool set, security-focused system prompt and playbooks (see
+ *                `defender-playbooks.ts` in the CLI package), but gated exactly like `build`:
+ *                a scanner that quietly patches what it finds is not a scanner anyone can trust,
+ *                so nothing here is ever auto-approved regardless of effect.
  */
-export type NovaMode = "plan" | "build" | "auto";
+export type NovaMode = "plan" | "build" | "auto" | "defender";
 
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
 export type ToolApprovalOutcome = "approved" | "denied";
@@ -38,6 +42,10 @@ const MODE_CAPABILITIES: Record<NovaMode, string[]> = {
   plan: [NOVA_CAPABILITIES.read, NOVA_CAPABILITIES.research, NOVA_CAPABILITIES.planning],
   build: Object.values(NOVA_CAPABILITIES),
   auto: Object.values(NOVA_CAPABILITIES),
+  // The full set, not a read-only subset: a scanner that cannot run `npm audit`, grep for a
+  // pattern across the tree, or propose the one-line fix for a vulnerable dependency is a report
+  // generator, not a defender. What keeps this safe is `decide()` below never auto-approving it.
+  defender: Object.values(NOVA_CAPABILITIES),
 };
 
 export function capabilitiesForMode(mode: NovaMode): string[] {

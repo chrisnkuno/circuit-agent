@@ -342,6 +342,33 @@ describe("renderEvent", () => {
     expect(failed).toContain("exit 1");
   });
 
+  it("marks a workspace-writing call differently from a read-only one", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "a.ts" } } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "x" } });
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c2", toolName: "write_file", effect: "workspace", arguments: { path: "b.ts", content: "" } } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c2", toolName: "write_file", isError: false, effect: "workspace", content: "wrote" } });
+    restore();
+    expect(writes[0]).not.toContain("✎");
+    expect(writes.some((chunk) => chunk.includes("✎"))).toBe(true);
+  });
+
+  it("groups concurrent calls into a lane, retroactively marking the one already on screen", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "a.ts" } } });
+    // c1's line is not yet part of a batch — no lane bar.
+    expect(writes[0]).not.toContain("│");
+    renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c2", toolName: "read_file", effect: "none", arguments: { path: "b.ts" } } });
+    // Announcing c2 while c1 is still open retroactively bars c1's line and bars c2's own.
+    const rewriteOfC1 = writes.find((chunk) => chunk.includes("a.ts") && chunk.includes("│"));
+    expect(rewriteOfC1).toBeDefined();
+    expect(writes.at(-1)).toContain("│");
+    expect(writes.at(-1)).toContain("b.ts");
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "x" } });
+    renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c2", toolName: "read_file", isError: false, effect: "none", content: "y" } });
+    restore();
+  });
+
   it("summarizes a long tool result instead of pasting it into the transcript", () => {
     const { writes, restore } = captureStdout();
     renderEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: `${"x".repeat(200)}\nsecond line never shown` } });
@@ -431,6 +458,24 @@ describe("createApprovalPrompt", () => {
     restore();
     expect(decision).toBe("deny");
     expect(writes.join("")).toContain("interrupted");
+  });
+
+  it("shows the exact change before asking, when the request carries a preview", async () => {
+    const { writes, restore } = captureStdout();
+    const approve = createApprovalPrompt(fakeReadline("n"), true, () => undefined);
+    await approve({ summary: "edit src/app.ts", preview: { toolName: "edit_file", path: "src/app.ts", oldText: "port = 3000", newText: "port = 8080" } });
+    restore();
+    const output = writes.join("");
+    expect(output).toContain("3000");
+    expect(output).toContain("8080");
+  });
+
+  it("asks with just the summary when there is nothing to preview, e.g. run_command", async () => {
+    const { writes, restore } = captureStdout();
+    const approve = createApprovalPrompt(fakeReadline("n"), true, () => undefined);
+    await approve({ summary: "run npm test" });
+    restore();
+    expect(writes.join("")).toContain("run npm test");
   });
 });
 

@@ -18,7 +18,7 @@ describe("command registry", () => {
 
   it("documents the explicit mode switch alongside its quick shortcuts", () => {
     const help = renderCommandHelp();
-    expect(help).toContain("/mode [plan|build|auto]");
+    expect(help).toContain("/mode [plan|build|auto|defender]");
     expect(completeCommand("/mo")[0]).toContain("/mode");
   });
 });
@@ -30,6 +30,8 @@ describe("mode commands", () => {
     expect(parseModeCommand("/plan")).toEqual({ type: "switch", mode: "plan" });
     expect(parseModeCommand("/build")).toEqual({ type: "switch", mode: "build" });
     expect(parseModeCommand("/auto")).toEqual({ type: "switch", mode: "auto" });
+    expect(parseModeCommand("/defender")).toEqual({ type: "switch", mode: "defender" });
+    expect(parseModeCommand("/mode defender")).toEqual({ type: "switch", mode: "defender" });
   });
 
   it("distinguishes an invalid mode from ordinary prompt text", () => {

@@ -171,6 +171,20 @@ describe("NovaAgent", () => {
     expect(system?.content).toContain("NOVA.md");
   });
 
+  it("carries the security playbooks in the system prompt when running in defender mode, and offers the write/terminal tools", async () => {
+    const model = scriptedModel([{ finishReason: "stop", content: "No critical findings." }]);
+    const agent = new NovaAgent({ root, model, prices, mode: "defender", approve: async () => "deny" });
+    await agent.send("review this project for security issues");
+
+    const system = model.requests[0].messages.find((message) => message.role === "system");
+    expect(system?.content).toContain("DEFENDER mode");
+    expect(system?.content).toContain("## Injection");
+    expect(system?.content).toContain("## Secrets & credential hygiene");
+    const tools = model.requests[0].tools.map((tool) => tool.name);
+    expect(tools).toContain("write_file");
+    expect(tools).toContain("run_command");
+  });
+
   it("does not offer write or command tools in plan mode", async () => {
     const model = scriptedModel([{ finishReason: "stop", content: "Here is the plan." }]);
     const agent = new NovaAgent({ root, model, prices, mode: "plan", approve: async () => "deny" });

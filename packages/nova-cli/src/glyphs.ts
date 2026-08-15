@@ -60,6 +60,11 @@ export type GlyphSet = {
   plus: string;
   minus: string;
   warning: string;
+  /** Blast-radius marks on a tool line: this call writes to the workspace, or leaves it entirely. */
+  effectWorkspace: string;
+  effectExternal: string;
+  /** Eight-level height ramp, low to high, for a one-line trend like `/cost`'s spend-per-turn. */
+  sparkLevels: readonly string[];
 };
 
 export const UNICODE_GLYPHS: GlyphSet = {
@@ -100,6 +105,9 @@ export const UNICODE_GLYPHS: GlyphSet = {
   plus: "+",
   minus: "-",
   warning: "!",
+  effectWorkspace: "✎",
+  effectExternal: "◎",
+  sparkLevels: ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"],
 };
 
 /**
@@ -148,6 +156,9 @@ export const ASCII_GLYPHS: GlyphSet = {
   plus: "+",
   minus: "-",
   warning: "!",
+  effectWorkspace: "w",
+  effectExternal: "e",
+  sparkLevels: [" ", ".", ":", "-", "=", "+", "*", "#"],
 };
 
 export type GlyphMode = "unicode" | "ascii";

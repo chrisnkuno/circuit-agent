@@ -31,7 +31,29 @@ export type DaemonApprovalRequest = {
    * silently losing a safety signal the original terminal prompt always showed.
    */
   safety: SafetyAssessment;
+  /**
+   * Exactly what a pending `write_file`/`edit_file` would change, so a client can show the real
+   * diff before answering rather than just the one-line summary. Scoped to these two tools only —
+   * not a raw copy of `call.arguments` — the same reason `safety` above is a purpose-built field
+   * rather than the whole `ApprovalRequest` forwarded wholesale: this boundary is a stable, minimal
+   * contract, not a leak of whatever shape an internal type happens to have this month.
+   */
+  preview?: { toolName: "write_file"; path: string; content: string } | { toolName: "edit_file"; path: string; oldText: string; newText: string };
 };
+
+/** Reads `preview` straight off the call's own arguments — no workspace access needed either way. */
+function previewFor(request: ApprovalRequest): DaemonApprovalRequest["preview"] {
+  const args = (request.call.arguments ?? {}) as Record<string, unknown>;
+  const path = typeof args.path === "string" ? args.path : undefined;
+  if (!path) return undefined;
+  if (request.tool.name === "write_file" && typeof args.content === "string") {
+    return { toolName: "write_file", path, content: args.content };
+  }
+  if (request.tool.name === "edit_file" && typeof args.oldText === "string" && typeof args.newText === "string") {
+    return { toolName: "edit_file", path, oldText: args.oldText, newText: args.newText };
+  }
+  return undefined;
+}
 
 export type DaemonNotification =
   | { protocolVersion: 1; type: "session_opened"; sessionId: string; resumed: boolean }
@@ -121,6 +143,7 @@ export class NovaSessionDaemon {
       effect: request.tool.effect,
       capabilityId: request.tool.capabilityId,
       safety: request.safety,
+      preview: previewFor(request),
     };
     const live = this.requireSession(sessionId);
     for (const clientId of live.subscribers) {

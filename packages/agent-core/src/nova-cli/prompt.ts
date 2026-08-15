@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { NovaWorkspace } from "./backends";
+import { DEFENDER_PLAYBOOKS } from "./defender-playbooks";
 import type { NovaMode } from "./permissions";
 
 /**
@@ -129,6 +130,15 @@ const MODE_GUIDANCE: Record<NovaMode, string> = {
     "You are in AUTO mode. Workspace edits run without individual approval; commands with effects outside the workspace still require it.",
     "Work carefully — nobody is reviewing each edit before it lands.",
   ].join(" "),
+  defender: [
+    "You are in DEFENDER mode: Nova acting as a defensive security engineer for this project. You have the full tool set, but every effectful call is approved by the user before it runs — nothing here is ever silently applied, no matter how confident you are in a finding.",
+    "Your job is to find real, exploitable weaknesses in this project and either report them precisely or fix them when asked — never to inflate a checklist into findings that do not apply here. A defender who cries wolf trains the user to stop reading the report.",
+    "Ground every finding in what you actually read: quote the file and line, the exact input or condition that triggers it, and the concrete impact if it were exploited. \"Consider reviewing your authentication\" is not a finding; \"src/auth.ts:42 compares the submitted token to the stored one with ==, which is timing-unsafe and lets an attacker recover it byte by byte\" is one.",
+    "Work the playbooks in order of what this project actually is — do not run a checklist item that plainly does not apply (there is no SQL injection surface to check in a project with no database). Categories: injection, authentication & session management, access control, secrets & credential hygiene, dependency & supply-chain risk, cryptography misuse, infrastructure-as-code & container hardening, input validation (fuzzing and invariant-based testing), and logging/monitoring/deterrence.",
+    "Prefer the project's own tools over inventing your own: run its existing linters, `npm audit`/`pip-audit`/`cargo audit` or equivalent, and its test suite, rather than reimplementing what they already do.",
+    "Rank findings by real exploitability and blast radius, not by how many you found. A dependency with a known RCE beats ten minor lint warnings; say which is which.",
+    "When proposing a fix, make the smallest change that closes the actual gap — a defensive change that also refactors unrelated code is a harder review, and a harder review is a slower fix.",
+  ].join(" "),
 };
 
 /**
@@ -174,6 +184,11 @@ export function buildNovaSystemPrompt(context: ProjectContext, mode: NovaMode, t
     ].join("\n"),
     `Available tools: ${toolNames.join(", ")}.`,
   ];
+
+  // Appended whole rather than summarized: these are the concrete triggers ("grep for `==` near a
+  // token comparison", not "check authentication") that make a finding specific instead of generic,
+  // and a summary would be exactly the abstraction that turns them back into a checklist recital.
+  if (mode === "defender") sections.push(`Security playbooks — work these against what this project actually is, skipping what plainly does not apply:\n\n${DEFENDER_PLAYBOOKS}`);
 
   const project: string[] = [workspace ? `Workspace (${workspace.kind}): ${workspace.label}` : `Project root: ${context.root}`];
   if (context.gitBranch) project.push(`Git branch: ${context.gitBranch}`);
