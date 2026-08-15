@@ -328,6 +328,31 @@ function sliceToWidth(text: string, width: number): string {
   return taken;
 }
 
+/**
+ * The one-line header that opens an agent's response, so a scrolling transcript reads as a
+ * conversation between two clearly marked speakers rather than an unbroken wall of text.
+ *
+ * The user's side already gets a boxed "you" bubble (`renderUserMessage` in nova.ts); the agent's
+ * side cannot be boxed the same way because its text is streamed and the box would have to be
+ * closed before the final width is known. A label printed once, right before the first token of
+ * the turn, gets the same "who is speaking" legibility without needing to buffer the answer.
+ */
+export function renderAgentLabel(depth: ColorDepth): string {
+  return `${paint("✦", CYAN, depth)} ${paint("nova", CYAN, depth)}`;
+}
+
+/**
+ * The "files modified" footer printed after a turn that actually edited the workspace.
+ *
+ * A person skimming the transcript for "what did it touch" should not have to reconstruct that
+ * from a scroll of individual `write_file` / `edit_file` tool lines further up — this is that
+ * answer, deduplicated and sorted, in the same boxed-section language as `/diff` and `/todos`.
+ */
+export function renderFilesTouched(paths: readonly string[], depth: ColorDepth, width?: number): string {
+  const unique = [...new Set(paths)].sort();
+  return box(unique, { depth, width, title: "files modified", titleColor: "green" });
+}
+
 /** The mode's accent colour in the input bar, so the permission posture is legible at a glance. */
 const MODE_COLORS: Record<string, string> = { plan: YELLOW, auto: GREEN, build: CYAN };
 

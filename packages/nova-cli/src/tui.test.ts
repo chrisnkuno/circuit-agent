@@ -6,6 +6,8 @@ import {
   formatTokens,
   MarkdownStream,
   PromptBox,
+  renderAgentLabel,
+  renderFilesTouched,
   renderPromptBox,
   ReplaceableBlock,
   rowsOccupied,
@@ -365,6 +367,35 @@ describe("box", () => {
     expect(box(["a"], { width: 80, depth: "none", title: "you", titleColor: "green" })).not.toMatch(ESCAPE);
     expect(box(["a"], { width: 80, depth: "truecolor", title: "you", titleColor: "green" })).toMatch(ESCAPE);
     expect(plain(box(["a"], { width: 80, depth: "truecolor", title: "you", titleColor: "green" })).split("\n")[0]).toContain("you");
+  });
+});
+
+describe("renderAgentLabel", () => {
+  it("names the speaker, uncoloured when colour is off", () => {
+    const label = renderAgentLabel("none");
+    expect(label).not.toMatch(ESCAPE);
+    expect(plain(label)).toBe("✦ nova");
+  });
+
+  it("paints the glyph and name when colour is on", () => {
+    expect(renderAgentLabel("truecolor")).toMatch(ESCAPE);
+    expect(plain(renderAgentLabel("truecolor"))).toBe("✦ nova");
+  });
+});
+
+describe("renderFilesTouched", () => {
+  it("titles the box and lists every path", () => {
+    const rendered = plain(renderFilesTouched(["src/b.ts", "src/a.ts"], "none", 80));
+    expect(rendered.split("\n")[0]).toContain("files modified");
+    expect(rendered).toContain("src/a.ts");
+    expect(rendered).toContain("src/b.ts");
+  });
+
+  it("deduplicates and sorts paths, since the same file can be touched twice in a turn", () => {
+    const rendered = plain(renderFilesTouched(["src/b.ts", "src/a.ts", "src/b.ts"], "none", 80));
+    const lines = rendered.split("\n").filter((line) => line.includes("src/"));
+    expect(lines).toHaveLength(2);
+    expect(rendered.indexOf("src/a.ts")).toBeLessThan(rendered.indexOf("src/b.ts"));
   });
 });
 

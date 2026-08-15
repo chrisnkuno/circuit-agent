@@ -12,7 +12,7 @@ import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, MarkdownStream, PromptBox, PROMPT_PREFIX_COLUMNS, ReplaceableBlock, Spinner, StatusBar, wrappedRemainder, wrapPlain } from "./tui";
+import { box, MarkdownStream, PromptBox, PROMPT_PREFIX_COLUMNS, renderAgentLabel, renderFilesTouched, ReplaceableBlock, Spinner, StatusBar, wrappedRemainder, wrapPlain } from "./tui";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand } from "./commands";
@@ -41,6 +41,7 @@ const RESET = "[0m";
  */
 let colorEnabled = false;
 let liveTerminal = false;
+let renderDepth: ReturnType<typeof detectColorDepth> = "none";
 
 const wrap = (code: string) => (value: string) => (colorEnabled ? `${code}${value}${RESET}` : value);
 const style = {
@@ -205,6 +206,8 @@ let awaitingInput = false;
 let approvalPending = false;
 /** Announced calls awaiting their result, by call id, so each can be rewritten where it sits. */
 const pendingCalls = new Map<string, { line: number; detail: string }>();
+/** Paths successfully written or edited this turn, for the "files modified" footer. */
+let touchedFiles = new Set<string>();
 
 /** Points the renderer at the colour depth and terminal the session actually has. */
 export function configureRendering(
@@ -213,6 +216,7 @@ export function configureRendering(
 ): void {
   colorEnabled = depth !== "none";
   liveTerminal = live;
+  renderDepth = depth;
   markdown = new MarkdownStream(process.stdout, depth, () => process.stdout.columns ?? 80, live);
 }
 
@@ -266,6 +270,9 @@ export function renderEvent(event: NovaEvent): void {
     if (activity.awaitingFirstDelta) {
       activity.awaitingFirstDelta = false;
       spinner?.stop();
+      // Labels the turn's response the moment it starts talking, the same way the "you" bubble
+      // labels the message that prompted it — printed once, right before the first token.
+      process.stdout.write(`${renderAgentLabel(renderDepth)}\n`);
     }
     forgetToolLines();
     markdown.push(event.event.text);
@@ -307,6 +314,11 @@ export function renderEvent(event: NovaEvent): void {
     activity.toolCalls += 1;
     const mark = runtime.isError ? style.red("✗") : style.green("✓");
     const summary = summarizeToolResult(runtime.toolName, runtime.content, runtime.isError);
+    // Feeds the end-of-turn "files modified" footer — only successful writes count as a touch.
+    if (!runtime.isError && (runtime.toolName === "write_file" || runtime.toolName === "edit_file")) {
+      const path = pendingCalls.get(runtime.toolCallId)?.detail;
+      if (path) touchedFiles.add(path);
+    }
     // The announcement and the outcome are the same line, rewritten where it already sits. Reads
     // parallel-safe calls correctly too: several are announced before the first result returns, so
     // the line to rewrite is usually not the last one printed.
@@ -676,6 +688,7 @@ async function main(): Promise<number> {
     // must not colour this one as code.
     activity.toolCalls = 0;
     activity.tokens = 0;
+    touchedFiles = new Set();
     forgetToolLines();
     markdown.reset();
     if (ttyMode) {
@@ -710,12 +723,19 @@ async function main(): Promise<number> {
       // A provider that cannot stream reaches here with the whole answer at once. It gets the same
       // markdown treatment the streamed path gives it, so the two are indistinguishable on screen.
       const asMarkdown = (text: string) => renderMarkdown(text, { width: process.stdout.columns ?? 80, depth });
+      // A non-streaming provider never fires the delta that would have printed the label already —
+      // it lands here with the whole answer at once, so the speaker still needs naming.
+      if (!streamedAnswer) process.stdout.write(`${renderAgentLabel(renderDepth)}\n`);
       if (result.status !== "completed" && spokenText && !streamedAnswer && !result.summary.includes(spokenText)) {
         process.stdout.write(`\n${asMarkdown(spokenText)}\n`);
       }
       // When the answer streamed, it is already on screen — reprinting it verbatim is noise.
       if (!(result.status === "completed" && streamedAnswer)) {
         process.stdout.write(`\n${result.status === "completed" ? asMarkdown(result.summary) : style.yellow(result.summary)}\n`);
+      }
+
+      if (touchedFiles.size > 0) {
+        process.stdout.write(`${renderFilesTouched([...touchedFiles], depth, process.stdout.columns ?? 80)}\n`);
       }
 
       const turn = ledger.record({
