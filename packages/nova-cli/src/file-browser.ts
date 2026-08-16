@@ -62,14 +62,32 @@ export function directorySummary(node: FileNode): { files: number; dirs: number 
   return { files, dirs };
 }
 
-export type FileRow = { node: FileNode; depth: number };
+/**
+ * A row, plus what a tree connector needs to know to be drawn.
+ *
+ * `trunks` answers, for each ancestor level, "does that ancestor have siblings still below it" —
+ * which is the only thing that decides whether a vertical line continues through this row's indent
+ * or the space is blank. It cannot be recovered from `depth` alone, which is why the flattener has
+ * to hand it down rather than the renderer working it out.
+ */
+export type FileRow = { node: FileNode; depth: number; isLast: boolean; trunks: readonly boolean[] };
 
 /** The tree, flattened to what expansion state makes visible — collapsed folders hide their children. */
-export function flattenTree(tree: readonly FileNode[], expanded: ReadonlySet<string>, depth = 0): FileRow[] {
+export function flattenTree(
+  tree: readonly FileNode[],
+  expanded: ReadonlySet<string>,
+  depth = 0,
+  trunks: readonly boolean[] = [],
+): FileRow[] {
   const rows: FileRow[] = [];
-  for (const node of tree) {
-    rows.push({ node, depth });
-    if (node.kind === "dir" && expanded.has(node.path)) rows.push(...flattenTree(node.children, expanded, depth + 1));
+  for (const [index, node] of tree.entries()) {
+    const isLast = index === tree.length - 1;
+    rows.push({ node, depth, isLast, trunks });
+    // A child's indent carries a trunk through this level exactly when this node still has siblings
+    // beneath it; the last child's descendants sit under blank space instead.
+    if (node.kind === "dir" && expanded.has(node.path)) {
+      rows.push(...flattenTree(node.children, expanded, depth + 1, [...trunks, !isLast]));
+    }
   }
   return rows;
 }
@@ -80,7 +98,7 @@ export function filterTree(tree: readonly FileNode[], query: string): FileRow[] 
   const rows: FileRow[] = [];
   const walk = (nodes: readonly FileNode[]): void => {
     for (const node of nodes) {
-      if (node.kind === "file") { if (node.path.toLowerCase().includes(needle)) rows.push({ node, depth: 0 }); }
+      if (node.kind === "file") { if (node.path.toLowerCase().includes(needle)) rows.push({ node, depth: 0, isLast: false, trunks: [] }); }
       else walk(node.children);
     }
   };
@@ -218,10 +236,14 @@ export function bodyHeight(rows: number): number {
 
 /** One tree row's label: indentation, a disclosure triangle for a folder, the name, a trailing slash for a folder. */
 export function treeLabel(row: FileRow, expanded: ReadonlySet<string>, glyphs: GlyphSet = UNICODE_GLYPHS): string {
-  const indent = "  ".repeat(row.depth);
-  if (row.node.kind === "file") return `${indent}  ${row.node.name}`;
+  // Connectors rather than plain indentation — Lip Gloss's `tree`. Two spaces per level tells you
+  // how deep a file is but not what it belongs to; once a folder's children scroll past its own
+  // row, the line is the only thing still saying which one they are under.
+  const indent = row.trunks.map((carries) => (carries ? glyphs.treeTrunk : "  ")).join("");
+  const connector = row.isLast ? glyphs.treeLast : glyphs.treeBranch;
+  if (row.node.kind === "file") return `${indent}${connector} ${row.node.name}`;
   const triangle = expanded.has(row.node.path) ? glyphs.expanded : glyphs.collapsed;
-  return `${indent}${triangle} ${row.node.name}/`;
+  return `${indent}${connector}${triangle} ${row.node.name}/`;
 }
 
 export type FilePreview =

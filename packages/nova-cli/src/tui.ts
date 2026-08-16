@@ -802,10 +802,25 @@ export function sliceToWidth(text: string, width: number): string {
  * third copy of the `sliceToWidth` underneath it. Three implementations of "make this cell exactly
  * this wide" is three places for a wide-character bug to hide, and only one of them would get fixed.
  */
-export function padToWidth(text: string, width: number): string {
+export function padToWidth(text: string, width: number, align: Align = "left"): string {
   const size = visibleWidth(text);
-  return size >= width ? sliceToWidth(text, width) : text + " ".repeat(width - size);
+  if (size >= width) return sliceToWidth(text, width);
+  const slack = width - size;
+  if (align === "right") return " ".repeat(slack) + text;
+  if (align === "center") return " ".repeat(Math.floor(slack / 2)) + text + " ".repeat(Math.ceil(slack / 2));
+  return text + " ".repeat(slack);
 }
+
+/**
+ * Which edge a cell's content sits against — Lip Gloss's `Align`.
+ *
+ * Worth a named parameter rather than leaving each caller to `padStart`, because the choice is not
+ * cosmetic: a column of numbers left-aligned cannot be compared down its own length, since the
+ * digit that means "hundreds" is in a different place on every row. `code-view.ts`,
+ * `patch-view.ts` and `models.ts` had each independently reached for `padStart` to fix that
+ * locally; the charts had not, and read wrong as a result.
+ */
+export type Align = "left" | "right" | "center";
 
 /**
  * Two columns side by side with a separator between them — Lip Gloss's `JoinHorizontal`, reduced to
@@ -820,10 +835,10 @@ export function padToWidth(text: string, width: number): string {
 export function joinHorizontal(
   left: string,
   right: string,
-  options: { leftWidth: number; rightWidth: number; separator?: string },
+  options: { leftWidth: number; rightWidth: number; separator?: string; leftAlign?: Align; rightAlign?: Align },
 ): string {
   const separator = options.separator ?? " ";
-  return `${padToWidth(left, options.leftWidth)}${separator}${padToWidth(right, options.rightWidth)}`;
+  return `${padToWidth(left, options.leftWidth, options.leftAlign)}${separator}${padToWidth(right, options.rightWidth, options.rightAlign)}`;
 }
 
 /** The tones a box can be given, for its title or its border. */

@@ -50,6 +50,13 @@ export type GlyphSet = {
   checkboxDone: string;
   paused: string;
   cancelled: string;
+  /**
+   * Tree connectors, as Lip Gloss's `tree` draws them: a branch to a child, the last child's
+   * corner, and the trunk that carries past a child to its siblings below.
+   */
+  treeBranch: string;
+  treeLast: string;
+  treeTrunk: string;
   /** Disclosure triangles for a collapsed or expanded block. */
   collapsed: string;
   expanded: string;
@@ -97,6 +104,9 @@ export const UNICODE_GLYPHS: GlyphSet = {
   checkboxDone: "☑",
   paused: "⏸",
   cancelled: "⊘",
+  treeBranch: "├─",
+  treeLast: "╰─",
+  treeTrunk: "│ ",
   collapsed: "▸",
   expanded: "▾",
   arrowUp: "↑",
@@ -148,6 +158,9 @@ export const ASCII_GLYPHS: GlyphSet = {
   checkboxDone: "[x]",
   paused: "=",
   cancelled: "x",
+  treeBranch: "|-",
+  treeLast: "`-",
+  treeTrunk: "| ",
   collapsed: ">",
   expanded: "v",
   arrowUp: "^",

@@ -204,22 +204,25 @@ describe("applyFileAction", () => {
 describe("treeLabel", () => {
   it("marks a folder with a disclosure triangle and a trailing slash", () => {
     const [src] = buildFileTree(PATHS);
-    expect(treeLabel({ node: src, depth: 0 }, new Set())).toContain("src/");
-    expect(treeLabel({ node: src, depth: 0 }, new Set())).toContain(UNICODE_GLYPHS.collapsed);
-    expect(treeLabel({ node: src, depth: 0 }, new Set(["src"]))).toContain(UNICODE_GLYPHS.expanded);
+    expect(treeLabel({ node: src, depth: 0, isLast: true, trunks: [] }, new Set())).toContain("src/");
+    expect(treeLabel({ node: src, depth: 0, isLast: true, trunks: [] }, new Set())).toContain(UNICODE_GLYPHS.collapsed);
+    expect(treeLabel({ node: src, depth: 0, isLast: true, trunks: [] }, new Set(["src"]))).toContain(UNICODE_GLYPHS.expanded);
   });
 
   it("indents by depth, so nesting is visible without reading paths", () => {
     const [src] = buildFileTree(PATHS);
     const child = src.children[0];
-    const shallow = treeLabel({ node: src, depth: 0 }, new Set());
-    const deep = treeLabel({ node: child, depth: 1 }, new Set());
+    const shallow = treeLabel({ node: src, depth: 0, isLast: true, trunks: [] }, new Set());
+    // One ancestor, which has nothing after it — so the indent is blank rather than a trunk, but
+    // it is still an indent. `trunks` has to describe every level above, or the row is a depth the
+    // renderer has no way to draw.
+    const deep = treeLabel({ node: child, depth: 1, isLast: true, trunks: [false] }, new Set());
     expect(deep.indexOf(child.name.length > 0 ? child.name[0] : "")).toBeGreaterThan(shallow.indexOf(src.name[0]));
   });
 
   it("stays inside ASCII on an ASCII terminal", () => {
     const [src] = buildFileTree(PATHS);
-    const label = treeLabel({ node: src, depth: 0 }, new Set(), ASCII_GLYPHS);
+    const label = treeLabel({ node: src, depth: 0, isLast: true, trunks: [] }, new Set(), ASCII_GLYPHS);
     for (const character of label) expect(character.codePointAt(0)).toBeLessThan(128);
   });
 });
@@ -279,5 +282,44 @@ describe("composeFileFrame", () => {
     const many = buildFileTree(Array.from({ length: 40 }, (_unused, index) => `file-${index}.ts`));
     const overflowing = state({ tree: many, rows: 10, selected: 20 });
     expect(composeFileFrame(overflowing, { kind: "empty" }).at(-1)!.text).toMatch(/\d+\/40/);
+  });
+});
+
+describe("tree connectors", () => {
+  const tree = buildFileTree(["a/one.ts", "a/two.ts", "b/deep/x.ts", "z.md"]);
+
+  it("gives the last child a corner and the others a branch", () => {
+    const rows = flattenTree(tree, new Set(["a"]));
+    const label = (name: string) => treeLabel(rows.find((row) => row.node.name === name)!, new Set(["a"]));
+    expect(label("one.ts")).toContain(UNICODE_GLYPHS.treeBranch);
+    expect(label("two.ts")).toContain(UNICODE_GLYPHS.treeLast);
+  });
+
+  it("carries a trunk through a level whose folder still has siblings below it", () => {
+    // a/ has b/ and z.md after it, so a's children are drawn with the line continuing past them.
+    const rows = flattenTree(tree, new Set(["a"]));
+    expect(treeLabel(rows.find((row) => row.node.name === "one.ts")!, new Set())).toContain(UNICODE_GLYPHS.treeTrunk);
+  });
+
+  it("leaves blank space instead of a trunk under the last folder", () => {
+    // z.md sorts last overall; expand b/, whose children sit under a trunk because z.md follows.
+    const rows = flattenTree(buildFileTree(["a/one.ts", "b/two.ts"]), new Set(["b"]));
+    // b/ is the last folder and there is nothing after it, so its child gets no trunk.
+    expect(treeLabel(rows.find((row) => row.node.name === "two.ts")!, new Set())).not.toContain(UNICODE_GLYPHS.treeTrunk);
+  });
+
+  it("indents one level per depth, so a nested file sits right of its folder", () => {
+    const rows = flattenTree(tree, new Set(["b", "b/deep"]));
+    const deep = treeLabel(rows.find((row) => row.node.name === "x.ts")!, new Set());
+    const folder = treeLabel(rows.find((row) => row.node.name === "b")!, new Set());
+    expect(deep.indexOf("x.ts")).toBeGreaterThan(folder.indexOf("b"));
+  });
+
+  it("stays inside ASCII on an ASCII terminal, connectors included", () => {
+    for (const row of flattenTree(tree, new Set(["a", "b"]))) {
+      for (const character of treeLabel(row, new Set(), ASCII_GLYPHS)) {
+        expect(character.codePointAt(0)).toBeLessThan(128);
+      }
+    }
   });
 });

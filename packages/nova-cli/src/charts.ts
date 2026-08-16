@@ -71,7 +71,10 @@ export function barChart(data: readonly BarDatum[], options: BarChartOptions): s
       ...(options.from === undefined ? {} : { from: options.from }),
       ...(options.to === undefined ? {} : { to: options.to }),
     });
-    return `${padToWidth(sliceToWidth(labels[index], labelWidth), labelWidth)} ${bar} ${padToWidth(values[index], valueWidth)}`;
+    // The value column is right-aligned: a column of figures is read by comparing them down its
+    // length, and left-aligning puts the digit that means "hundreds" in a different place on every
+    // row, which is exactly what makes a table of numbers unreadable.
+    return `${padToWidth(sliceToWidth(labels[index], labelWidth), labelWidth)} ${bar} ${padToWidth(values[index], valueWidth, "right")}`;
   });
 }
 
