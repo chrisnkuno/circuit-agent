@@ -263,6 +263,7 @@ export class NovaSessionDaemon {
   diffStat(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffStat(); }
   diffPatch(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffPatch(); }
   scanSecrets(clientId: string, sessionId: string, include?: string): Promise<PlacedSecretFinding[]> { return this.requireAttached(clientId, sessionId).agent.scanSecrets(include); }
+  listFiles(clientId: string, sessionId: string, pattern?: string): Promise<string[]> { return this.requireAttached(clientId, sessionId).agent.listFiles(pattern); }
   undo(clientId: string, sessionId: string, scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.requireAttached(clientId, sessionId).agent.undo(scope); }
   inspectTools(clientId: string, sessionId: string): ReturnType<NovaAgent["inspectTools"]> { return this.requireAttached(clientId, sessionId).agent.inspectTools(); }
 
@@ -344,6 +345,7 @@ export class NovaDaemonClient {
   diffStat(): Promise<string> { return this.daemon.diffStat(this.id, this.sessionId); }
   diffPatch(): Promise<string> { return this.daemon.diffPatch(this.id, this.sessionId); }
   scanSecrets(include?: string): Promise<PlacedSecretFinding[]> { return this.daemon.scanSecrets(this.id, this.sessionId, include); }
+  listFiles(pattern?: string): Promise<string[]> { return this.daemon.listFiles(this.id, this.sessionId, pattern); }
   undo(scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.daemon.undo(this.id, this.sessionId, scope); }
   inspectTools(): ReturnType<NovaAgent["inspectTools"]> { return this.daemon.inspectTools(this.id, this.sessionId); }
   decideApproval(id: string, decision: PermissionDecision): void { this.daemon.decideApproval(this.id, id, decision); }

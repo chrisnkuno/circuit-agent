@@ -110,6 +110,10 @@ export class NovaHost {
         return { diff: (await this.client?.diffStat()) ?? "" };
       case "todos.get":
         return { todos: this.client?.todos ?? [] };
+      case "files.list":
+        // Through the workspace, so a sandboxed session lists the sandbox's files and not this
+        // machine's. Read-only and free, like the scan.
+        return { files: (await this.client?.listFiles(request.pattern)) ?? [] };
       case "scan.secrets":
         // Deterministic and read-only, so it runs without a model turn and without an approval —
         // the same guarantee the `scan_secrets` tool carries, reached directly.

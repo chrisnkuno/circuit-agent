@@ -1,5 +1,6 @@
 import { windowStart } from "./chooser";
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
+import { buildFileTree, type FileNode } from "@circuit-nova/nova-core/nova-cli/file-tree";
 import { visibleWidth } from "./markdown";
 import { NO_COLOR_PALETTE, type Palette } from "./theme";
 import { joinHorizontal, paginator, padToWidth as pad } from "./tui";
@@ -16,60 +17,11 @@ import { joinHorizontal, paginator, padToWidth as pad } from "./tui";
  * project's own structure already implies, not a ranking this file invents.
  */
 
-export type FileNode = {
-  name: string;
-  /** Root-relative, forward-slashed — the same shape `workspace.glob` returns. */
-  path: string;
-  kind: "dir" | "file";
-  children: FileNode[];
-};
+// The tree itself is agent-core's: the desktop draws the same structure with nested elements, and
+// two implementations of "what is a folder, what sorts first" is two things to keep in step.
+export { directorySummary, type FileNode } from "@circuit-nova/nova-core/nova-cli/file-tree";
+export { buildFileTree };
 
-/** Builds the tree from a flat file list — the shape `workspace.glob("**\/*")` already returns. */
-export function buildFileTree(paths: readonly string[]): FileNode[] {
-  const root: FileNode = { name: "", path: "", kind: "dir", children: [] };
-  for (const raw of paths) {
-    const parts = raw.split("/").filter((part) => part.length > 0);
-    let node = root;
-    let built = "";
-    for (const [index, part] of parts.entries()) {
-      built = built ? `${built}/${part}` : part;
-      const isFile = index === parts.length - 1;
-      let child = node.children.find((candidate) => candidate.name === part);
-      if (!child) {
-        child = { name: part, path: built, kind: isFile ? "file" : "dir", children: [] };
-        node.children.push(child);
-      }
-      node = child;
-    }
-  }
-  sortTree(root);
-  return root.children;
-}
-
-function sortTree(node: FileNode): void {
-  node.children.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "dir" ? -1 : 1));
-  for (const child of node.children) sortTree(child);
-}
-
-/** How many files and folders a directory holds, directly or nested — a synchronous preview for a row with no content of its own to show. */
-export function directorySummary(node: FileNode): { files: number; dirs: number } {
-  let files = 0;
-  let dirs = 0;
-  for (const child of node.children) {
-    if (child.kind === "file") files += 1;
-    else { dirs += 1; const nested = directorySummary(child); files += nested.files; dirs += nested.dirs; }
-  }
-  return { files, dirs };
-}
-
-/**
- * A row, plus what a tree connector needs to know to be drawn.
- *
- * `trunks` answers, for each ancestor level, "does that ancestor have siblings still below it" —
- * which is the only thing that decides whether a vertical line continues through this row's indent
- * or the space is blank. It cannot be recovered from `depth` alone, which is why the flattener has
- * to hand it down rather than the renderer working it out.
- */
 export type FileRow = { node: FileNode; depth: number; isLast: boolean; trunks: readonly boolean[] };
 
 /** The tree, flattened to what expansion state makes visible — collapsed folders hide their children. */

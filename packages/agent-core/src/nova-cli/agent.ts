@@ -207,6 +207,16 @@ export class NovaAgent {
     return this.checkpoints.diffStat();
   }
 
+  /**
+   * The project's files, root-relative — for a file browser, on whichever backend is in use.
+   *
+   * Goes through `this.workspace`, so a sandboxed session lists the sandbox's files rather than the
+   * host's. Read-only and free: no model turn and no approval, the same as `scanSecrets`.
+   */
+  listFiles(pattern = "**/*"): Promise<string[]> {
+    return this.workspace.glob(pattern);
+  }
+
   /** The deterministic secret scan, run directly against the workspace — for `/scan`. No model turn, no approval: same read-only guarantee as the `scan_secrets` tool it shares its logic with. */
   scanSecrets(include?: string): Promise<PlacedSecretFinding[]> {
     return scanWorkspaceForSecrets(this.workspace, include);
