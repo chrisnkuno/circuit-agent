@@ -76,6 +76,7 @@ describe("the documented list", () => {
       matchShortcut({ key: "1", altKey: true }),
       matchShortcut({ key: "2", altKey: true }),
       matchShortcut({ key: "3", altKey: true }),
+      matchShortcut({ key: "4", altKey: true }),
     ]);
     for (const action of produced) expect(documented).toContain(action);
     expect(documented.size).toBe(produced.size);

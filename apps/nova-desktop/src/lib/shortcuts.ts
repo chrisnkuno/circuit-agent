@@ -19,6 +19,7 @@ export type ShortcutAction =
   | "plan"
   | "build"
   | "auto"
+  | "defender"
   | "focus-composer";
 
 export type ShortcutEvent = {
@@ -45,6 +46,7 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { action: "plan", label: "Plan mode", keys: "Alt 1" },
   { action: "build", label: "Build mode", keys: "Alt 2" },
   { action: "auto", label: "Auto mode", keys: "Alt 3" },
+  { action: "defender", label: "Defender mode", keys: "Alt 4" },
 ];
 
 /**
@@ -69,6 +71,7 @@ export function matchShortcut(event: ShortcutEvent): ShortcutAction | undefined 
     if (key === "1") return "plan";
     if (key === "2") return "build";
     if (key === "3") return "auto";
+    if (key === "4") return "defender";
     return undefined;
   }
 
