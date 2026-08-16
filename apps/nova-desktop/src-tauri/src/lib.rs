@@ -198,8 +198,26 @@ fn pump_stdout(app: AppHandle, state: Arc<AppState>, stdout: impl std::io::Read 
         }
       }
     }
+
+    // Falling out of that loop means stdout closed, which means the sidecar process is gone —
+    // crashed, killed, or exited. Every request still waiting on a reply would otherwise sit on
+    // its ten-minute timeout with the window looking simply frozen, so they are failed here with
+    // something the UI can actually say out loud. Clearing `child`/`stdin` is what lets the next
+    // `sidecar_start` spawn a replacement rather than believing one is still running.
+    {
+      let mut guard = state.sidecar.lock().expect("sidecar lock");
+      guard.child = None;
+      guard.stdin = None;
+      for (_, pending) in guard.pending.drain() {
+        let _ = pending.tx.send(Err(SIDECAR_STOPPED.to_string()));
+      }
+    }
+    let _ = app.emit("sidecar-exited", ());
   });
 }
+
+/// Shown when the engine process dies. Phrased for the person reading it, not for a log.
+const SIDECAR_STOPPED: &str = "Nova's engine stopped unexpectedly. Your session is saved — send another message to restart it.";
 
 fn pump_stderr(stderr: impl std::io::Read + Send + 'static) {
   thread::spawn(move || {

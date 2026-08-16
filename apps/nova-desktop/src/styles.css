@@ -1148,3 +1148,30 @@ button {
 .keys-help dd {
   color: var(--muted);
 }
+
+/* The crash screen — see components/ErrorBoundary.tsx. Deliberately styled with the same tokens as
+   everything else rather than as a bare fallback: an error screen that looks like it belongs to the
+   app reads as "Nova handled this", where an unstyled one reads as "Nova is broken". */
+.crash-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  margin: 48px auto;
+  padding: 24px;
+}
+.crash-title { margin: 0; font-size: 20px; }
+.crash-summary { margin: 0; opacity: 0.85; }
+.crash-detail {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.12);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.crash-actions { display: flex; gap: 8px; }
+.crash-note { margin: 0; font-size: 12px; opacity: 0.7; }

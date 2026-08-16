@@ -104,6 +104,17 @@ export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promis
   return await listen<IpcEvent>("sidecar-event", (event) => handler(event.payload));
 }
 
+/**
+ * Fires when the engine process dies — crashed, killed, or exited on its own.
+ *
+ * Separate from `sidecar-event`, which carries things the *session* produced. This says there is
+ * no session any more, which the UI has to treat differently: any turn in flight is over, and the
+ * next request will start a fresh process rather than continue the old one.
+ */
+export async function onSidecarExit(handler: () => void): Promise<UnlistenFn> {
+  return await listen("sidecar-exited", () => handler());
+}
+
 /** Non-blocking folder picker via the dialog plugin (safe on Linux/GTK). */
 export async function pickFolder(): Promise<string | null> {
   const selected = await open({

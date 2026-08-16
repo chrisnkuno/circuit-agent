@@ -4,6 +4,7 @@ import {
   ensureSidecar,
   loadPersistedSettings,
   onSidecarEvent,
+  onSidecarExit,
   savePersistedSettings,
   setSettings as pushSettings,
 } from "./lib/ipc";
@@ -40,6 +41,9 @@ function UpdateBanner({
     </div>
   );
 }
+
+/** Kept in step with the same sentence the Rust side sends to any request left in flight. */
+const SIDECAR_STOPPED = "Nova's engine stopped unexpectedly. Your session is saved — send another message to restart it.";
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -85,6 +89,7 @@ export default function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenExit: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       // Show the settings form immediately so API-key input is never blocked on sidecar boot.
@@ -104,6 +109,13 @@ export default function App() {
         unlisten = await onSidecarEvent((event) => {
           setEvents((prev) => [...prev, event]);
         });
+        // The engine dying is not a session event — there is no session left to report it to — so
+        // it is surfaced the same way a failed boot is: the app stops claiming to be ready and
+        // says why, rather than leaving a dead window that looks merely busy.
+        unlistenExit = await onSidecarExit(() => {
+          setSidecarReady(false);
+          setBootError(SIDECAR_STOPPED);
+        });
         if (cancelled) return;
         setSidecarReady(true);
         setBootError(null);
@@ -122,6 +134,7 @@ export default function App() {
     return () => {
       cancelled = true;
       unlisten?.();
+      unlistenExit?.();
     };
   }, []);
 
