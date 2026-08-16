@@ -1,7 +1,7 @@
 {
   "name": "@circuit-nova/nova-cli",
   "version": "0.9.3",
-  "description": "Nova — a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with guarded approvals, git checkpoints, and real cost accounting.",
+  "description": "Nova \u2014 a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with guarded approvals, git checkpoints, and real cost accounting.",
   "keywords": [
     "cli",
     "coding-agent",
@@ -12,6 +12,16 @@
     "openai"
   ],
   "license": "MIT",
+  "author": "chrisnkuno",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrisnkuno/circuit-agent.git",
+    "directory": "packages/nova-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/chrisnkuno/circuit-agent/issues"
+  },
+  "homepage": "https://github.com/chrisnkuno/circuit-agent/tree/main/packages/nova-cli#readme",
   "type": "module",
   "bin": {
     "nova": "dist/nova.mjs"
