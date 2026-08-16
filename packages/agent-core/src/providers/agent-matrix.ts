@@ -16,9 +16,9 @@ import { PRICE_CATALOG } from "./price-catalog";
  * plainly that it cannot price it rather than inventing a number.
  */
 
-export type ProviderId = "anthropic" | "openai" | "circuitnotion";
+export type ProviderId = "anthropic" | "openai" | "circuitnotion" | "ollama";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["anthropic", "openai", "circuitnotion"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["anthropic", "openai", "circuitnotion", "ollama"];
 
 export function isProviderId(value: string): value is ProviderId {
   return (PROVIDER_IDS as readonly string[]).includes(value);
@@ -35,8 +35,15 @@ export type ProviderSpec = {
   create(environment: ProviderEnvironment, model: string): AgentTurnProvider;
 };
 
-/** What the dated catalog says this provider's model costs on a given day. */
+/**
+ * What the dated catalog says this provider's model costs on a given day.
+ *
+ * Local inference has no per-model catalog entry — a homelab can pull any model it likes — but its
+ * price is not unknown, it is zero: nothing is metered, nothing is billed. Reporting that as
+ * "unpriced" would understate confidence in a fact this build is actually certain of.
+ */
 export function catalogPrices(provider: ProviderId, model: string, asOf?: string): TokenPrices | undefined {
+  if (provider === "ollama") return tokenPrices("USD", 0, 0, 0);
   const record = selectPrice(PRICE_CATALOG, { provider, model, asOf });
   return record && record.billingUnit === "tokens" ? tokenPricesFor(record) : undefined;
 }
@@ -79,11 +86,39 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
         relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined,
       }),
   },
+  // No key required — an Ollama daemon accepts anything in the Authorization header — so this
+  // provider is always "configured" and only fails at call time if nothing is listening on the
+  // base URL, the same way a bad OPENAI_BASE_URL override would.
+  ollama: {
+    id: "ollama",
+    label: "Ollama (local)",
+    requires: [],
+    defaultModel: "llama3.1",
+    create: (environment, model) =>
+      new OpenAIAgentTurnProvider({
+        apiKey: "ollama",
+        model,
+        baseURL: environment.OLLAMA_BASE_URL?.trim() || "http://localhost:11434/v1",
+      }),
+  },
 };
 
 /** Providers whose credentials are actually present, so the CLI can offer only what will work. */
 export function availableProviders(environment: ProviderEnvironment): ProviderSpec[] {
   return PROVIDER_IDS.map((id) => PROVIDERS[id]).filter((spec) => spec.requires.every((name) => environment[name]?.trim()));
+}
+
+/**
+ * `availableProviders`, minus a provider that requires nothing at all to look "configured".
+ *
+ * Ollama needs no key, so it is trivially "available" in an environment with nothing configured —
+ * exactly the environment `resolveProvider`'s implicit fallback exists to reject with a real error
+ * rather than silently starting a session against a local daemon nobody asked for and that is
+ * probably not even running. Explicit selection (`/model ollama`, `NOVA_PROVIDER=ollama`) always
+ * still works; only the *unrequested* auto-pick excludes it.
+ */
+function implicitlyAvailableProviders(environment: ProviderEnvironment): ProviderSpec[] {
+  return availableProviders(environment).filter((spec) => spec.requires.length > 0);
 }
 
 export type ResolvedProvider = {
@@ -127,7 +162,7 @@ export function resolveProvider(
   }
   const spec = options.provider
     ? PROVIDERS[options.provider as ProviderId]
-    : rememberedProvider(environment) ?? availableProviders(environment)[0];
+    : rememberedProvider(environment) ?? implicitlyAvailableProviders(environment)[0];
   if (!spec) {
     return { error: `No model provider is configured. Set one of: ${PROVIDER_IDS.map((id) => PROVIDERS[id].requires.join("+")).join(", ")}.` };
   }

@@ -100,7 +100,16 @@ export type NovaToolOptions = {
   externalToolProviders?: ToolProvider[];
   /** Pre/post tool-call interception. See hooks.ts. Applied to every tool, built-in and external alike. */
   hooks?: HookRegistry;
+  /**
+   * Runs one self-contained sub-task through a bounded sub-agent, when the caller (`agent.ts`) has
+   * wired one up. Absent this, `delegate_task` is not offered — same "only real capabilities get a
+   * tool" rule `search` already follows.
+   */
+  delegate?: DelegateRunner;
 };
+
+export type DelegateResult = { report: string; status: string; iterations: number; toolCallsExecuted: number };
+export type DelegateRunner = (task: string) => Promise<DelegateResult>;
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string`);
@@ -454,6 +463,33 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         if (!response.ok) return { content: `Fetch failed with status ${response.status}.`, isError: true };
         const text = await response.text();
         return { content: stripMarkup(text).slice(0, 40_000) };
+      },
+    });
+  }
+
+  if (options.delegate) {
+    const delegate = options.delegate;
+    tools.push({
+      name: "delegate_task",
+      description:
+        "Hand off one self-contained sub-task to a bounded sub-agent with its own tool loop, and get back its final report. Good for an independent piece of work you can describe completely up front — a focused investigation, a well-scoped chunk of a larger job — not for the thread of work you were asked to do yourself. The sub-agent has the same tools and mode you do, minus this one: it cannot delegate further.",
+      inputSchema: {
+        type: "object",
+        properties: { task: { type: "string", description: "A complete, self-contained brief — the sub-agent starts with no memory of this conversation." } },
+        required: ["task"],
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.planning,
+      effect: "none",
+      requiresApproval: false,
+      // Not parallel-safe despite effect:"none": it can run for many iterations and is expensive
+      // to run concurrently with anything else in the same batch.
+      parallelSafe: false,
+      async execute(args) {
+        const task = requiredString(args.task, "task");
+        const result = await delegate(task);
+        const note = result.status === "completed" ? "" : `\n\n[sub-agent ended: ${result.status}, ${result.iterations} iteration(s), ${result.toolCallsExecuted} tool call(s)]`;
+        return { content: `${result.report}${note}` };
       },
     });
   }

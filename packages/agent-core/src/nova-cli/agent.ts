@@ -19,7 +19,7 @@ import {
 } from "./session";
 import { loadLocalExternalTooling, type LocalExternalTooling } from "./external-tools";
 import { NestedInstructionTracker } from "./nested-instructions";
-import { createNovaTools, TodoList, type TodoItem } from "./tools";
+import { createNovaTools, TodoList, type DelegateResult, type DelegateRunner, type TodoItem } from "./tools";
 import type { Expense } from "./cost";
 import { predictAgentUsage, type AgentCostPrediction } from "./cost";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
@@ -116,6 +116,9 @@ export class NovaAgent {
   private journal: EventJournal;
   private activeTurnId: string | null = null;
   private activeTransition: ((to: TurnStatus, durable?: boolean) => Promise<void>) | null = null;
+  /** What `delegate_task` sub-runs have spent this turn — folded into the turn's own total once it finishes. See `createDelegateRunner`. */
+  private delegatedRwf = 0;
+  private delegatedUsage: ModelUsage = emptyModelUsage();
 
   constructor(private readonly options: NovaAgentOptions) {
     this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...options.budgets };
@@ -242,7 +245,9 @@ export class NovaAgent {
    * reason — plan mode genuinely cannot call the write tools, so listing them would be a lie.
    */
   async inspectTools(): Promise<{ tools: AgentTool[]; hooks: { preToolUse: string[]; postToolUse: string[] }; providerIds: string[] }> {
+    const context = await collectProjectContext(this.options.root);
     const externalTooling = await this.loadExternalTooling();
+    const delegate = this.createDelegateRunner(context, () => this.budgets.maxRwf);
     const tools = await createNovaTools({
       workspace: this.workspace,
       todos: this.todoList,
@@ -251,6 +256,7 @@ export class NovaAgent {
       instructions: this.nestedInstructions,
       externalToolProviders: externalTooling?.providers,
       hooks: externalTooling?.hooks,
+      delegate: delegate.runner,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
     return {
@@ -264,6 +270,7 @@ export class NovaAgent {
   async estimateNextTurn(objective: string): Promise<AgentCostPrediction> {
     const context = await collectProjectContext(this.options.root);
     const externalTooling = await this.loadExternalTooling();
+    const delegate = this.createDelegateRunner(context, () => this.budgets.maxRwf);
     const tools = await createNovaTools({
       workspace: this.workspace,
       todos: this.todoList,
@@ -272,9 +279,11 @@ export class NovaAgent {
       instructions: this.nestedInstructions,
       externalToolProviders: externalTooling?.providers,
       hooks: externalTooling?.hooks,
+      delegate: delegate.runner,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
     const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
+    delegate.setTools(scoped.filter((tool) => tool.name !== "delegate_task"));
     const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, scoped.map((tool) => tool.name), this.workspace);
     const toolSchemas = JSON.stringify(scoped.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })));
     const initialInputTokens = approximateInputTokens([
@@ -313,6 +322,68 @@ export class NovaAgent {
   }
 
   /**
+   * Builds the closure `delegate_task` calls to run one bounded sub-agent.
+   *
+   * The sub-agent's own tool list is not known yet when this closure is created — it is the
+   * outer tool list, once built, minus `delegate_task` itself. `setTools` is called once that list
+   * exists; `execute` is only ever invoked later, during the run, by which point it always has. The
+   * indirection is what keeps this to one `createNovaTools` call instead of two.
+   *
+   * Depth is bounded structurally, not by a counter: the sub-agent's tool set never includes
+   * `delegate_task`, so it cannot spawn a further sub-agent no matter what it is asked to do.
+   *
+   * Approval, cancellation and mode are all inherited from the parent session — the same
+   * `PermissionLedger`, so every effectful call inside the sub-agent is gated exactly as it would
+   * be if the top-level agent had called it directly, and cancelling the parent turn stops it too.
+   * What is not inherited is live event streaming: a sub-agent's own tool calls are not pushed to
+   * `onEvent`, so the transcript shows `delegate_task` as one call with one final report, not a
+   * nested play-by-play.
+   */
+  private createDelegateRunner(context: ProjectContext, remainingRwf: () => number): { runner: DelegateRunner; setTools: (tools: AgentTool[]) => void } {
+    let subTools: AgentTool[] = [];
+    const capabilities = capabilitiesForMode(this.options.mode);
+    const runner: DelegateRunner = async (task: string): Promise<DelegateResult> => {
+      const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, subTools.map((tool) => tool.name), this.workspace);
+      // Never more than half of whatever is left of the turn's own budget on one delegation, so a
+      // model that delegates several times in a row cannot spend the whole turn's budget on the
+      // first one and leave nothing for the rest of its own work.
+      const reservation = Math.max(0, Math.min(remainingRwf(), this.budgets.maxRwf / 2));
+      const runtime = new BoundedAgentRuntime({
+        model: this.options.model,
+        tools: subTools,
+        prices: this.options.prices,
+        control: {
+          heartbeat: async () => {},
+          isCancellationRequested: async () => this.cancelled,
+          isToolCallApproved: (call, tool) => this.permissions.decide(call, tool),
+          persistEvent: async () => {},
+        },
+      });
+      const result = await runtime.execute({
+        taskId: `${this.session.id}_delegate`,
+        runId: this.session.id,
+        stepId: `delegate_${randomUUID()}`,
+        objective: task,
+        history: [],
+        systemPrompt,
+        allowedCapabilityIds: capabilities,
+        maxIterations: Math.min(15, this.budgets.maxIterations),
+        maxToolCalls: Math.min(40, this.budgets.maxToolCalls),
+        maxToolCallsPerTurn: this.budgets.maxToolCallsPerTurn,
+        maxToolResultChars: this.budgets.maxToolResultChars,
+        maxTotalToolResultChars: this.budgets.maxTotalToolResultChars,
+        maxOutputTokens: this.budgets.maxOutputTokens,
+        modelReservationRwf: reservation,
+        safetyIdentifier: `nova_cli_${this.session.id}_delegate`.slice(0, 64),
+      });
+      this.delegatedRwf += result.actualModelRwf;
+      this.delegatedUsage = addModelUsage(this.delegatedUsage, result.usage);
+      return { report: result.summary, status: result.status, iterations: result.iterations, toolCallsExecuted: result.toolCallsExecuted };
+    };
+    return { runner, setTools: (tools) => { subTools = tools; } };
+  }
+
+  /**
    * Runs one turn: the user says something, the agent works until it has an answer.
    *
    * The transcript persists across turns, which is what makes a follow-up like "now do the same
@@ -340,6 +411,14 @@ export class NovaAgent {
       // A long-lived session must not keep following an AGENTS.md that changed three turns ago.
       this.context = await collectProjectContext(this.options.root);
 
+      // `delegate_task` reserves against what is left of *this turn's* budget once compaction (below)
+      // has taken its share — known only after this point, so the callback reads it through a
+      // variable set once it is, rather than the closure capturing today's zero forever.
+      this.delegatedRwf = 0;
+      this.delegatedUsage = emptyModelUsage();
+      let compactionActualRwf = 0;
+      const delegate = this.createDelegateRunner(this.context, () => Math.max(0, this.budgets.maxRwf - compactionActualRwf - this.delegatedRwf));
+
       const externalTooling = await this.loadExternalTooling();
       const tools = await createNovaTools({
         workspace: this.workspace,
@@ -349,9 +428,11 @@ export class NovaAgent {
         instructions: this.nestedInstructions,
         externalToolProviders: externalTooling?.providers,
         hooks: externalTooling?.hooks,
+        delegate: delegate.runner,
       });
       const capabilities = capabilitiesForMode(this.options.mode);
       const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
+      delegate.setTools(scoped.filter((tool) => tool.name !== "delegate_task"));
       const systemPrompt = buildNovaSystemPrompt(
         this.context,
         this.options.mode,
@@ -374,6 +455,7 @@ export class NovaAgent {
       }
 
       const compaction = await this.compactIfNeeded(turnId);
+      compactionActualRwf = compaction.actualRwf;
       const runtime = new BoundedAgentRuntime({
         model: this.options.model,
         tools: scoped,
@@ -415,8 +497,8 @@ export class NovaAgent {
         safetyIdentifier: `nova_cli_${this.session.id}`.slice(0, 64),
       });
 
-      const combinedUsage = addModelUsage(compaction.usage, result.usage);
-      const combinedRwf = compaction.actualRwf + result.actualModelRwf;
+      const combinedUsage = addModelUsage(compaction.usage, addModelUsage(result.usage, this.delegatedUsage));
+      const combinedRwf = compaction.actualRwf + result.actualModelRwf + this.delegatedRwf;
       this.messages = result.messages;
       this.session = {
         ...this.session,

@@ -185,6 +185,54 @@ describe("nova tool set", () => {
   });
 });
 
+describe("delegate_task", () => {
+  it("is offered only when a delegate runner is configured", async () => {
+    const withoutDelegate = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    expect(withoutDelegate.some((tool) => tool.name === "delegate_task")).toBe(false);
+
+    const withDelegate = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      delegate: async () => ({ report: "done", status: "completed", iterations: 1, toolCallsExecuted: 0 }),
+    });
+    const tool = withDelegate.find((candidate) => candidate.name === "delegate_task")!;
+    expect(tool).toBeDefined();
+    expect(tool.effect).toBe("none");
+    expect(tool.parallelSafe).toBe(false);
+  });
+
+  it("returns the sub-agent's report as its content", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      delegate: async (task) => ({ report: `handled: ${task}`, status: "completed", iterations: 3, toolCallsExecuted: 5 }),
+    });
+    const result = await toolNamed(tools, "delegate_task").execute({ task: "count the exported symbols in src/" }, context);
+    expect(result.content).toBe("handled: count the exported symbols in src/");
+  });
+
+  it("appends a note when the sub-agent did not finish cleanly", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      delegate: async () => ({ report: "ran out of budget", status: "iteration_limit", iterations: 15, toolCallsExecuted: 40 }),
+    });
+    const result = await toolNamed(tools, "delegate_task").execute({ task: "x" }, context);
+    expect(result.content).toContain("ran out of budget");
+    expect(result.content).toContain("iteration_limit");
+    expect(result.content).toContain("15 iteration(s)");
+  });
+
+  it("requires a task", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      delegate: async () => ({ report: "", status: "completed", iterations: 0, toolCallsExecuted: 0 }),
+    });
+    await expect(toolNamed(tools, "delegate_task").execute({}, context)).rejects.toThrow(/task/);
+  });
+});
+
 describe("web_fetch", () => {
   it("offers web_fetch only when a fetch implementation is available", async () => {
     const withFetch = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), fetchImpl: async () => new Response("ok") });

@@ -579,6 +579,67 @@ source is anything other than the developer's own fixed prompt text, treat it as
 check what the model is allowed to do as a result of processing it.
 `.trim();
 
+export const THREAT_INTELLIGENCE_PLAYBOOK = `
+## Threat intelligence & memory
+
+The playbooks above are curated but static; the threat landscape is not. A dependency, framework,
+or platform this project actually uses can have a disclosure that postdates this build.
+
+- **Search before you conclude a dependency category is clean.** Once you know what the project
+  actually runs (from its manifest — \`package.json\`, \`requirements.txt\`, \`go.mod\`, \`Gemfile\`,
+  base images, and so on), use \`web_search\` for recent CVEs, advisories, or active-exploitation
+  reports against the specific frameworks, libraries and major versions this project depends on —
+  not a generic "latest security threats" query. A search scoped to what is actually installed
+  finds the one advisory that matters; a generic one returns noise.
+- **Distinguish a real finding from a search result.** A CVE only becomes a finding once you have
+  confirmed the vulnerable code path is actually reachable here — the same standard as every other
+  playbook. Cite the advisory (id and source) alongside the file/line that makes it apply.
+- **Persist what you learn, so the next review does not start from zero.** When a search turns up
+  something durable and specific to this project — a CVE affecting a pinned version, a technique
+  actively being used against this project's exact stack, a hardening step this project has not
+  taken — write it to project memory at \`.nova/memory.md\` using the existing bullet format
+  (\`- [lesson] <durable, specific fact>\`), the same file and tools you would use for any other
+  edit. Keep each entry self-contained and dated in its own text (advisory ids age; "current" does
+  not), and keep it to the conclusion, not the search transcript — the next defender run recalls it
+  automatically when its terms overlap with what that run is looking at.
+- **Do not duplicate what is already remembered.** Check the memory block already given to you
+  before adding a near-identical entry; extend or supersede an existing line rather than repeating
+  it.
+`.trim();
+
+export const HARDENING_RESOURCES_PLAYBOOK = `
+## Hardening resources, cost & hosting guidance
+
+A finding without a realistic path to fixing it is a report nobody acts on. Once you have real
+findings, close the review by telling the user *what it actually takes to fix them* — grounded in
+this project, not a generic checklist.
+
+- **Read what this project actually runs on before recommending anything.** A Dockerfile, compose
+  file, Terraform/CloudFormation/Pulumi source, \`vercel.json\`, \`fly.toml\`, a Kubernetes manifest,
+  or a CI workflow all say where this project is actually deployed. Recommend the tool or practice
+  that fits that target — a managed secret manager for a project already on the cloud provider that
+  offers one, a \`.env\` + \`git-crypt\`/\`sops\` pattern for one that deploys from a single box, a
+  reverse-proxy rate limit for one fronted by nginx/Caddy already. A recommendation that assumes
+  infrastructure the project does not have is not actionable.
+- **Name specific resources, not categories.** "Add a WAF" is a category; "Cloudflare's free tier
+  covers basic WAF rules for this domain, or \`fail2ban\` if this stays on a single VPS" is a
+  resource the user can actually go get. Prefer free or already-configured-provider options first —
+  the cheapest real fix beats an expensive ideal one nobody will buy.
+- **Calculate cost when it is knowable.** For anything with a real price (a managed service, a
+  paid scanning tool, additional compute for a hardened build step), give a concrete estimate — use
+  \`web_search\` for current pricing rather than guessing, and show the arithmetic (unit price ×
+  the project's actual scale) rather than a bare number so the user can sanity-check it against
+  their own traffic or usage.
+- **Call out the local-vs-cloud tradeoff explicitly when it is live.** If the project could harden
+  the same gap either by self-hosting (more control, more operational burden, no recurring fee) or
+  by adopting a managed/cloud service (less to run, a bill, a new trust boundary), say so as a real
+  choice with its actual tradeoff for this project's size and team — not as a rule of thumb that
+  applies to every project the same way.
+- **Rank resourcing suggestions by the findings they close.** A recommendation that fixes the
+  highest-severity finding on the list belongs first; do not let a cheap, easy suggestion crowd out
+  the one that actually matters.
+`.trim();
+
 /** Every playbook, in the order DEFENDER mode should generally work them. */
 export const DEFENDER_PLAYBOOKS = [
   // Ordered by real-world prevalence per OWASP's 2025 Top Ten dataset (175,000+ CVEs, practitioner
@@ -601,4 +662,9 @@ export const DEFENDER_PLAYBOOKS = [
   INPUT_VALIDATION_FUZZING_PLAYBOOK,
   LOGGING_MONITORING_DETERRENCE_PLAYBOOK,
   LLM_AI_SECURITY_PLAYBOOK,
+  // Not OWASP categories at all — these close the loop the categories above open: stay current
+  // past this build's knowledge cutoff, remember what was learned, and turn findings into
+  // resourced, costed, actionable next steps rather than leaving the user with a list.
+  THREAT_INTELLIGENCE_PLAYBOOK,
+  HARDENING_RESOURCES_PLAYBOOK,
 ].join("\n\n");

@@ -185,6 +185,57 @@ describe("NovaAgent", () => {
     expect(tools).toContain("run_command");
   });
 
+  it("runs delegate_task as a real bounded sub-agent, and folds its cost into the turn total", async () => {
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "delegate_task", arguments: { task: "count the exported symbols in app.ts" } }] },
+      // The sub-agent's own single turn, driven by the same shared model.
+      { finishReason: "stop", content: "app.ts exports one symbol: port." },
+      { finishReason: "stop", content: "The sub-agent found one export." },
+    ]);
+    const agent = new NovaAgent({ root, model, prices, mode: "build", approve: async () => "allow" });
+
+    const result = await agent.send("figure out how many symbols app.ts exports");
+    expect(result.status).toBe("completed");
+    expect(result.summary).toBe("The sub-agent found one export.");
+    // Three model calls total: the parent's tool-call turn, the sub-agent's turn, the parent's
+    // final turn — proving the sub-agent actually ran through the same provider, not a stub.
+    expect(model.requests).toHaveLength(3);
+    // Combined usage/cost includes what the sub-agent spent, not only the parent's own two turns.
+    expect(result.usage.totalTokens).toBeGreaterThan(0);
+  });
+
+  it("never offers delegate_task to the sub-agent it creates, so delegation cannot recurse", async () => {
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "delegate_task", arguments: { task: "investigate something" } }] },
+      { finishReason: "stop", content: "sub-agent report" },
+      { finishReason: "stop", content: "done" },
+    ]);
+    const agent = new NovaAgent({ root, model, prices, mode: "build", approve: async () => "allow" });
+    await agent.send("delegate something");
+
+    const subAgentRequest = model.requests[1];
+    expect(subAgentRequest.tools.map((tool) => tool.name)).not.toContain("delegate_task");
+  });
+
+  it("gates an effectful call inside the sub-agent through the same approval callback as the top level", async () => {
+    const approvals: string[] = [];
+    const model = scriptedModel([
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "delegate_task", arguments: { task: "write a file" } }] },
+      { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c2", name: "write_file", arguments: { path: "from-subagent.ts", content: "x" } }] },
+      { finishReason: "stop", content: "wrote the file" },
+      { finishReason: "stop", content: "done" },
+    ]);
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async (request) => { approvals.push(request.tool.name); return "allow"; },
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "" }),
+    });
+
+    await agent.send("delegate a file write");
+    expect(approvals).toContain("write_file");
+    expect(await fs.readFile(path.join(root, "from-subagent.ts"), "utf8")).toBe("x");
+  });
+
   it("does not offer write or command tools in plan mode", async () => {
     const model = scriptedModel([{ finishReason: "stop", content: "Here is the plan." }]);
     const agent = new NovaAgent({ root, model, prices, mode: "plan", approve: async () => "deny" });

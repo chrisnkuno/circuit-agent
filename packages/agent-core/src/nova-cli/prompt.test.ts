@@ -154,6 +154,8 @@ describe("buildNovaSystemPrompt", () => {
     expect(defenderPrompt).toContain("## Mishandling of exceptional conditions");
     expect(defenderPrompt).toContain("## Business logic & race conditions");
     expect(defenderPrompt).toContain("## LLM & AI application security");
+    expect(defenderPrompt).toContain("## Threat intelligence & memory");
+    expect(defenderPrompt).toContain("## Hardening resources, cost & hosting guidance");
     expect(buildNovaSystemPrompt(context, "build", [])).not.toContain("## Injection");
   });
 

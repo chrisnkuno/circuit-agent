@@ -5,10 +5,10 @@ import { availableProviders, catalogPrices, isProviderId, PROVIDERS, resolveProv
 import { AnthropicAgentTurnProvider, toAnthropicMessages } from "./anthropic-agent";
 
 describe("provider matrix", () => {
-  it("offers only providers whose credentials are actually present", () => {
-    expect(availableProviders({}).map((spec) => spec.id)).toEqual([]);
-    expect(availableProviders({ ANTHROPIC_API_KEY: "sk-ant" }).map((spec) => spec.id)).toEqual(["anthropic"]);
-    expect(availableProviders({ ANTHROPIC_API_KEY: "k", CIRCUITNOTION_API_KEY: "k" }).map((spec) => spec.id)).toEqual(["anthropic", "circuitnotion"]);
+  it("offers only providers whose credentials are actually present, plus Ollama which needs none", () => {
+    expect(availableProviders({}).map((spec) => spec.id)).toEqual(["ollama"]);
+    expect(availableProviders({ ANTHROPIC_API_KEY: "sk-ant" }).map((spec) => spec.id)).toEqual(["anthropic", "ollama"]);
+    expect(availableProviders({ ANTHROPIC_API_KEY: "k", CIRCUITNOTION_API_KEY: "k" }).map((spec) => spec.id)).toEqual(["anthropic", "circuitnotion", "ollama"]);
   });
 
   it("names the provider the user asked for when its credentials are missing", () => {

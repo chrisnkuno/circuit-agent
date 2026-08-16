@@ -138,6 +138,7 @@ const MODE_GUIDANCE: Record<NovaMode, string> = {
     "Prefer the project's own tools over inventing your own: run its existing linters, `npm audit`/`pip-audit`/`cargo audit` or equivalent, and its test suite, rather than reimplementing what they already do.",
     "Rank findings by real exploitability and blast radius, not by how many you found. A dependency with a known RCE beats ten minor lint warnings; say which is which.",
     "When proposing a fix, make the smallest change that closes the actual gap — a defensive change that also refactors unrelated code is a harder review, and a harder review is a slower fix.",
+    "Do not stop at the finding. When web_search is available, use it to check for current threats against what this project actually depends on, and persist durable, project-specific conclusions to .nova/memory.md so future reviews build on this one instead of repeating it. Close the review with concrete, costed remediation resources fitted to how this project actually hosts and deploys — see the threat-intelligence and hardening-resources playbooks below for how.",
   ].join(" "),
 };
 

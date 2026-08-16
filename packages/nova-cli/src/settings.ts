@@ -41,6 +41,7 @@ const PROVIDER_CHOICES: readonly SettingChoice[] = [
   { value: "anthropic", label: "Anthropic" },
   { value: "openai", label: "OpenAI" },
   { value: "circuitnotion", label: "CircuitNotion" },
+  { value: "ollama", label: "Ollama (local)" },
 ];
 
 /**
@@ -66,6 +67,8 @@ export const SETTING_FIELDS = [
   { key: "CIRCUITNOTION_BASE_URL", label: "CircuitNotion base URL", url: true },
   { key: "CIRCUITNOTION_RELAY_SECRET", label: "CircuitNotion relay secret", secret: true },
   { key: "CIRCUITNOTION_MODEL", label: "CircuitNotion model" },
+  { key: "OLLAMA_BASE_URL", label: "Ollama base URL (default http://localhost:11434/v1)", url: true },
+  { key: "OLLAMA_MODEL", label: "Ollama model" },
   { key: "E2B_API_KEY", label: "E2B API key", secret: true },
   { key: "E2B_CODING_TEMPLATE", label: "E2B template" },
   { key: "EXA_API_KEY", label: "Exa search API key", secret: true },

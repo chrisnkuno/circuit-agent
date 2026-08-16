@@ -38,6 +38,8 @@ export function providerBaseUrl(environment: ProviderEnvironment, provider: Prov
       return environment.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
     case "anthropic":
       return environment.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com";
+    case "ollama":
+      return environment.OLLAMA_BASE_URL?.trim() || "http://localhost:11434/v1";
   }
 }
 
@@ -45,21 +47,24 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   circuitnotion: "CircuitNotion",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  ollama: "Ollama (local)",
 };
 
+/** Empty for a provider that needs no key at all — `providerEndpoints` reads that as always configured. */
 const PROVIDER_KEYS: Record<ProviderId, string> = {
   circuitnotion: "CIRCUITNOTION_API_KEY",
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
+  ollama: "",
 };
 
 /** Every model provider's API endpoint, with the base-URL override applied when set. */
 export function providerEndpoints(environment: ProviderEnvironment): ProviderEndpoint[] {
-  return (["circuitnotion", "openai", "anthropic"] as const).map((id) => ({
+  return (["circuitnotion", "openai", "anthropic", "ollama"] as const).map((id) => ({
     id,
     label: PROVIDER_LABELS[id],
     baseUrl: providerBaseUrl(environment, id),
-    configured: Boolean(environment[PROVIDER_KEYS[id]]?.trim()),
+    configured: PROVIDER_KEYS[id] === "" ? true : Boolean(environment[PROVIDER_KEYS[id]]?.trim()),
   }));
 }
 

@@ -68,6 +68,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     summary: "How much Nova may do without asking.",
     body: [
       "Four modes, and you can change them at any time. Plan reads and reasons but cannot write or run commands. Build is the default: edits are proposed and you approve them. Auto applies ordinary workspace edits without asking, while anything sensitive or reaching outside the workspace still stops for you. Defender turns Nova into a security reviewer — full tool access to actually scan and fix, but never auto-approved, the same posture as Build.",
+      "Defender also looks outward: when web search is configured it checks current advisories against what the project actually depends on, remembers durable findings in project memory so the next review builds on this one, and closes out with concrete, costed remediation resources fitted to how the project actually hosts and deploys — not a generic checklist.",
       "The mode is per tab, so one piece of work can be on a short leash while another runs freely.",
     ],
     examples: [

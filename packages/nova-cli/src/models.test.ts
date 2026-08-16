@@ -61,17 +61,17 @@ describe("the model catalog", () => {
     expect(anthropic.filter((choice) => choice.isProviderDefault)).toHaveLength(1);
   });
 
-  it("never lists a model whose provider has no key", () => {
+  it("never lists a model whose provider has no key, except Ollama which needs none", () => {
     // A menu whose entries fail on selection is worse than a shorter menu.
     const { choices, unconfigured } = buildModelCatalog({ ANTHROPIC_API_KEY: "k" });
-    expect(choices.every((choice) => choice.provider === "anthropic")).toBe(true);
+    expect(choices.every((choice) => choice.provider === "anthropic" || choice.provider === "ollama")).toBe(true);
     expect(unconfigured.map((entry) => entry.provider).sort()).toEqual(["circuitnotion", "openai"]);
     expect(unconfigured.find((entry) => entry.provider === "openai")?.missing).toEqual(["OPENAI_API_KEY"]);
   });
 
-  it("reports nothing to choose from when nothing is configured", () => {
+  it("still offers Ollama's local model when nothing else is configured", () => {
     const catalog = buildModelCatalog({});
-    expect(catalog.choices).toEqual([]);
+    expect(catalog.choices.map((choice) => choice.provider)).toEqual(["ollama"]);
     expect(catalog.unconfigured).toHaveLength(3);
   });
 

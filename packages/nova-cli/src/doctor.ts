@@ -47,7 +47,10 @@ function modelEndpoints(environment: ProviderEnvironment): DoctorEndpoint[] {
     id: `provider:${provider.id}`,
     purpose: `model API · ${provider.label}`,
     url: provider.baseUrl,
-    required: provider.configured,
+    // Ollama is always "configured" — it needs no key — but a local daemon most users have never
+    // started is not something an unreachable-endpoint failure should be reported for. It is
+    // probed like any other configured provider, just not required for a clean doctor run.
+    required: provider.configured && provider.id !== "ollama",
     configured: provider.configured,
   }));
 }

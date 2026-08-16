@@ -13,7 +13,7 @@ describe("connectivity doctor", () => {
   it("builds one probe per provider, FX host, and update registry", () => {
     const endpoints = buildDoctorEndpoints({ CIRCUITNOTION_API_KEY: "sk-test" });
     expect(endpoints.map((endpoint) => endpoint.id)).toEqual([
-      "provider:circuitnotion", "provider:openai", "provider:anthropic",
+      "provider:circuitnotion", "provider:openai", "provider:anthropic", "provider:ollama",
       "fx:0", "fx:1", "update",
     ]);
     expect(endpoints.find((endpoint) => endpoint.id === "provider:circuitnotion")).toMatchObject({
@@ -22,6 +22,9 @@ describe("connectivity doctor", () => {
       url: "https://api.circuitnotion.com/v1",
     });
     expect(endpoints.find((endpoint) => endpoint.id === "provider:openai")).toMatchObject({ required: false, configured: false });
+    // Ollama needs no key, so it is always "configured" — but a local daemon nobody started is
+    // not a failure, so it is never "required".
+    expect(endpoints.find((endpoint) => endpoint.id === "provider:ollama")).toMatchObject({ required: false, configured: true });
   });
 
   it("reports every endpoint reachable when the network answers", async () => {
@@ -30,7 +33,7 @@ describe("connectivity doctor", () => {
     expect(probes.every((probe) => probe.ok || probe.skipped)).toBe(true);
     expect(probes.filter((probe) => probe.skipped)).toHaveLength(2); // unconfigured providers
     expect(doctorExitCode(probes)).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledTimes(4); // 1 configured provider + 2 FX + 1 registry
+    expect(fetchImpl).toHaveBeenCalledTimes(5); // 1 configured provider + Ollama + 2 FX + 1 registry
   });
 
   it("fails the doctor when a configured provider's API is unreachable", async () => {
