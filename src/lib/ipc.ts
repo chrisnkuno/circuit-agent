@@ -109,6 +109,11 @@ export async function scanSecrets(include?: string) {
   return await sidecarRequest<{ findings: PlacedSecretFinding[] }>({ type: "scan.secrets", ...(include ? { include } : {}) });
 }
 
+/** The project's files, root-relative — whatever backend the session is on. */
+export async function listFiles(pattern?: string) {
+  return await sidecarRequest<{ files: string[] }>({ type: "files.list", ...(pattern ? { pattern } : {}) });
+}
+
 export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promise<UnlistenFn> {
   return await listen<IpcEvent>("sidecar-event", (event) => handler(event.payload));
 }

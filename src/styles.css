@@ -1205,3 +1205,40 @@ button {
 .scan-dot.sev-high { background: #ffa94d; }
 .sev-medium { color: #ffd43b; }
 .scan-dot.sev-medium { background: #ffd43b; }
+
+/* Project files — see components/FilePanel.tsx. Indentation is inline padding rather than nested
+   margins so a deep path cannot walk the rows off the right edge of the panel. */
+.file-search {
+  width: 100%;
+  padding: 8px 10px;
+  margin: 8px 0;
+  border-radius: 8px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+.file-tree, .file-children { list-style: none; margin: 0; padding: 0; }
+.file-tree { max-height: 420px; overflow: auto; }
+.file-row { display: flex; align-items: center; gap: 6px; }
+.file-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.file-btn:hover { background: rgba(127, 127, 127, 0.15); }
+.file-caret { width: 10px; flex: none; opacity: 0.7; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-meta { margin-left: auto; padding-left: 12px; font-size: 11px; opacity: 0.55; white-space: nowrap; }
+.btn.tiny { padding: 2px 8px; font-size: 11px; }
