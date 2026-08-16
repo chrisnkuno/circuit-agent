@@ -16,6 +16,7 @@ nova                        Interactive session
 nova "add a health check"   One request, then exit
 nova --plan                 Read and reason only — the write tools aren't loaded
 nova --auto                 Auto-apply ordinary edits; sensitive actions still ask
+nova --defender             Security review — find and fix real issues; every change still asks
 nova --allow-sensitive      Approve a flagged task preflight; tool guards remain active
 nova --sandbox              Work in a remote sandbox; your files are never touched
 nova --resume               Continue the last session
@@ -33,7 +34,7 @@ nova update                 Check and install the latest published CLI
 nova update --check         Check without changing the installed version
 ```
 
-In a session: `/mode` shows the current permission posture, `/mode plan|build|auto` switches it, and `/plan` `/build` `/auto` remain quick shortcuts. `/undo` reverts the last turn, `/cost` shows the breakdown, `/pull` copies sandbox work back to disk, `/settings` opens configuration, `/voice` records a prompt, and `/keys` shows keyboard controls.
+In a session: `/mode` shows the current permission posture, `/mode plan|build|auto|defender` switches it, and `/plan` `/build` `/auto` `/defender` remain quick shortcuts. Defender mode turns Nova into a security reviewer — the full tool set to actually run a scanner (including a built-in `scan_secrets` that matches likely credentials by pattern and always masks what it finds) and propose a fix, gated exactly like build so nothing is ever auto-approved. It works from a bundled set of playbooks covering injection, auth/session handling, access control, secrets, dependency and supply-chain risk, cryptography misuse, IaC/container hardening, fuzzing and invariant-based testing, and logging/monitoring/deterrence. `/undo` reverts the last turn, `/cost` shows the breakdown, `/pull` copies sandbox work back to disk, `/settings` opens configuration, `/voice` records a prompt, and `/keys` shows keyboard controls.
 
 ## Setup
 
