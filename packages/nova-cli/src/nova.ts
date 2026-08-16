@@ -2810,6 +2810,32 @@ async function main(): Promise<number> {
       continue;
     }
 
+    if (input === "/files") {
+      // The flat list already loaded for `@path` completion — opening the picker costs nothing
+      // beyond what a session already pays for that, and the two now agree on exactly which files
+      // are reachable.
+      let picked: string | undefined;
+      const outcome = await withFullScreen(screenCapabilities(), terminalControls(), async () => {
+        const { runFileScreen } = await import("./file-screen");
+        picked = await runFileScreen({
+          columns: process.stdout.columns ?? 80,
+          rows: process.stdout.rows ?? 24,
+          paths: projectFiles,
+          palette,
+          readFile: async (path) => {
+            const result = await workspace.readFile(path, { limit: 200 });
+            return { content: result.content, totalLines: result.totalLines, truncated: result.truncated };
+          },
+        });
+      });
+      if (!outcome.ok) { out.write(style.yellow(`  ${explainScreenRefusal(outcome)}\n`)); continue; }
+      // Picking a file writes an `@path` mention into the line still being composed — the same
+      // syntax typing `@` and tab-completing already produces, so the model sees one convention
+      // for "this file", not two.
+      if (picked) rl.write(`@${picked} `);
+      continue;
+    }
+
     const themeCommand = parseThemeCommand(input);
     if (themeCommand) {
       const style_ = sectionStyle();

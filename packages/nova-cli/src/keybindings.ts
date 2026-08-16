@@ -131,6 +131,7 @@ export const DEFAULT_BINDINGS: readonly { command: string; chords: readonly stri
   { command: "/model", chords: ["f3", "alt+m"], description: "Switch model mid-session" },
   { command: "/wander", chords: ["f4", "alt+w"], description: "Run a bounded research exploration" },
   { command: "/jobs", chords: ["f6"], description: "Background and detached work" },
+  { command: "/files", chords: ["f7", "alt+f"], description: "Browse the project tree" },
   { command: "/diff", chords: ["f8", "alt+d"], description: "What changed since the last checkpoint" },
   { command: "/todos", chords: ["f9"], description: "The agent's current plan" },
   { command: "/auto", chords: ["alt+a"], description: "Auto mode: ordinary edits apply" },

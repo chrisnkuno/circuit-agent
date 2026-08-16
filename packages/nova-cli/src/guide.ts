@@ -255,12 +255,14 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     body: [
       "Nova has a fixed set of built-in tools, and a project can add more through skills, plugins, MCP servers and hooks. The tools command shows exactly what is available in this project.",
       "Voice input records or transcribes a prompt you can edit before sending.",
+      "The file picker is the project as a tree rather than a flat completion list: expand a folder, preview a file's contents, and pick one to drop an @mention into the line you're writing.",
     ],
     examples: [
       { input: "/tools", effect: "every tool, skill, plugin, MCP server and hook" },
       { input: "/voice", effect: "record a prompt, then edit it before sending" },
+      { input: "/files", effect: "browse the project tree and @mention a file" },
     ],
-    covers: ["/tools", "/voice"],
+    covers: ["/tools", "/voice", "/files"],
   },
 ];
 
