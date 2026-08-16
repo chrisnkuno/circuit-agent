@@ -108,3 +108,39 @@ describe("the sky settling in", () => {
     expect(wordmarkLine(dim)).toBe(wordmarkLine(bright));
   });
 });
+
+describe("the wordmark's gradient", () => {
+  const colorsIn = (rendered: string) => [...rendered.matchAll(/38;2;(\d+);(\d+);(\d+)m/g)].map((m) => m.slice(1).map(Number));
+  const stripped = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
+  /** The wordmark's first row, found by what it *reads* as — the gradient now interleaves escapes between its characters. */
+  const wordmarkRow = () => renderBanner({ width: 88, depth: "truecolor", seed: 11 })
+    .split("\n").find((line) => stripped(line).includes("███╗   ██╗"))!;
+
+  it("sweeps colour across a row rather than painting the whole row one flat colour", () => {
+    const row = wordmarkRow();
+    // More than one distinct colour on a single row is the whole point of the change.
+    expect(new Set(colorsIn(row).map((c) => c.join(","))).size).toBeGreaterThan(1);
+  });
+
+  it("still emits nothing at all when colour is off", () => {
+    expect(renderBanner({ width: 88, depth: "none", seed: 11 })).not.toMatch(/\x1b\[/);
+  });
+
+  it("uses 256-colour codes rather than truecolor ones on a 256-colour terminal", () => {
+    const ansi = renderBanner({ width: 88, depth: "ansi256", seed: 11 });
+    expect(ansi).toContain("\x1b[38;5;");
+    expect(ansi).not.toContain("\x1b[38;2;");
+  });
+
+  it("leaves the letterforms themselves untouched — only their colour changes", () => {
+    const plainOf = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(plainOf(renderBanner({ width: 88, depth: "truecolor", seed: 11 })))
+      .toBe(plainOf(renderBanner({ width: 88, depth: "none", seed: 11 })));
+  });
+
+  it("does not open a colour run around a blank cell, which would be bytes for nothing", () => {
+    const row = wordmarkRow();
+    // Every colour code must be immediately followed by something that is not a space.
+    for (const match of row.matchAll(/38;2;\d+;\d+;\d+m(.)/g)) expect(match[1]).not.toBe(" ");
+  });
+});

@@ -1,7 +1,7 @@
 import { GUIDE_TOPICS, wrapText, type GuideTopic } from "./guide";
 import { NO_COLOR_PALETTE, type Palette } from "./theme";
 import { visibleWidth } from "./markdown";
-import { scrollIndicator, scrollPercent } from "./tui";
+import { joinHorizontal, padToWidth as pad, scrollIndicator, scrollPercent, sliceToWidth } from "./tui";
 
 /**
  * The guide as something you move around in, rather than something printed at you.
@@ -221,22 +221,6 @@ function hardWrap(text: string, width: number): string[] {
   return lines;
 }
 
-function pad(text: string, width: number): string {
-  const size = visibleWidth(text);
-  return size >= width ? sliceToWidth(text, width) : text + " ".repeat(width - size);
-}
-
-/** Cuts to a column count. The guide's own text is plain, so counting characters is honest here. */
-function sliceToWidth(text: string, width: number): string {
-  if (width <= 0) return "";
-  let out = "";
-  for (const character of text) {
-    if (visibleWidth(out + character) > width) break;
-    out += character;
-  }
-  return out;
-}
-
 /**
  * The whole screen, row by row, exactly `rows` tall.
  *
@@ -280,7 +264,7 @@ export function composeGuideFrame(state: GuideBrowserState): GuideRow[] {
     rows.push({
       text: compact
         ? pad(line?.text ?? "", columns)
-        : `${pad(sliceToWidth(cell, sidebar), sidebar)} │ ${pad(line?.text ?? "", body)}`,
+        : joinHorizontal(sliceToWidth(cell, sidebar), line?.text ?? "", { leftWidth: sidebar, rightWidth: body, separator: " │ " }),
       bold: chosen || line?.bold,
       dim: line?.dim && !chosen,
       // The selected topic takes the accent; a body heading takes the primary; prose is left to

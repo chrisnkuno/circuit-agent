@@ -67,6 +67,49 @@ const STAR_COLORS: Rgb[] = [
   [224, 242, 254],
 ];
 
+/**
+ * A run of text swept from one colour to another across its own width — the same per-cell
+ * interpolation `progressBar` fills a meter with, applied to letterforms.
+ *
+ * Painted character by character, but only where the colour actually changes and never on a space:
+ * a blank cell shows no foreground, so an escape around one is bytes the terminal does nothing
+ * with, and the wordmark is mostly blanks. That keeps a six-row banner to a few dozen sequences
+ * rather than one per cell.
+ */
+function gradientText(text: string, from: Rgb, to: Rgb, depth: ColorDepth): string {
+  if (depth === "none") return text;
+  const characters = [...text];
+  const last = Math.max(1, characters.length - 1);
+  let out = "";
+  let open: string | undefined;
+  for (const [index, character] of characters.entries()) {
+    if (character === " ") {
+      if (open !== undefined) { out += RESET_CODE; open = undefined; }
+      out += character;
+      continue;
+    }
+    const t = index / last;
+    const rgb: Rgb = [
+      Math.round(from[0] + (to[0] - from[0]) * t),
+      Math.round(from[1] + (to[1] - from[1]) * t),
+      Math.round(from[2] + (to[2] - from[2]) * t),
+    ];
+    const code = colorCode(rgb, depth);
+    if (code !== open) { out += code; open = code; }
+    out += character;
+  }
+  return open === undefined ? out : `${out}${RESET_CODE}`;
+}
+
+const RESET_CODE = "[0m";
+
+/** The escape that selects a colour, without the reset — `paint` wraps; this one opens a run. */
+function colorCode([red, green, blue]: Rgb, depth: ColorDepth): string {
+  if (depth === "truecolor") return `[38;2;${red};${green};${blue}m`;
+  const channel = (value: number) => Math.round((value / 255) * 5);
+  return `[38;5;${16 + 36 * channel(red) + 6 * channel(green) + channel(blue)}m`;
+}
+
 /** Where a star sits before it has "come on" — near the night sky's own base, not black. */
 const STAR_DIM_ANCHOR: Rgb = [10, 14, 26];
 
@@ -180,10 +223,13 @@ export function renderBanner(options: BannerOptions): string {
   lines.push(starLine(width - 1, 0.05, next, depth, stars, intensity));
   lines.push(starLine(width - 1, 0.03, next, depth, stars, intensity));
 
-  // Lit from the top down: the wordmark brightens as it descends, like a horizon glow.
+  // Lit from the top down *and* swept left to right: each row starts at its own step of the night
+  // gradient and reaches the next one by its right edge, so the light runs diagonally across the
+  // letterforms rather than banding them into six flat stripes.
   wordmark.forEach((row, index) => {
-    const color = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 1)];
-    lines.push(`${flank(indent, next, depth, stars, intensity)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${paint(row, color, depth)}${trailing(next, depth, stars, intensity)}`);
+    const from = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 1)];
+    const to = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 2)];
+    lines.push(`${flank(indent, next, depth, stars, intensity)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${gradientText(row, from, to, depth)}${trailing(next, depth, stars, intensity)}`);
   });
 
   lines.push(starLine(width - 1, 0.035, next, depth, stars, intensity));

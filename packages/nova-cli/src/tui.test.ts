@@ -10,6 +10,8 @@ import {
   formatTokens,
   MarkdownStream,
   novaSpinnerFrame,
+  joinHorizontal,
+  padToWidth,
   paginator,
   progressBar,
   PromptBox,
@@ -20,6 +22,7 @@ import {
   rowsOccupied,
   scrollIndicator,
   scrollPercent,
+  sliceToWidth,
   sparkline,
   Spinner,
   Spring,
@@ -1062,5 +1065,59 @@ describe("PromptBox", () => {
     const painted = fakeStream(60);
     new PromptBox(painted.stream, { depth: "truecolor", columns: () => 60 }).draw("build", "x");
     expect(painted.output()).toMatch(ESCAPE);
+  });
+});
+
+describe("padToWidth and joinHorizontal", () => {
+  it("pads a short cell out to exactly the width", () => {
+    expect(padToWidth("ab", 5)).toBe("ab   ");
+    expect(visibleWidth(padToWidth("ab", 5))).toBe(5);
+  });
+
+  it("clips a long cell down to exactly the width rather than overflowing", () => {
+    expect(padToWidth("abcdefgh", 4)).toBe("abcd");
+    expect(visibleWidth(padToWidth("abcdefgh", 4))).toBe(4);
+  });
+
+  it("measures in columns, so a wide character costs two", () => {
+    // Three double-width characters are six columns, so at a budget of four only two survive.
+    expect(padToWidth("日本語", 4)).toBe("日本");
+    expect(visibleWidth(padToWidth("日本語", 4))).toBe(4);
+    // And padding a wide cell fills the remaining columns, not the remaining characters.
+    expect(visibleWidth(padToWidth("日", 5))).toBe(5);
+  });
+
+  it("discounts ANSI, so a coloured cell is not silently narrower than a plain one", () => {
+    expect(visibleWidth(padToWidth("\x1b[31mab\x1b[0m", 5))).toBe(5);
+  });
+
+  it("joins two columns to a total that never varies with either side's content", () => {
+    const narrow = joinHorizontal("a", "b", { leftWidth: 6, rightWidth: 8, separator: " | " });
+    const wide = joinHorizontal("a".repeat(50), "b".repeat(50), { leftWidth: 6, rightWidth: 8, separator: " | " });
+    expect(visibleWidth(narrow)).toBe(6 + 3 + 8);
+    expect(visibleWidth(wide)).toBe(6 + 3 + 8);
+  });
+
+  it("keeps the separator at the same column on every row — the ragged-seam bug", () => {
+    const rows = ["short", "a much longer left cell than the others", ""].map((left) =>
+      joinHorizontal(left, "preview", { leftWidth: 10, rightWidth: 12, separator: " │ " }));
+    const seams = new Set(rows.map((row) => row.indexOf("│")));
+    expect(seams.size).toBe(1);
+  });
+
+  it("defaults to a single space between the columns", () => {
+    expect(joinHorizontal("a", "b", { leftWidth: 2, rightWidth: 2 })).toBe("a  b ");
+  });
+});
+
+describe("sliceToWidth", () => {
+  it("never returns more columns than asked for, and never splits a wide character in half", () => {
+    expect(sliceToWidth("日本語", 3)).toBe("日"); // 2 fits, 4 would not
+    expect(visibleWidth(sliceToWidth("日本語", 3))).toBe(2);
+  });
+
+  it("returns nothing for a zero or negative budget", () => {
+    expect(sliceToWidth("abc", 0)).toBe("");
+    expect(sliceToWidth("abc", -5)).toBe("");
   });
 });

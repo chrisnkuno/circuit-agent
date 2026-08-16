@@ -2,7 +2,7 @@ import { windowStart } from "./chooser";
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { visibleWidth } from "./markdown";
 import { NO_COLOR_PALETTE, type Palette } from "./theme";
-import { paginator } from "./tui";
+import { joinHorizontal, paginator, padToWidth as pad } from "./tui";
 
 /**
  * The project, as something you look around in rather than type paths into.
@@ -216,20 +216,6 @@ export function bodyHeight(rows: number): number {
   return Math.max(0, Math.floor(rows) - 2);
 }
 
-function pad(text: string, width: number): string {
-  const clipped = visibleWidth(text) > width ? sliceToWidth(text, width) : text;
-  return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
-}
-
-function sliceToWidth(text: string, width: number): string {
-  let out = "";
-  for (const character of text) {
-    if (visibleWidth(out + character) > width) break;
-    out += character;
-  }
-  return out;
-}
-
 /** One tree row's label: indentation, a disclosure triangle for a folder, the name, a trailing slash for a folder. */
 export function treeLabel(row: FileRow, expanded: ReadonlySet<string>, glyphs: GlyphSet = UNICODE_GLYPHS): string {
   const indent = "  ".repeat(row.depth);
@@ -277,7 +263,9 @@ export function composeFileFrame(state: FileBrowserState, preview: FilePreview, 
     const label = row ? treeLabel(row, state.expanded, glyphs) : "";
     const treeCell = pad(chosen ? `${glyphs.prompt} ${label}` : `  ${label}`, tree);
     out.push({
-      text: showPreview ? `${treeCell} ${glyphs.boxVertical} ${pad(previewLines[offset] ?? "", body)}` : treeCell,
+      text: showPreview
+        ? joinHorizontal(treeCell, previewLines[offset] ?? "", { leftWidth: tree, rightWidth: body, separator: ` ${glyphs.boxVertical} ` })
+        : treeCell,
       bold: chosen,
       dim: row?.node.kind === "dir" && !chosen,
       color: chosen ? theme.accent : undefined,

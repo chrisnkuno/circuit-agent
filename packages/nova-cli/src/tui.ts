@@ -723,13 +723,31 @@ export class MarkdownStream {
  */
 export function box(
   lines: readonly string[],
-  options: { width?: number; depth: ColorDepth; title?: string; titleColor?: "cyan" | "green" | "yellow"; glyphs?: GlyphSet; borderStyle?: "round" | "single" | "double" | "none" },
+  options: {
+    width?: number;
+    depth: ColorDepth;
+    title?: string;
+    titleColor?: BoxTone;
+    /**
+     * Colours the border itself, not just the title — how Lip Gloss users conventionally signal
+     * state, since a red *edge* reads as "this block is the problem" from across a screen where a
+     * red word inside a default-coloured frame reads as one emphasised label. Left unset the border
+     * is unpainted, exactly as every box drew before this existed.
+     */
+    borderColor?: BoxTone;
+    glyphs?: GlyphSet;
+    borderStyle?: "round" | "single" | "double" | "none";
+  },
 ): string {
   const terminalWidth = options.width ?? process.stdout.columns ?? 80;
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const border = borderGlyphsFor(options.borderStyle ?? "round", glyphs);
   const titleWidth = options.title ? visibleWidth(options.title) : 0;
-  const titlePaint = options.titleColor === "green" ? GREEN : options.titleColor === "yellow" ? YELLOW : CYAN;
+  const titlePaint = TONE_CODES[options.titleColor ?? "cyan"];
+  // Each border run is painted and reset on its own rather than one code being opened around the
+  // whole row: the title in between carries its own colour, and an unclosed run would bleed this
+  // one over it (and over the content of every row after, since the box is joined into one string).
+  const edge = (text: string) => (options.borderColor === undefined ? text : paint(text, TONE_CODES[options.borderColor], options.depth));
   // Measured in columns, not characters: a todo containing an emoji is two columns wide there and
   // one character long, and padding by the latter is what leaves a border short of its own corner.
   const contentWidth = Math.min(
@@ -738,20 +756,20 @@ export function box(
   );
   const horizontal = border.horizontal.repeat(contentWidth + 2);
   const top = options.title
-    ? `${border.topLeft}${border.horizontal} ${paint(options.title, titlePaint, options.depth)} ${border.horizontal.repeat(Math.max(0, contentWidth - titleWidth - 1))}${border.topRight}`
-    : `${border.topLeft}${horizontal}${border.topRight}`;
-  const bottom = `${border.bottomLeft}${horizontal}${border.bottomRight}`;
+    ? `${edge(`${border.topLeft}${border.horizontal}`)} ${paint(options.title, titlePaint, options.depth)} ${edge(`${border.horizontal.repeat(Math.max(0, contentWidth - titleWidth - 1))}${border.topRight}`)}`
+    : edge(`${border.topLeft}${horizontal}${border.topRight}`);
+  const bottom = edge(`${border.bottomLeft}${horizontal}${border.bottomRight}`);
   const body = lines.map((line) => {
     const clipped = visibleWidth(line) > contentWidth
       ? `${sliceToWidth(line, contentWidth - visibleWidth(glyphs.ellipsis))}${glyphs.ellipsis}`
       : line;
-    return `${border.vertical} ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} ${border.vertical}`;
+    return `${edge(border.vertical)} ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} ${edge(border.vertical)}`;
   });
   return [top, ...body, bottom].join("\n");
 }
 
 /** Takes as many characters as fit in a column budget, counting wide characters as two. */
-function sliceToWidth(text: string, width: number): string {
+export function sliceToWidth(text: string, width: number): string {
   let taken = "";
   let used = 0;
   for (const character of text) {
@@ -762,6 +780,44 @@ function sliceToWidth(text: string, width: number): string {
   }
   return taken;
 }
+
+/**
+ * Clips or pads to exactly `width` columns — Lip Gloss's `Width()`, which sets a block's minimum
+ * and lets its own renderer handle the maximum.
+ *
+ * Every full-screen surface needs this and, until it lived here, every one of them grew its own:
+ * `guide-browser.ts` and `file-browser.ts` each carried a byte-identical `pad`, and `tui.ts` a
+ * third copy of the `sliceToWidth` underneath it. Three implementations of "make this cell exactly
+ * this wide" is three places for a wide-character bug to hide, and only one of them would get fixed.
+ */
+export function padToWidth(text: string, width: number): string {
+  const size = visibleWidth(text);
+  return size >= width ? sliceToWidth(text, width) : text + " ".repeat(width - size);
+}
+
+/**
+ * Two columns side by side with a separator between them — Lip Gloss's `JoinHorizontal`, reduced to
+ * the single-row case every one of Nova's split-pane screens actually builds with.
+ *
+ * Both cells are sized before joining, so the result is always exactly
+ * `leftWidth + separator + rightWidth` columns regardless of what either side contains. That is the
+ * property the layouts depend on: a preview pane whose text happens to be one column too long must
+ * not push the divider a column right on that row alone, which is precisely how a two-pane frame
+ * develops a ragged seam down its middle.
+ */
+export function joinHorizontal(
+  left: string,
+  right: string,
+  options: { leftWidth: number; rightWidth: number; separator?: string },
+): string {
+  const separator = options.separator ?? " ";
+  return `${padToWidth(left, options.leftWidth)}${separator}${padToWidth(right, options.rightWidth)}`;
+}
+
+/** The tones a box can be given, for its title or its border. */
+export type BoxTone = "cyan" | "green" | "yellow" | "red";
+
+const TONE_CODES: Record<BoxTone, string> = { cyan: CYAN, green: GREEN, yellow: YELLOW, red: RED };
 
 /** The mode's accent colour in the input bar, so the permission posture is legible at a glance. */
 const MODE_COLORS: Record<string, string> = { plan: YELLOW, auto: GREEN, build: CYAN, defender: RED };
