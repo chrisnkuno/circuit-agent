@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASCII_GLYPHS, UNICODE_GLYPHS, detectGlyphMode, glyphsFor, resolveGlyphs, type GlyphSet } from "./glyphs";
+import { ASCII_GLYPHS, UNICODE_GLYPHS, borderGlyphsFor, detectGlyphMode, glyphsFor, resolveGlyphs, type GlyphSet } from "./glyphs";
 
 /**
  * The whole point of this module is that a terminal never receives a character it cannot draw, so
@@ -81,5 +81,33 @@ describe("detecting what the terminal can draw", () => {
   it("honours NOVA_ASCII, the flag people already reach for, but not when it is switched off", () => {
     expect(detectGlyphMode({ NOVA_ASCII: "1", LANG: "en_US.UTF-8" }, "linux")).toBe("ascii");
     expect(detectGlyphMode({ NOVA_ASCII: "0", LANG: "en_US.UTF-8" }, "linux")).toBe("unicode");
+  });
+});
+
+describe("borderGlyphsFor", () => {
+  it("draws a different corner shape for each style a theme can ask for", () => {
+    expect(borderGlyphsFor("round", UNICODE_GLYPHS).topLeft).toBe("╭");
+    expect(borderGlyphsFor("single", UNICODE_GLYPHS).topLeft).toBe("┌");
+    expect(borderGlyphsFor("double", UNICODE_GLYPHS).topLeft).toBe("╔");
+  });
+
+  it("defaults an unrecognized or \"none\" style to round, rather than throwing", () => {
+    expect(borderGlyphsFor("none", UNICODE_GLYPHS).topLeft).toBe("╭");
+  });
+
+  it("stays inside ASCII on an ASCII terminal regardless of the theme's border style", () => {
+    for (const style of ["round", "single", "double", "none"] as const) {
+      const border = borderGlyphsFor(style, ASCII_GLYPHS);
+      for (const glyph of Object.values(border)) {
+        for (const character of glyph) expect(character.codePointAt(0)).toBeLessThan(128);
+      }
+    }
+  });
+
+  it("keeps a double border's horizontal and vertical distinct from a single border's", () => {
+    // The line characters change too, not just the corners — a double border with single-style
+    // lines would look like a typo, not a deliberate style.
+    expect(borderGlyphsFor("double", UNICODE_GLYPHS).horizontal).toBe("═");
+    expect(borderGlyphsFor("single", UNICODE_GLYPHS).horizontal).toBe("─");
   });
 });

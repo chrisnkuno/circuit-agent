@@ -454,6 +454,12 @@ describe("renderPromptBox", () => {
     expect(visibleWidth(bottomPlain)).toBe(80);
   });
 
+  it("draws the corners the active theme's border style asks for, not a fixed shape", () => {
+    expect(plain(renderPromptBox({ ...fields, borderStyle: "round" }).top)).toContain("╭");
+    expect(plain(renderPromptBox({ ...fields, borderStyle: "single" }).top)).toContain("┌");
+    expect(plain(renderPromptBox({ ...fields, borderStyle: "double" }).top)).toContain("╔");
+  });
+
   it("clips an over-long workspace rather than overflowing the right-hand corner", () => {
     const { top } = renderPromptBox({ ...fields, workspace: "x".repeat(500) });
     expect(plain(top)).toContain("…");

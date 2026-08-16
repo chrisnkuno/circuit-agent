@@ -1,7 +1,7 @@
 import type { ColorDepth } from "./banner";
 import type { Palette } from "./theme";
 import { BOLD, CYAN, DIM, GREEN, RED, YELLOW, paint, paintAll } from "./ansi";
-import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
+import { borderGlyphsFor, UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { visibleWidth } from "./markdown";
 
 /**
@@ -160,16 +160,19 @@ export function panel(lines: readonly string[], style: SectionStyle, options: Pa
   const depth = style.depth;
   const tone = options.tone ?? "neutral";
   const available = Math.max(8, style.width - GUTTER.length - 4);
+  // The theme's own border style (round/single/double), not a fixed shape — this is the one thing
+  // that used to make every theme draw an identical box regardless of what it actually asked for.
+  const border = borderGlyphsFor(style.palette?.borderStyle ?? "round", glyphs);
 
   if (options.gutterOnly) {
-    const edge = paint(glyphs.boxVertical, toneCode(tone, style), depth);
+    const edge = paint(border.vertical, toneCode(tone, style), depth);
     const head = options.title
       ? [`${GUTTER}${paintAll(options.title, [toneCode(tone, style), BOLD], depth)}${options.badge ? paint(`  ${options.badge}`, DIM, depth) : ""}`]
       : [];
     return [...head, ...lines.map((line) => `${GUTTER}${edge} ${clip(line, available, glyphs)}`)].join("\n");
   }
 
-  const horizontal = glyphs.boxHorizontal;
+  const horizontal = border.horizontal;
   // Every row is `GUTTER + corner + (contentWidth + 2 columns) + corner`, and the top border has to
   // add up to exactly that too — a title and a badge are spent out of the same budget the body has,
   // or the right-hand corners do not line up and the "box" is three lines of unrelated punctuation.
@@ -186,15 +189,15 @@ export function panel(lines: readonly string[], style: SectionStyle, options: Pa
 
   const top = [
     GUTTER,
-    paint(glyphs.boxTopLeft + horizontal, DIM, depth),
+    paint(border.topLeft + horizontal, DIM, depth),
     titleShown ? paintAll(titleShown, [toneCode(tone, style), BOLD], depth) : "",
     paint(horizontal.repeat(fill), DIM, depth),
     badgeCell ? paint(badgeCell, DIM, depth) : "",
-    paint(glyphs.boxTopRight, DIM, depth),
+    paint(border.topRight, DIM, depth),
   ].join("");
 
-  const bottom = `${GUTTER}${paint(glyphs.boxBottomLeft + horizontal.repeat(contentWidth + 2) + glyphs.boxBottomRight, DIM, depth)}`;
-  const edge = paint(glyphs.boxVertical, DIM, depth);
+  const bottom = `${GUTTER}${paint(border.bottomLeft + horizontal.repeat(contentWidth + 2) + border.bottomRight, DIM, depth)}`;
+  const edge = paint(border.vertical, DIM, depth);
   const body = lines.map((line) => {
     const clipped = clip(line, contentWidth, glyphs);
     return `${GUTTER}${edge} ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} ${edge}`;

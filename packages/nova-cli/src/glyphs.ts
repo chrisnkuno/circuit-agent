@@ -161,6 +161,44 @@ export const ASCII_GLYPHS: GlyphSet = {
   sparkLevels: [" ", ".", ":", "-", "=", "+", "*", "#"],
 };
 
+/**
+ * The nine characters a bordered box is drawn from, as a set of its own — deliberately not part of
+ * `GlyphSet`. A theme's border *style* (round, single, double) and a terminal's glyph *repertoire*
+ * (Unicode vs. ASCII) are two independent axes: `GlyphSet` already covers the second, and folding
+ * the first in as three more full glyph sets would triple every entry in this file for the nine
+ * characters that actually vary. This stays a small, separate lookup instead.
+ */
+export type BorderGlyphs = {
+  topLeft: string;
+  topRight: string;
+  bottomLeft: string;
+  bottomRight: string;
+  horizontal: string;
+  vertical: string;
+  teeLeft: string;
+  teeRight: string;
+  cross: string;
+};
+
+const ROUND_BORDER: BorderGlyphs = { topLeft: "╭", topRight: "╮", bottomLeft: "╰", bottomRight: "╯", horizontal: "─", vertical: "│", teeLeft: "├", teeRight: "┤", cross: "┼" };
+const SINGLE_BORDER: BorderGlyphs = { topLeft: "┌", topRight: "┐", bottomLeft: "└", bottomRight: "┘", horizontal: "─", vertical: "│", teeLeft: "├", teeRight: "┤", cross: "┼" };
+const DOUBLE_BORDER: BorderGlyphs = { topLeft: "╔", topRight: "╗", bottomLeft: "╚", bottomRight: "╝", horizontal: "═", vertical: "║", teeLeft: "╠", teeRight: "╣", cross: "╬" };
+const ASCII_BORDER: BorderGlyphs = { topLeft: "+", topRight: "+", bottomLeft: "+", bottomRight: "+", horizontal: "-", vertical: "|", teeLeft: "+", teeRight: "+", cross: "+" };
+
+/**
+ * The border a theme actually asked for, at the repertoire this terminal can draw.
+ *
+ * `"none"` still resolves to a real set rather than `undefined` — a caller that means "no frame at
+ * all" checks that itself and skips drawing one, the same way it already skips everything else about
+ * a box; this function's only job is "which four corners", not "whether to use them".
+ */
+export function borderGlyphsFor(style: "round" | "single" | "double" | "none", glyphs: GlyphSet): BorderGlyphs {
+  if (glyphs === ASCII_GLYPHS) return ASCII_BORDER;
+  if (style === "single") return SINGLE_BORDER;
+  if (style === "double") return DOUBLE_BORDER;
+  return ROUND_BORDER;
+}
+
 export type GlyphMode = "unicode" | "ascii";
 
 /**

@@ -545,7 +545,7 @@ function toolLineText(mark: string, name: string, detail: string, summary: strin
  * as two speakers rather than as a log with an occasional bolded line in it.
  */
 function renderUserTurn(text: string): string {
-  return renderUserMessage(text, renderDepth, contentWidth(), glyphs);
+  return renderUserMessage(text, renderDepth, contentWidth(), glyphs, palette.borderStyle);
 }
 
 /**
@@ -649,11 +649,12 @@ export function renderUserMessage(
   depth: ReturnType<typeof detectColorDepth>,
   width: number,
   glyphSet: GlyphSet = UNICODE_GLYPHS,
+  borderStyle: "round" | "single" | "double" | "none" = "round",
 ): string {
   // Wrapped per line rather than as one blob: a pasted stack trace or a numbered list is a shape
   // the sender chose, and reflowing it into a paragraph destroys the thing that made it readable.
   const body = text.split("\n").flatMap((line) => wrapPlain(line, Math.max(8, width - 6)));
-  return box(body, { depth, width, title: "you", titleColor: "green", glyphs: glyphSet });
+  return box(body, { depth, width, title: "you", titleColor: "green", glyphs: glyphSet, borderStyle });
 }
 
 export function renderEvent(event: NovaEvent): void {
@@ -1827,7 +1828,7 @@ async function main(): Promise<number> {
   const promptWidth = () => screen?.current.columns ?? process.stdout.columns ?? 80;
 
   const promptFrame = (status: string) =>
-    renderPromptBox({ mode, workspace: where, depth, width: promptWidth(), status, glyphs });
+    renderPromptBox({ mode, workspace: where, depth, width: promptWidth(), status, glyphs, borderStyle: palette.borderStyle });
 
   /** How wide a status line may be to fit on the bar's top border beside the title. */
   const statusRoomFor = (width: number) => promptStatusRoom(mode, where, width, glyphs);

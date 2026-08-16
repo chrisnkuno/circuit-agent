@@ -1,6 +1,6 @@
 import type { ColorDepth } from "./banner";
 import { terminalStream, type OutputStream } from "./output";
-import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
+import { borderGlyphsFor, UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { newMarkdownState, renderMarkdownLine, visibleWidth, type MarkdownState } from "./markdown";
 
 /**
@@ -381,10 +381,11 @@ export class MarkdownStream {
  */
 export function box(
   lines: readonly string[],
-  options: { width?: number; depth: ColorDepth; title?: string; titleColor?: "cyan" | "green" | "yellow"; glyphs?: GlyphSet },
+  options: { width?: number; depth: ColorDepth; title?: string; titleColor?: "cyan" | "green" | "yellow"; glyphs?: GlyphSet; borderStyle?: "round" | "single" | "double" | "none" },
 ): string {
   const terminalWidth = options.width ?? process.stdout.columns ?? 80;
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  const border = borderGlyphsFor(options.borderStyle ?? "round", glyphs);
   const titleWidth = options.title ? visibleWidth(options.title) : 0;
   const titlePaint = options.titleColor === "green" ? GREEN : options.titleColor === "yellow" ? YELLOW : CYAN;
   // Measured in columns, not characters: a todo containing an emoji is two columns wide there and
@@ -393,16 +394,16 @@ export function box(
     Math.max(titleWidth, ...lines.map((line) => visibleWidth(line)), 1),
     Math.max(1, terminalWidth - 4),
   );
-  const horizontal = glyphs.boxHorizontal.repeat(contentWidth + 2);
+  const horizontal = border.horizontal.repeat(contentWidth + 2);
   const top = options.title
-    ? `${glyphs.boxTopLeft}${glyphs.boxHorizontal} ${paint(options.title, titlePaint, options.depth)} ${glyphs.boxHorizontal.repeat(Math.max(0, contentWidth - titleWidth - 1))}${glyphs.boxTopRight}`
-    : `${glyphs.boxTopLeft}${horizontal}${glyphs.boxTopRight}`;
-  const bottom = `${glyphs.boxBottomLeft}${horizontal}${glyphs.boxBottomRight}`;
+    ? `${border.topLeft}${border.horizontal} ${paint(options.title, titlePaint, options.depth)} ${border.horizontal.repeat(Math.max(0, contentWidth - titleWidth - 1))}${border.topRight}`
+    : `${border.topLeft}${horizontal}${border.topRight}`;
+  const bottom = `${border.bottomLeft}${horizontal}${border.bottomRight}`;
   const body = lines.map((line) => {
     const clipped = visibleWidth(line) > contentWidth
       ? `${sliceToWidth(line, contentWidth - visibleWidth(glyphs.ellipsis))}${glyphs.ellipsis}`
       : line;
-    return `${glyphs.boxVertical} ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} ${glyphs.boxVertical}`;
+    return `${border.vertical} ${clipped}${" ".repeat(Math.max(0, contentWidth - visibleWidth(clipped)))} ${border.vertical}`;
   });
   return [top, ...body, bottom].join("\n");
 }
@@ -473,12 +474,14 @@ export function renderPromptBox(options: {
   /** Right-hand text on the top border. Pre-painted by the caller; measured, never re-styled. */
   status?: string;
   glyphs?: GlyphSet;
+  borderStyle?: "round" | "single" | "double" | "none";
 }): { top: string; prefix: string; bottom: string } {
   const { mode, workspace, depth } = options;
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  const border = borderGlyphsFor(options.borderStyle ?? "round", glyphs);
   const width = Math.max(12, options.width);
   const modeColor = MODE_COLORS[mode] ?? CYAN;
-  const horizontal = (count: number) => paint(glyphs.boxHorizontal.repeat(Math.max(0, count)), CYAN, depth);
+  const horizontal = (count: number) => paint(border.horizontal.repeat(Math.max(0, count)), CYAN, depth);
 
   const CHROME = PROMPT_CHROME_COLUMNS;
   const status = options.status ?? "";
@@ -516,9 +519,9 @@ export function renderPromptBox(options: {
 
   const tail = showStatus ? ` ${status} ` : "";
   const filler = Math.max(1, width - visibleWidth(title) - visibleWidth(tail) - CHROME);
-  const top = `${paint(`${glyphs.boxTopLeft}${glyphs.boxHorizontal}`, CYAN, depth)} ${title} ${horizontal(filler)}${tail}${horizontal(1)}${paint(glyphs.boxTopRight, CYAN, depth)}`;
-  const prefix = `${paint(glyphs.boxVertical, CYAN, depth)} ${paint(glyphs.caret, modeColor, depth)} `;
-  const bottom = `${paint(glyphs.boxBottomLeft, CYAN, depth)}${horizontal(width - 2)}${paint(glyphs.boxBottomRight, CYAN, depth)}`;
+  const top = `${paint(`${border.topLeft}${border.horizontal}`, CYAN, depth)} ${title} ${horizontal(filler)}${tail}${horizontal(1)}${paint(border.topRight, CYAN, depth)}`;
+  const prefix = `${paint(border.vertical, CYAN, depth)} ${paint(glyphs.caret, modeColor, depth)} `;
+  const bottom = `${paint(border.bottomLeft, CYAN, depth)}${horizontal(width - 2)}${paint(border.bottomRight, CYAN, depth)}`;
   return { top, prefix, bottom };
 }
 

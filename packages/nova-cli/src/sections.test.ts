@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./glyphs";
 import { visibleWidth } from "./markdown";
 import { clip, heading, keyValues, note, outcomeMark, panel, rule, type SectionStyle } from "./sections";
+import { buildPalette, findBuiltinTheme } from "./theme";
 
 const plain = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
 const style = (width = 60): SectionStyle => ({ width, depth: "none" });
@@ -92,6 +93,30 @@ describe("panels", () => {
     expect(rendered[0]).toContain("src/app.ts");
     expect(rendered[0]).toContain("+3 -1");
     expect(rendered).toHaveLength(3);
+  });
+
+  it("draws round corners with no theme, matching every panel before themes carried a border style", () => {
+    const rendered = plain(panel(["x"], style()));
+    expect(rendered).toContain("╭");
+    expect(rendered).toContain("╯");
+  });
+
+  it("draws the corners the active theme actually asks for, not a fixed shape", () => {
+    // nebula asks for a single-line border; starry-night (the default) asks for round.
+    const nebula = buildPalette(findBuiltinTheme("nebula")!, "none");
+    const starryNight = buildPalette(findBuiltinTheme("starry-night")!, "none");
+    const single = plain(panel(["x"], { ...style(), palette: nebula }));
+    const round = plain(panel(["x"], { ...style(), palette: starryNight }));
+    expect(single).toContain("┌");
+    expect(single).not.toContain("╭");
+    expect(round).toContain("╭");
+    expect(round).not.toContain("┌");
+  });
+
+  it("never draws a themed border character outside the ASCII set on an ASCII terminal", () => {
+    const nebula = buildPalette(findBuiltinTheme("nebula")!, "none");
+    const rendered = plain(panel(["x"], { ...style(), palette: nebula, glyphs: ASCII_GLYPHS }));
+    for (const character of rendered) expect(character.codePointAt(0)).toBeLessThan(128);
   });
 });
 

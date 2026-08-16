@@ -223,6 +223,12 @@ describe("the message echoed into the transcript", () => {
     expect(renderUserMessage("hello", "none", 40)).not.toMatch(ESCAPE);
     expect(renderUserMessage("hello", "truecolor", 40)).toMatch(ESCAPE);
   });
+
+  it("draws the corners the active theme's border style asks for, not a fixed shape", () => {
+    expect(renderUserMessage("hi", "none", 40, undefined, "round")).toContain("╭");
+    expect(renderUserMessage("hi", "none", 40, undefined, "single")).toContain("┌");
+    expect(renderUserMessage("hi", "none", 40, undefined, "double")).toContain("╔");
+  });
 });
 
 describe("provider status view", () => {
