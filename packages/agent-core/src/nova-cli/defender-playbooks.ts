@@ -108,9 +108,12 @@ export const SECRETS_PLAYBOOK = `
 - **Secret rotation and scope**: a key with far broader permissions than the one call site that uses
   it needs (an admin database credential used by a read-only reporting job).
 
-**How to check it**: grep the tracked tree for the shapes above, then check \`.gitignore\` actually
-covers every env/secret file the project uses. A secret scan that only checks the current
-checkout misses history — say so explicitly rather than implying a clean grep means a clean repo.
+**How to check it**: run \`scan_secrets\` first — it matches the shapes above deterministically and
+masks whatever it finds, so its own report never puts a live credential in the transcript. It is a
+pattern match, not proof: verify every finding by reading the surrounding code before reporting it
+as real. Then check \`.gitignore\` actually covers every env/secret file the project uses. A scan
+that only checks the current checkout misses history — say so explicitly rather than implying a
+clean scan means a clean repo.
 `.trim();
 
 export const DEPENDENCIES_PLAYBOOK = `

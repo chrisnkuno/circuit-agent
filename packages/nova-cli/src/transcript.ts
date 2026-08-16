@@ -57,6 +57,8 @@ export function describeToolCall(toolName: string, args: Record<string, unknown>
       const include = asString(args.include);
       return include ? `"${query}" in ${include}` : `"${query}"`;
     }
+    case "scan_secrets":
+      return asString(args.include) ?? "";
     case "run_command":
       return asString(args.command) ?? "";
     case "web_search":
@@ -107,6 +109,11 @@ export function summarizeToolResult(toolName: string, content: string, isError: 
       if (/^No matches/i.test(body)) return "no matches";
       const matches = lineCount(body);
       return `${matches} match${matches === 1 ? "" : "es"}`;
+    }
+    case "scan_secrets": {
+      if (/^No likely secrets/i.test(body)) return "clean";
+      const count = /^(\d+) possible secret/.exec(body);
+      return count ? `${count[1]} possible secret${count[1] === "1" ? "" : "s"}` : "findings";
     }
     case "glob_files": {
       if (/^No files matched/i.test(body)) return "no files";

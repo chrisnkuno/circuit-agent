@@ -48,7 +48,7 @@ describe("the guide screen", () => {
     expect(guide.frame()).toContain("coding agent");
     guide.view.pressKey("down");
     // Topic two is the permission modes.
-    expect(guide.frame()).toContain("Three modes");
+    expect(guide.frame()).toContain("Four modes");
     guide.view.unmount();
   });
 

@@ -33,7 +33,7 @@ describe("nova tool set", () => {
     const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 
-    for (const name of ["read_file", "list_files", "glob_files", "grep_files"]) {
+    for (const name of ["read_file", "list_files", "glob_files", "grep_files", "scan_secrets"]) {
       expect(byName[name].effect, name).toBe("none");
       expect(byName[name].requiresApproval, name).toBe(false);
     }
@@ -54,6 +54,32 @@ describe("nova tool set", () => {
     expect(await fs.readFile(path.join(root, "src", "app.ts"), "utf8")).toContain("8080");
 
     await expect(toolNamed(tools, "read_file").execute({ path: "../escape.txt" }, context)).rejects.toThrow(/escapes the workspace/);
+  });
+
+  it("finds a hardcoded secret and masks it in the tool's own output", async () => {
+    await fs.writeFile(path.join(root, "src", "config.ts"), 'export const key = "AKIAABCDEFGHIJKLMNOP";\n');
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const result = await toolNamed(tools, "scan_secrets").execute({}, context);
+    expect(result.content).toContain("src/config.ts:1");
+    expect(result.content).toContain("AWS access key");
+    expect(result.content).toContain("AKIA…MNOP"); // masked
+    expect(result.content).not.toContain("AKIAABCDEFGHIJKLMNOP"); // never the value in full
+    expect(result.data).toMatchObject({ findings: [{ path: "src/config.ts", line: 1, kind: "AWS access key" }] });
+  });
+
+  it("finds nothing in a project with no secret-shaped strings", async () => {
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const result = await toolNamed(tools, "scan_secrets").execute({}, context);
+    expect(result.content).toContain("No likely secrets found");
+    expect(result.data).toEqual({ findings: [] });
+  });
+
+  it("scopes the scan with the same include glob grep_files uses", async () => {
+    await fs.mkdir(path.join(root, "vendor"), { recursive: true });
+    await fs.writeFile(path.join(root, "vendor", "third-party.ts"), 'const key = "AKIAABCDEFGHIJKLMNOP";\n');
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const result = await toolNamed(tools, "scan_secrets").execute({ include: "src/**" }, context);
+    expect(result.content).toContain("No likely secrets found");
   });
 
   it("runs commands through the injected runner and marks a passing check as verification", async () => {

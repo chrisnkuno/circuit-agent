@@ -8,6 +8,7 @@ import { isFindDelete, isRecursiveForceRemoval } from "./command";
 import type { HookRegistry } from "./hooks";
 import { NestedInstructionTracker } from "./nested-instructions";
 import { NOVA_CAPABILITIES } from "./permissions";
+import { COMBINED_SECRET_PATTERN, findSecretsInLine } from "./secret-scan";
 import { assertSupportedSchema, validateToolArguments, type ToolInputSchema } from "./tool-schema";
 import type { ToolProvider } from "./tool-providers";
 import { collectExternalTools } from "./tool-providers";
@@ -225,6 +226,32 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         return {
           content: matches.map((match) => `${match.path}:${match.line}: ${match.text}`).join("\n"),
           data: { matches: matches.map((match) => ({ path: match.path, line: match.line, text: match.text })) },
+        };
+      },
+    },
+    {
+      name: "scan_secrets",
+      description: "Scan tracked files for likely hardcoded credentials (API keys, private keys, tokens, passwords) by pattern. Read-only; matched values are masked in the output, never shown in full.",
+      inputSchema: {
+        type: "object",
+        properties: { include: { type: "string", description: "Glob limiting which files are scanned, e.g. 'src/**'." } },
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.read,
+      effect: "none",
+      requiresApproval: false,
+      parallelSafe: true,
+      async execute(args) {
+        const include = typeof args.include === "string" ? args.include : undefined;
+        const matches = await workspace.grep(COMBINED_SECRET_PATTERN.source, { regex: true, include });
+        const findings = matches.flatMap((match) => findSecretsInLine(match.text).map((finding) => ({ path: match.path, line: match.line, ...finding })));
+        if (findings.length === 0) {
+          return { content: "No likely secrets found by pattern in the scanned files.", data: { findings: [] } };
+        }
+        const content = findings.map((finding) => `${finding.path}:${finding.line}: ${finding.kind} — ${finding.masked}`).join("\n");
+        return {
+          content: `${findings.length} possible secret${findings.length === 1 ? "" : "s"} found by pattern — verify each; a pattern match is a lead, not proof.\n${content}`,
+          data: { findings },
         };
       },
     },

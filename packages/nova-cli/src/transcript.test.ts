@@ -39,6 +39,11 @@ describe("describeToolCall", () => {
     expect(describeToolCall("grep_files", { query: "TODO", include: "**/*.ts" })).toBe('"TODO" in **/*.ts');
   });
 
+  it("shows the scope a secret scan was limited to, or nothing for a whole-tree scan", () => {
+    expect(describeToolCall("scan_secrets", { include: "src/**" })).toBe("src/**");
+    expect(describeToolCall("scan_secrets", {})).toBe("");
+  });
+
   it("shows the command itself, which is the whole point of approving it", () => {
     expect(describeToolCall("run_command", { command: "npm test -- --watch=false" })).toBe("npm test -- --watch=false");
   });
@@ -91,6 +96,12 @@ describe("summarizeToolResult", () => {
   it("says plainly when a search found nothing, instead of counting the apology", () => {
     expect(summarizeToolResult("grep_files", "No matches.", false)).toBe("no matches");
     expect(summarizeToolResult("glob_files", "No files matched.", false)).toBe("no files");
+  });
+
+  it("counts findings from a secret scan, or says the scan was clean", () => {
+    expect(summarizeToolResult("scan_secrets", "No likely secrets found by pattern in the scanned files.", false)).toBe("clean");
+    expect(summarizeToolResult("scan_secrets", "1 possible secret found by pattern — verify each; a pattern match is a lead, not proof.\nsrc/config.ts:1: AWS access key — AKIA…MNOP (20 chars)", false)).toBe("1 possible secret");
+    expect(summarizeToolResult("scan_secrets", "2 possible secrets found by pattern — verify each; a pattern match is a lead, not proof.\n...", false)).toBe("2 possible secrets");
   });
 
   it("keeps a write or edit tool's own report, which is already exact", () => {

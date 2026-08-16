@@ -153,6 +153,7 @@ const GOLDEN_CONTRACT = [
   { name: "list_files", effect: "none", capabilityId: "workspace.files.read", requiresApproval: false, parallelSafe: true, required: [], properties: ["path", "depth"] },
   { name: "glob_files", effect: "none", capabilityId: "workspace.files.read", requiresApproval: false, parallelSafe: true, required: ["pattern"], properties: ["pattern"] },
   { name: "grep_files", effect: "none", capabilityId: "workspace.files.read", requiresApproval: false, parallelSafe: true, required: ["query"], properties: ["query", "include", "regex"] },
+  { name: "scan_secrets", effect: "none", capabilityId: "workspace.files.read", requiresApproval: false, parallelSafe: true, required: [], properties: ["include"] },
   { name: "write_file", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["path", "content"], properties: ["path", "content"] },
   { name: "edit_file", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["path", "oldText", "newText"], properties: ["path", "oldText", "newText", "replaceAll"] },
   { name: "run_command", effect: "workspace", capabilityId: "workspace.terminal", requiresApproval: true, parallelSafe: false, required: ["command"], properties: ["command", "timeoutMs"] },
