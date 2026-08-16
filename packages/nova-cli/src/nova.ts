@@ -1958,6 +1958,19 @@ async function main(): Promise<number> {
       out.write(style.yellow("\n  interrupted — finishing the current tool call\n"));
       return;
     }
+    // Nothing is running, so this is the prompt. A half-typed message must survive a stray
+    // Ctrl+C: every other REPL (bash, python, node) clears the line here rather than quitting,
+    // and losing a paragraph you were still composing to one keystroke is the worst possible
+    // reading of "I changed my mind". Only an already-empty line means the session itself.
+    const pending = (readline as { line?: string }).line ?? "";
+    if (pending !== "") {
+      // Kill to the start of the line and then to the end, so the line clears whole wherever the
+      // cursor happened to sit. Both are ordinary `rl.write(null, key)` calls — the public API —
+      // rather than a reach into readline's private redraw internals.
+      readline.write(null, { ctrl: true, name: "u" });
+      readline.write(null, { ctrl: true, name: "k" });
+      return;
+    }
     exitRequested = true;
     exitCleanly();
   };

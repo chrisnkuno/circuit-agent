@@ -114,6 +114,26 @@ describe("nova CLI under a real pty", () => {
 
       expect(exit.exitCode).toBe(0);
     }, 30_000);
+
+    // ...but only when the line is actually empty. Ctrl+C with a message still being composed
+    // clears the line, the way bash, python and node all do — quitting there would throw away a
+    // paragraph someone was mid-sentence on, which is the opposite of "I changed my mind".
+    it("clears a half-typed message instead of quitting the session", async () => {
+      const p = boot();
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      p.write("a message I decided against");
+      await p.waitFor("decided against", { timeoutMs: 10_000 });
+      p.write("\x03");
+
+      // The session is still alive — this `waitFor` is the assertion, since a process that had
+      // exited could never answer — and the abandoned text was cleared rather than left in the
+      // buffer, so it is not still sitting in front of what gets submitted next.
+      const before = p.output().length;
+      p.writeLine("/where");
+      const after = (await p.waitFor(cwd, { timeoutMs: 10_000 })).slice(before);
+      expect(after).not.toContain("decided against");
+    }, 30_000);
   });
 
   describe("Ctrl+C mid-turn", () => {
