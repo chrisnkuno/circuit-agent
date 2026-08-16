@@ -174,6 +174,75 @@ describe("exit", () => {
   });
 });
 
+describe("the suggestion dropdown", () => {
+  it("reserves rows by scrolling the transcript up, then draws into them", () => {
+    const stream = fakeStream(40, 100);
+    const screen = new PinnedScreen(stream);
+    screen.enter();
+    stream.writes.length = 0;
+
+    screen.renderSuggestions(["one", "two", "three"]);
+    // Grows from 0 to 3 rows: widen to the full region, scroll it up 3, narrow back to exclude
+    // the reserved rows, then draw into them (row 35 = the new transcriptBottom, 34, plus one).
+    expect(stream.writes).toEqual([
+      "\x1b7\x1b[1;37r",
+      "\x1b[3S",
+      "\x1b[1;34r\x1b8",
+      "\x1b7\x1b[?25l",
+      "\x1b[35;1H\x1b[2Kone",
+      "\x1b[36;1H\x1b[2Ktwo",
+      "\x1b[37;1H\x1b[2Kthree",
+      "\x1b8\x1b[?25h",
+    ]);
+  });
+
+  it("gives freed rows back to the transcript when the list shrinks, instead of leaving a gap", () => {
+    // The bug this guards against: a dropdown that only ever grew its reservation and never gave
+    // rows back when the match count fell (typing narrowed it, or a redraw shortened it) left
+    // stale blank rows sitting reserved — visible as a "big space" under a shorter list.
+    const stream = fakeStream(40, 100);
+    const screen = new PinnedScreen(stream);
+    screen.enter();
+    screen.renderSuggestions(["one", "two", "three"]); // reserves 3 rows
+    stream.writes.length = 0;
+
+    screen.renderSuggestions(["one"]); // narrows to 1 match
+    expect(stream.writes).toEqual([
+      // Clears the two rows no longer wanted (36 and 37, the tail of the old 3-row reservation)...
+      "\x1b7\x1b[?25l",
+      "\x1b[36;1H\x1b[2K",
+      "\x1b[37;1H\x1b[2K",
+      // ...and widens the region back to reclaim them for the transcript.
+      "\x1b[1;36r\x1b8\x1b[?25h",
+      // Then draws the one remaining suggestion at the new bottom row.
+      "\x1b7\x1b[?25l",
+      "\x1b[37;1H\x1b[2Kone",
+      "\x1b8\x1b[?25h",
+    ]);
+  });
+
+  it("clears everything and releases the region entirely once nothing matches", () => {
+    const stream = fakeStream(40, 100);
+    const screen = new PinnedScreen(stream);
+    screen.enter();
+    screen.renderSuggestions(["one", "two"]);
+    stream.writes.length = 0;
+
+    screen.renderSuggestions([]);
+    expect(stream.writes).toEqual(["\x1b7\x1b[?25l", "\x1b[36;1H\x1b[2K", "\x1b[37;1H\x1b[2K", "\x1b[1;37r\x1b8\x1b[?25h"]);
+  });
+
+  it("does nothing on a terminal too short to spare a footer row", () => {
+    const stream = fakeStream(3, 80);
+    const screen = new PinnedScreen(stream);
+    screen.enter();
+    stream.writes.length = 0;
+
+    screen.renderSuggestions(["one"]);
+    expect(stream.writes).toEqual([]);
+  });
+});
+
 describe("defaults when the stream reports no size", () => {
   it("falls back to 24x80, the same default the rest of the CLI already assumes", () => {
     const stream: ScreenStream & { writes: string[] } = { writes: [], write: (text) => { stream.writes.push(text); return true; } };

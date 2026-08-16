@@ -1980,7 +1980,9 @@ async function main(): Promise<number> {
     streamedAnswer = false;
     if (screen) {
       screen.parkInTranscript();
-      out.write(`${rule(sectionStyle(), { label: "you", tone: "accent" })}\n`);
+      // The bubble already carries its own "you" label on the box border — a rule printed above
+      // it duplicated that label as a second, redundant divider (a leftover from before the two
+      // terminal UIs were merged into one). One clearly delimited speaker marker, not two.
       out.write(`${renderUserTurn(request)}\n`);
     }
 

@@ -165,6 +165,17 @@ export class PinnedScreen {
       this.stream.write(`\x1b[${extra}S`);
       this.suggestionRows = wanted;
       this.stream.write(`\x1b[${this.layout.scrollTop};${this.transcriptBottom()}r\x1b8`);
+    } else if (wanted < this.suggestionRows) {
+      // Fewer matches than a moment ago (typing narrowed them, or a history/completion redraw
+      // changed the line) — clear the rows no longer wanted and widen the region's bottom margin
+      // back to reclaim them. Without this the dropdown only ever grew: it shrank the row count it
+      // drew into but never gave the freed rows back, leaving blank reserved space behind — a
+      // "big gap" under a suggestion list that had just gotten shorter.
+      const top = this.transcriptBottom() + 1;
+      this.stream.write("\x1b7\x1b[?25l");
+      for (let offset = wanted; offset < this.suggestionRows; offset += 1) this.stream.write(`\x1b[${top + offset};1H\x1b[2K`);
+      this.suggestionRows = wanted;
+      this.stream.write(`\x1b[${this.layout.scrollTop};${this.transcriptBottom()}r\x1b8\x1b[?25h`);
     }
 
     const top = this.transcriptBottom() + 1;
