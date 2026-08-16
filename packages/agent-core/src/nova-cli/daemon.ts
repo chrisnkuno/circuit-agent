@@ -7,7 +7,7 @@ import type { Checkpoint } from "./checkpoints";
 import type { ApprovalPrompt, ApprovalRequest, PermissionDecision } from "./permissions";
 import type { SafetyAssessment } from "./safety";
 import type { SessionRecord } from "./session";
-import type { TodoItem } from "./tools";
+import type { PlacedSecretFinding, TodoItem } from "./tools";
 
 /** Protocol version for the app-server commands and notifications, independent of journal schema. */
 export const NOVA_DAEMON_PROTOCOL_VERSION = 1 as const;
@@ -262,6 +262,7 @@ export class NovaSessionDaemon {
   todos(clientId: string, sessionId: string): TodoItem[] { return this.requireAttached(clientId, sessionId).agent.todos; }
   diffStat(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffStat(); }
   diffPatch(clientId: string, sessionId: string): Promise<string> { return this.requireAttached(clientId, sessionId).agent.diffPatch(); }
+  scanSecrets(clientId: string, sessionId: string, include?: string): Promise<PlacedSecretFinding[]> { return this.requireAttached(clientId, sessionId).agent.scanSecrets(include); }
   undo(clientId: string, sessionId: string, scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.requireAttached(clientId, sessionId).agent.undo(scope); }
   inspectTools(clientId: string, sessionId: string): ReturnType<NovaAgent["inspectTools"]> { return this.requireAttached(clientId, sessionId).agent.inspectTools(); }
 
@@ -342,6 +343,7 @@ export class NovaDaemonClient {
   setModelSpendLimit(remaining: number): void { this.daemon.setModelSpendLimit(this.id, this.sessionId, remaining); }
   diffStat(): Promise<string> { return this.daemon.diffStat(this.id, this.sessionId); }
   diffPatch(): Promise<string> { return this.daemon.diffPatch(this.id, this.sessionId); }
+  scanSecrets(include?: string): Promise<PlacedSecretFinding[]> { return this.daemon.scanSecrets(this.id, this.sessionId, include); }
   undo(scope?: RestoreScope): Promise<Checkpoint | undefined> { return this.daemon.undo(this.id, this.sessionId, scope); }
   inspectTools(): ReturnType<NovaAgent["inspectTools"]> { return this.daemon.inspectTools(this.id, this.sessionId); }
   decideApproval(id: string, decision: PermissionDecision): void { this.daemon.decideApproval(this.id, id, decision); }
