@@ -14,6 +14,8 @@ import {
   renderPromptBox,
   ReplaceableBlock,
   rowsOccupied,
+  scrollIndicator,
+  scrollPercent,
   sparkline,
   Spinner,
   StatusBar,
@@ -229,6 +231,31 @@ describe("table", () => {
   it("stays inside ASCII on an ASCII terminal", () => {
     const rendered = table(["a"], [["1"]], { depth: "none", glyphs: ASCII_GLYPHS });
     for (const character of rendered) expect(character.codePointAt(0)).toBeLessThan(128);
+  });
+});
+
+describe("scrollPercent and scrollIndicator", () => {
+  it("reports fully shown when the content already fits the viewport", () => {
+    expect(scrollPercent(0, 5, 10)).toBe(1);
+    expect(scrollIndicator(scrollPercent(0, 5, 10))).toBe("Bot");
+  });
+
+  it("reports 0 at the very first line and 1 at the last possible position", () => {
+    expect(scrollPercent(0, 100, 10)).toBe(0);
+    expect(scrollPercent(90, 100, 10)).toBe(1);
+    expect(scrollIndicator(0)).toBe("Top");
+    expect(scrollIndicator(1)).toBe("Bot");
+  });
+
+  it("rounds to a percentage in between, never showing Top or Bot for a mid-scroll position", () => {
+    const fraction = scrollPercent(45, 100, 10); // 45 / (100 - 10) = 50%
+    expect(fraction).toBeCloseTo(0.5);
+    expect(scrollIndicator(fraction)).toBe("50%");
+  });
+
+  it("clamps an out-of-range offset instead of reporting past either end", () => {
+    expect(scrollPercent(-5, 100, 10)).toBe(0);
+    expect(scrollPercent(9_999, 100, 10)).toBe(1);
   });
 });
 

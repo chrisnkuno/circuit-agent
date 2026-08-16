@@ -1,6 +1,7 @@
 import type { Palette } from "./theme";
 import type { TabView } from "./tabs";
 import { clip } from "./sections";
+import { scrollIndicator, scrollPercent } from "./tui";
 
 /**
  * What the control panel is looking at, as data.
@@ -225,6 +226,15 @@ export function composeFrame(snapshot: WorkspaceSnapshot): FrameRow[] {
   rows.push({ text: bar || " no panes ", bold: true, color: theme.primary });
 
   const scrolled = pane && !atLiveEdge(pane, height, snapshot.scroll);
+  // Scroll here counts from the bottom (0 = newest line), but scrollPercent wants an offset counted
+  // from the top — the conversion happens once, at this call site, rather than teaching the shared
+  // helper two different conventions.
+  const position = (() => {
+    if (!pane || !scrolled) return "";
+    const maxOffset = Math.max(0, pane.lines.length - height);
+    const offsetFromTop = maxOffset - Math.min(snapshot.scroll, maxOffset);
+    return scrollIndicator(scrollPercent(offsetFromTop, pane.lines.length, height));
+  })();
   const dropped = pane && pane.dropped > 0 ? `  (${pane.dropped} earlier lines dropped)` : "";
   rows.push({
     text: pane ? `${pane.title}  ${pane.subtitle}${dropped}` : "nothing open",
@@ -242,7 +252,7 @@ export function composeFrame(snapshot: WorkspaceSnapshot): FrameRow[] {
   while (rows.length < rowCount - 1) rows.push({ text: "" });
   rows.length = Math.max(0, rowCount - 1);
   rows.push({
-    text: `${WORKSPACE_LEGEND}${scrolled ? "   \u25b2 scrolled back" : ""}`,
+    text: `${WORKSPACE_LEGEND}${scrolled ? `   \u25b2 scrolled back  ${position}` : ""}`,
     dim: true,
     color: theme.textMuted,
   });

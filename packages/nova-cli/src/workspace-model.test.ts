@@ -226,6 +226,18 @@ describe("the frame", () => {
     expect(live[19].text).not.toContain("scrolled back");
   });
 
+  it("names how far back, not just that it is scrolled", () => {
+    // height = paneHeight(20) = 16, pane has 200 lines: plenty of room to be somewhere in the middle.
+    const middle = composeFrame(snapshot([pane("a", 200)], { rows: 20, scroll: 30 }));
+    expect(middle[19].text).toMatch(/\d+%/);
+    // Scrolled all the way back to the oldest line the pane kept.
+    const farthest = composeFrame(snapshot([pane("a", 200)], { rows: 20, scroll: 184 }));
+    expect(farthest[19].text).toContain("Top");
+    // At the live edge there is nothing to name — the "scrolled back" marker itself is absent.
+    const live = composeFrame(snapshot([pane("a", 200)], { rows: 20, scroll: 0 }));
+    expect(live[19].text).not.toMatch(/Top|Bot|\d+%/);
+  });
+
   it("draws something rather than nothing when no pane exists", () => {
     const frame = composeFrame(snapshot([], { rows: 6 }));
     expect(frame).toHaveLength(6);

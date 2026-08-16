@@ -235,6 +235,31 @@ export function table(
 }
 
 /**
+ * How far a window has scrolled through content taller than it — Bubbles' viewport `ScrollPercent`,
+ * generalised so either scroll convention (offset counted from the top, as the guide does, or from
+ * the bottom, as the workspace panel does) can produce it without knowing about the other.
+ *
+ * `offsetFromTop` is always measured the same way regardless of what a caller calls "scroll": zero
+ * is the very first line on screen, and `contentLines - viewportHeight` is the last possible
+ * position. A caller whose own scroll counts from the bottom converts once at the call site.
+ *
+ * Content that fully fits already has nothing to scroll through, so it reports fully shown (`1`)
+ * rather than dividing by zero.
+ */
+export function scrollPercent(offsetFromTop: number, contentLines: number, viewportHeight: number): number {
+  const maxOffset = Math.max(0, contentLines - viewportHeight);
+  if (maxOffset === 0) return 1;
+  return Math.max(0, Math.min(1, offsetFromTop / maxOffset));
+}
+
+/** `scrollPercent` as the label a footer shows: `Top`/`Bot` at the edges, a rounded percentage between. */
+export function scrollIndicator(fraction: number): string {
+  if (fraction >= 1) return "Bot";
+  if (fraction <= 0) return "Top";
+  return `${Math.round(fraction * 100)}%`;
+}
+
+/**
  * What the spinner claims to be doing, rotating slowly.
  *
  * A word that never changes reads as a frozen program; one that changes every frame reads as

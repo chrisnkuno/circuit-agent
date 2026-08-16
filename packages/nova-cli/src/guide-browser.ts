@@ -1,6 +1,7 @@
 import { GUIDE_TOPICS, wrapText, type GuideTopic } from "./guide";
 import { NO_COLOR_PALETTE, type Palette } from "./theme";
 import { visibleWidth } from "./markdown";
+import { scrollIndicator, scrollPercent } from "./tui";
 
 /**
  * The guide as something you move around in, rather than something printed at you.
@@ -288,9 +289,12 @@ export function composeGuideFrame(state: GuideBrowserState): GuideRow[] {
     });
   }
 
+  // Only worth naming once there is something to scroll through — a short topic has nothing to
+  // report and "Top" beside every single page would just be noise.
+  const position = lines.length > height ? `  ${scrollIndicator(scrollPercent(start, lines.length, height))}` : "";
   const footer = state.searching
     ? `search: ${state.query}▏  Enter done · Esc done`
-    : `↑↓ topic · ←→ scroll · space page · / search · q leave${state.query ? `   filter: ${state.query}` : ""}`;
+    : `↑↓ topic · ←→ scroll · space page · / search · q leave${state.query ? `   filter: ${state.query}` : ""}${position}`;
   rows.push({ text: pad(` ${footer}`, columns), dim: true, color: theme.textMuted });
   return rows;
 }

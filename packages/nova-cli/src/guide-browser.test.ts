@@ -201,4 +201,13 @@ describe("the frame", () => {
     expect(composeGuideFrame(state({ query: "kubernetes" })).map((row) => row.text).join("\n"))
       .toContain("Nothing matches that.");
   });
+
+  it("shows where the page is scrolled to once the body overflows the window, and nothing when it does not", () => {
+    // A tall window fits any one topic whole — no scroll position worth naming.
+    expect(composeGuideFrame(state({ rows: 60 })).at(-1)!.text).not.toMatch(/Top|Bot|\d+%/);
+    // A short one cannot, so the footer earns a position: Top at the start of the page.
+    expect(composeGuideFrame(state({ rows: 8 })).at(-1)!.text).toContain("Top");
+    // Scrolling down moves the label off Top without jumping straight to the opposite end.
+    expect(composeGuideFrame(state({ rows: 8, scroll: 3 })).at(-1)!.text).not.toContain("Top");
+  });
 });
