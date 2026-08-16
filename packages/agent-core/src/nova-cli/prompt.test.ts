@@ -143,6 +143,17 @@ describe("buildNovaSystemPrompt", () => {
     expect(defenderPrompt).toContain("## Secrets & credential hygiene");
     expect(defenderPrompt).toContain("## Input validation, fuzzing & invariant-based testing");
     expect(defenderPrompt).toContain("## Logging, monitoring & deterrence");
+    // The 2025 OWASP-aligned additions: security misconfiguration (now OWASP's #2 risk), supply
+    // chain/CI integrity, client-side security, API security, SSRF, exceptional-condition handling,
+    // business logic, and LLM/AI application security.
+    expect(defenderPrompt).toContain("## Security misconfiguration");
+    expect(defenderPrompt).toContain("## Software supply chain & CI/CD integrity");
+    expect(defenderPrompt).toContain("## Client-side & browser security");
+    expect(defenderPrompt).toContain("## API security");
+    expect(defenderPrompt).toContain("## Server-side request forgery (SSRF)");
+    expect(defenderPrompt).toContain("## Mishandling of exceptional conditions");
+    expect(defenderPrompt).toContain("## Business logic & race conditions");
+    expect(defenderPrompt).toContain("## LLM & AI application security");
     expect(buildNovaSystemPrompt(context, "build", [])).not.toContain("## Injection");
   });
 
