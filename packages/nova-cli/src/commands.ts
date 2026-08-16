@@ -54,18 +54,28 @@ export const COMMANDS = defineCommands({
   "/cost": { description: "Token and cost breakdown for this session" },
   "/sessions": { description: "List sessions in this project (an alias for /history)" },
   "/palette": { description: "Search every command by name or by what it does" },
-  "/keys": { description: "Keyboard shortcuts" },
+  "/keys": { description: "Every shortcut in full, plus line-editing keys and which chords this terminal may not deliver — /help lists them inline, next to each command" },
   "/guide": { args: "[topic|search <text>|all]", description: "The user guide, as a screen you can browse — or print one topic with /guide <topic>" },
   "/help": { description: "This list" },
   "/exit": { description: "Leave" },
 });
 
-/** Renders `/help` from the same table `completer` reads, so they cannot disagree. */
-export function renderCommandHelp(language: ControlLanguage = "en"): string {
+/**
+ * Renders `/help` from the same table `completer` reads, so they cannot disagree.
+ *
+ * `shortcuts` (command name → chord label, e.g. `"F2"` or `"F3, Alt+M"`) merges in what used to be
+ * a second lookup in `/keys` for the commands that have one: `keybindings.ts`'s
+ * `KeyBindingRegistry.shortcutLabels()` is the source, kept optional here so this stays callable —
+ * and testable — without constructing a whole registry.
+ */
+export function renderCommandHelp(language: ControlLanguage = "en", shortcuts: ReadonlyMap<string, string> = new Map()): string {
   const width = Math.max(...COMMANDS.map((command) => command.name.length + (command.args ? command.args.length + 1 : 0)));
+  const shortcutWidth = Math.max(0, ...[...shortcuts.values()].map((label) => label.length));
   return COMMANDS.map((command) => {
     const head = command.args ? `${command.name} ${command.args}` : command.name;
-    return `  ${head.padEnd(width + 2)}${commandDescription(language, command.name, command.description)}`;
+    const shortcut = shortcuts.get(command.name) ?? "";
+    const shortcutColumn = shortcutWidth > 0 ? shortcut.padEnd(shortcutWidth + 2) : "";
+    return `  ${head.padEnd(width + 2)}${shortcutColumn}${commandDescription(language, command.name, command.description)}`;
   }).join("\n");
 }
 

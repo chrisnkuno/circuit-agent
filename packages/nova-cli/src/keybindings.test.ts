@@ -172,4 +172,21 @@ describe("mnemonic letter shortcuts", () => {
     expect(rendered).toContain("F4, Alt+W");
     expect(rendered.match(/Run a bounded research exploration/g)).toHaveLength(1);
   });
+
+  it("gives shortcutLabels the same grouped chords render() shows, in the compact form /help inlines", () => {
+    const labels = new KeyBindingRegistry().shortcutLabels();
+    expect(labels.get("/wander")).toBe("F4, Alt+W");
+    expect(labels.get("/mode")).toBe("F2");
+  });
+
+  it("says nothing about deliverability in shortcutLabels — that caveat stays exclusive to /keys", () => {
+    const labels = new KeyBindingRegistry({}, { TMUX: "1" }).shortcutLabels();
+    expect(labels.get("/mode")).toBe("F2");
+    expect(labels.get("/mode")).not.toContain("may not send");
+  });
+
+  it("omits a command entirely from shortcutLabels once every chord for it is turned off", () => {
+    const labels = new KeyBindingRegistry({ "/wander": "off" }).shortcutLabels();
+    expect(labels.has("/wander")).toBe(false);
+  });
 });

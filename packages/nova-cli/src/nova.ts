@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, table, wrapPlain } from "./tui";
+import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, table, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -331,7 +331,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
 // A function, not a constant: it is built after `configureRendering` has learned whether the
 // destination can render colour at all, which a module-level template literal would predate.
-function helpText(language: ControlLanguage = "en"): string {
+function helpText(language: ControlLanguage = "en", shortcuts: ReadonlyMap<string, string> = new Map()): string {
   return `
 ${style.bold("nova")} — a coding agent in your terminal
 
@@ -407,7 +407,7 @@ ${style.bold("Headless output")}
     4 unverified  5 approval  6 limit hit     7 cancelled
 
 ${style.bold("In a session")}
-${renderCommandHelp(language)}
+${renderCommandHelp(language, shortcuts)}
 `;
 }
 
@@ -1121,7 +1121,11 @@ async function main(): Promise<number> {
     ),
   );
   if (args.help) {
-    out.write(helpText(language));
+    // Cheap and side-effect-free — resolving the static binding table against overrides — so
+    // building one here beats threading the interactive session's own registry all the way down to
+    // a path that runs before that registry, or a session at all, exists.
+    const shortcuts = new KeyBindingRegistry(parseBindingOverrides(environment.NOVA_KEYS), environment).shortcutLabels();
+    out.write(helpText(language, shortcuts));
     return 0;
   }
 
@@ -1997,8 +2001,11 @@ async function main(): Promise<number> {
     // where a person notices the agent misunderstood them; a pause after this one would be too late.
     const cooldown = remainingCooldown(pace, lastTurnEndedAt);
     if (cooldown > 0) {
-      out.write(style.dim(`  ${paceBadge(pace, glyphs)} ${glyphs.middot} pausing ${Math.ceil(cooldown / 1_000)}s before the next turn\n`));
-      await new Promise((resolve) => setTimeout(resolve, cooldown));
+      const label = (remaining: number) => style.dim(`  ${paceBadge(pace, glyphs)} ${glyphs.middot} pausing ${formatCountdown(remaining)} before the next turn`);
+      const handle = toolLines.append(label(cooldown));
+      await new Promise<void>((resolve) => {
+        new CountdownTimer(cooldown, (remaining) => toolLines.update(handle, label(remaining)), () => { forgetToolLines(); resolve(); }).start();
+      });
     }
     const taskSafety = assessTaskSafety(request);
     if (mode !== "plan" && !await confirmSensitiveTask(readline, interactive, taskSafety, args.allowSensitive)) {
@@ -2441,7 +2448,7 @@ async function main(): Promise<number> {
     }
 
     if (input === "/exit" || input === "/quit") break;
-    if (input === "/help") { out.write(helpText(language)); continue; }
+    if (input === "/help") { out.write(helpText(language, keys.shortcutLabels())); continue; }
     const modeCommand = parseModeCommand(input);
     if (modeCommand?.type === "show") {
       const posture = mode === "plan" ? "read-only; write and command tools are unavailable" : mode === "build" ? "workspace changes ask for approval" : mode === "defender" ? "security review; every change still asks for approval" : "ordinary workspace changes are pre-approved; sensitive and external actions still ask";

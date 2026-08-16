@@ -72,6 +72,60 @@ export class Spinner {
   }
 }
 
+/** `6s`, or `1m 05s` once a minute is on the clock — Bubbles' Timer output format. */
+export function formatCountdown(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+/**
+ * Counts down to zero and says so on the way — Nova's answer to Bubbles' `timer`, for the one place
+ * that used to go silent for the whole wait: the pace's cooldown between turns printed one static
+ * "pausing 6s" line and then `setTimeout`'d through it, so a slow pace looked frozen rather than
+ * counting down.
+ *
+ * A plain `setInterval` wrapped for the same reason `Spinner` is: so the call site owns only "what
+ * a tick looks like," not clock arithmetic, and ticking against a fixed end time rather than
+ * counting down a mutable remainder means a slow event loop cannot make the timer drift long.
+ */
+export class CountdownTimer {
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private readonly endsAt: number;
+
+  constructor(
+    durationMs: number,
+    private readonly onTick: (remainingMs: number) => void,
+    private readonly onDone: () => void,
+    private readonly intervalMs = 1_000,
+  ) {
+    this.endsAt = Date.now() + Math.max(0, durationMs);
+  }
+
+  get remaining(): number {
+    return Math.max(0, this.endsAt - Date.now());
+  }
+
+  start(): void {
+    if (this.timer) return;
+    if (this.remaining <= 0) { this.onDone(); return; }
+    this.onTick(this.remaining);
+    this.timer = setInterval(() => {
+      const left = this.remaining;
+      if (left <= 0) { this.stop(); this.onDone(); return; }
+      this.onTick(left);
+    }, this.intervalMs);
+  }
+
+  stop(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+}
+
 export type ActivityPhase = "thinking" | "operation";
 
 export type StatusFields = {

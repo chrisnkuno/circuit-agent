@@ -4,6 +4,8 @@ import { visibleWidth } from "./markdown";
 import {
   activityLabel,
   box,
+  CountdownTimer,
+  formatCountdown,
   formatStatusLine,
   formatTokens,
   MarkdownStream,
@@ -555,6 +557,63 @@ describe("Spinner", () => {
   it("stopping before ever starting is a safe no-op", () => {
     const spinner = new Spinner(() => {});
     expect(() => spinner.stop()).not.toThrow();
+  });
+});
+
+describe("formatCountdown", () => {
+  it("shows plain seconds under a minute", () => {
+    expect(formatCountdown(6_000)).toBe("6s");
+    expect(formatCountdown(500)).toBe("1s"); // rounds up: 1ms left still reads as "about to happen", not "done"
+    expect(formatCountdown(0)).toBe("0s");
+  });
+
+  it("switches to minutes and seconds at a minute", () => {
+    expect(formatCountdown(65_000)).toBe("1m 05s");
+    expect(formatCountdown(125_000)).toBe("2m 05s");
+  });
+
+  it("never shows negative time", () => {
+    expect(formatCountdown(-500)).toBe("0s");
+  });
+});
+
+describe("CountdownTimer", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("ticks once immediately with the full duration, then once per interval", () => {
+    const ticks: number[] = [];
+    new CountdownTimer(3_000, (remaining) => ticks.push(remaining), () => {}, 1_000).start();
+    expect(ticks).toEqual([3_000]);
+    vi.advanceTimersByTime(1_000);
+    expect(ticks).toEqual([3_000, 2_000]);
+  });
+
+  it("calls onDone exactly once when the duration elapses, not onTick with a negative remainder", () => {
+    const ticks: number[] = [];
+    let done = 0;
+    new CountdownTimer(2_000, (remaining) => ticks.push(remaining), () => { done += 1; }, 1_000).start();
+    vi.advanceTimersByTime(5_000); // well past the end — must not keep ticking or double-fire onDone
+    expect(done).toBe(1);
+    expect(ticks.every((value) => value >= 0)).toBe(true);
+  });
+
+  it("fires onDone immediately for a duration that has already elapsed", () => {
+    let done = 0;
+    new CountdownTimer(0, () => {}, () => { done += 1; }).start();
+    expect(done).toBe(1);
+  });
+
+  it("stops ticking once stopped, and stopping before starting is a safe no-op", () => {
+    const timer = new CountdownTimer(5_000, () => {}, () => {}, 1_000);
+    expect(() => timer.stop()).not.toThrow();
+    let ticks = 0;
+    const running = new CountdownTimer(5_000, () => { ticks += 1; }, () => {}, 1_000);
+    running.start();
+    running.stop();
+    const afterStop = ticks;
+    vi.advanceTimersByTime(3_000);
+    expect(ticks).toBe(afterStop);
   });
 });
 

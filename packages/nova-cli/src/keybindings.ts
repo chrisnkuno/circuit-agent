@@ -288,19 +288,37 @@ export class KeyBindingRegistry {
   }
 
   /**
-   * The `/keys` view: what is bound, what line editing owns, and what this terminal may not deliver.
+   * One entry per command rather than per chord: a command with two keys used to print two
+   * adjacent, near-identical rows, which reads as a duplicate rather than as a choice. Shared by
+   * `render()` and `shortcutLabels()` so the two views of the same bindings cannot drift apart.
    */
-  render(): string {
-    // One row per command, not per chord: a command with two keys was printing two adjacent lines
-    // with identical text, which reads as a duplicate rather than as a choice. `F1, Alt+H` says the
-    // same thing in half the space and makes the alternative obvious.
+  private groupedByCommand(): Map<string, { chords: Chord[]; description: string }> {
     const byCommand = new Map<string, { chords: Chord[]; description: string }>();
     for (const binding of this.bindings) {
       const entry = byCommand.get(binding.command) ?? { chords: [], description: binding.description };
       entry.chords.push(binding.chord);
       byCommand.set(binding.command, entry);
     }
-    const rows: [string, string][] = [...byCommand].map(([command, { chords, description }]) => {
+    return byCommand;
+  }
+
+  /**
+   * `"F2"` or `"F3, Alt+M"` per command — the compact form `/help` inlines beside each command, so
+   * the two views merge into one place to learn a command's shortcut instead of a second lookup in
+   * `/keys`. Deliberately simpler than `render()`'s rows: no undeliverable-chord caveat here, since
+   * that nuance belongs to the dedicated key-binding view, not a one-line annotation in a command list.
+   */
+  shortcutLabels(): Map<string, string> {
+    return new Map([...this.groupedByCommand()].map(([command, { chords }]) => [command, chords.map(formatChord).join(", ")]));
+  }
+
+  /**
+   * The `/keys` view: what is bound, what line editing owns, and what this terminal may not deliver.
+   */
+  render(): string {
+    // "F1, Alt+H" says the same thing as two rows in half the space and makes the alternative
+    // obvious, which is why this groups by command rather than printing one row per chord.
+    const rows: [string, string][] = [...this.groupedByCommand()].map(([command, { chords, description }]) => {
       // Undeliverable chords are called out only when *every* route to the command is doubtful:
       // if F4 may not arrive but Alt+W will, the command is reachable and saying otherwise is noise.
       const deliverable = chords.some((chord) => isLikelyDeliverable(chord, this.environment));

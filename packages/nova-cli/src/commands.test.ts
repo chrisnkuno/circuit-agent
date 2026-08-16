@@ -21,6 +21,17 @@ describe("command registry", () => {
     expect(help).toContain("/mode [plan|build|auto|defender]");
     expect(completeCommand("/mo")[0]).toContain("/mode");
   });
+
+  it("inlines a command's keyboard shortcut when one is given, and leaves commands without one alone", () => {
+    const help = renderCommandHelp("en", new Map([["/model", "F3, Alt+M"]]));
+    expect(help).toMatch(/\/model.*F3, Alt\+M/);
+    // A command with no shortcut still lines up — no dangling gap or misaligned description.
+    expect(help).toContain("/undo");
+  });
+
+  it("omits the shortcut column entirely when nothing was given, unchanged from before shortcuts existed", () => {
+    expect(renderCommandHelp()).toBe(renderCommandHelp("en", new Map()));
+  });
 });
 
 describe("mode commands", () => {
