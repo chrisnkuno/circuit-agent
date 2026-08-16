@@ -1,37 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
-  "description": "Default capabilities for Nova desktop",
-  "windows": ["main"],
+  "description": "Scoped to the main window. Deliberately no shell permissions: the sidecar is spawned by Rust via std::process, so the webview needs no ability to execute anything.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "store:default",
     "dialog:default",
-    "updater:default",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "binaries/nova-sidecar",
-          "sidecar": true,
-          "args": true
-        },
-        {
-          "name": "node",
-          "cmd": "node",
-          "args": true
-        }
-      ]
-    },
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/nova-sidecar",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    }
+    "updater:default"
   ]
 }
