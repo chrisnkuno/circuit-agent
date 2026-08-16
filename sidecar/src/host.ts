@@ -110,6 +110,10 @@ export class NovaHost {
         return { diff: (await this.client?.diffStat()) ?? "" };
       case "todos.get":
         return { todos: this.client?.todos ?? [] };
+      case "scan.secrets":
+        // Deterministic and read-only, so it runs without a model turn and without an approval —
+        // the same guarantee the `scan_secrets` tool carries, reached directly.
+        return { findings: (await this.client?.scanSecrets(request.include)) ?? [] };
       case "sandbox.pull":
         return await this.pullSandbox(request.dest);
       case "dispose":

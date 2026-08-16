@@ -49,6 +49,7 @@ export type IpcRequest =
   | { id: string; type: "cost.get" }
   | { id: string; type: "diff.get" }
   | { id: string; type: "todos.get" }
+  | { id: string; type: "scan.secrets"; include?: string }
   | { id: string; type: "sandbox.pull"; dest?: string }
   | { id: string; type: "dispose" };
 

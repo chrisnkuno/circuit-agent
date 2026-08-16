@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { PlacedSecretFinding } from "./scan";
 import type { IpcEvent, NovaMode, NovaSettings, PermissionDecision, ProviderId } from "./settings";
 
 type RequestPayload = Record<string, unknown> & { type: string };
@@ -98,6 +99,14 @@ export async function getTodos() {
 
 export async function pullSandbox(dest?: string) {
   return await sidecarRequest<{ dest: string }>({ type: "sandbox.pull", dest });
+}
+
+/**
+ * The deterministic secret scan. Read-only and model-free, so it needs no approval and costs
+ * nothing — the same scan `scan_secrets` runs, reached directly.
+ */
+export async function scanSecrets(include?: string) {
+  return await sidecarRequest<{ findings: PlacedSecretFinding[] }>({ type: "scan.secrets", ...(include ? { include } : {}) });
 }
 
 export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promise<UnlistenFn> {
