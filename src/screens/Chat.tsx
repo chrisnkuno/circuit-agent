@@ -27,10 +27,13 @@ import {
   setSettings,
   undoTurn,
 } from "../lib/ipc";
+import {
+  appendUserMessage,
+  applyChatEvents,
+  initialChatState,
+  type ChatState,
+} from "../lib/chat-state";
 import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../lib/settings";
-
-type ChatMessage =
-  | { id: string; role: "user" | "assistant" | "system" | "tool"; content: string };
 
 export function ChatScreen(props: {
   settings: NovaSettings;
@@ -46,14 +49,9 @@ export function ChatScreen(props: {
   const [upload, setUpload] = useState(true);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chat, setChat] = useState<ChatState>(initialChatState);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [approval, setApproval] = useState<ApprovalState | null>(null);
-  const [costReport, setCostReport] = useState("No turns yet.");
-  const [displayTotal, setDisplayTotal] = useState<string | undefined>();
-  const [budgetFraction, setBudgetFraction] = useState<number | undefined>();
   const [warning, setWarning] = useState<string | undefined>();
-  const [error, setError] = useState<string | null>(null);
   const [todos, setTodos] = useState<Array<{ id: string; content: string; status: string }>>([]);
   const [pinned, setPinned] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
@@ -61,66 +59,27 @@ export function ChatScreen(props: {
   const [showFiles, setShowFiles] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [active, setActive] = useState<{ provider: ProviderId; model: string }>({ provider: props.settings.provider, model: props.settings.model });
+  // Everything the sidecar's event stream decides now lives in one reducer-owned value, so the
+  // transcript's behaviour is the pure, tested `applyChatEvents` rather than six setState closures
+  // buried in an effect. The screen keeps what is genuinely its own: scrolling, focus, dialogs.
+  const { messages, approval, costReport, displayTotal, budgetFraction, error } = chat;
+  const setError = (message: string | null) => setChat((current) => ({ ...current, error: message }));
+  const setApproval = (next: ApprovalState | null) => setChat((current) => ({ ...current, approval: next }));
+  const addSystemMessage = (content: string) =>
+    setChat((current) => ({ ...current, messages: [...current.messages, { id: `sys-${Date.now()}`, role: "system", content }] }));
+  const setCost = (report: string, total?: string, fraction?: number) =>
+    setChat((current) => ({ ...current, costReport: report, displayTotal: total, budgetFraction: fraction }));
+
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const assistantBuffer = useRef("");
   const openingRef = useRef(false);
   /** Whether new output should scroll into view. A ref, so streaming does not re-render on it. */
   const followRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    for (const event of props.events) {
-      if (event.type === "assistant_delta") {
-        assistantBuffer.current += event.text;
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant" && last.id === "streaming") {
-            next[next.length - 1] = { ...last, content: assistantBuffer.current };
-            return next;
-          }
-          return [...next, { id: "streaming", role: "assistant", content: assistantBuffer.current }];
-        });
-      } else if (event.type === "tool_call") {
-        setMessages((prev) => [
-          ...prev,
-          { id: event.toolCallId, role: "tool", content: `→ ${event.name}${event.summary ? `: ${event.summary}` : ""}` },
-        ]);
-      } else if (event.type === "tool_result") {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `${event.toolCallId}-result`,
-            role: "tool",
-            content: `${event.ok ? "✓" : "✗"} ${event.name}${event.preview ? `\n${event.preview}` : ""}`,
-          },
-        ]);
-      } else if (event.type === "approval_needed") {
-        setApproval({
-          requestId: event.requestId,
-          toolName: event.toolName,
-          summary: event.summary,
-        });
-      } else if (event.type === "cost") {
-        setCostReport(event.report);
-        setDisplayTotal(event.displayTotal);
-        setBudgetFraction(event.budgetFraction);
-      } else if (event.type === "error") {
-        setError(event.message);
-      } else if (event.type === "turn_status" && event.status !== "running") {
-        if (assistantBuffer.current) {
-          const finalText = assistantBuffer.current;
-          assistantBuffer.current = "";
-          setMessages((prev) => {
-            const next = prev.filter((m) => m.id !== "streaming");
-            return [...next, { id: `assistant-${Date.now()}`, role: "assistant", content: finalText || event.summary || event.status }];
-          });
-        } else if (event.summary) {
-          setMessages((prev) => [...prev, { id: `status-${Date.now()}`, role: "system", content: event.summary! }]);
-        }
-      }
-    }
-    if (props.events.length) props.clearEvents();
+    if (props.events.length === 0) return;
+    setChat((current) => applyChatEvents(current, props.events));
+    props.clearEvents();
   }, [props.events, props.clearEvents]);
 
   // Follow new output only when the reader is already at the bottom. Scrolling up is an explicit
@@ -209,7 +168,8 @@ export function ChatScreen(props: {
       // — a saved model can be absent, and the provider falls back. Trusting settings here made the
       // picker claim "gpt-5.6-luna · current" while the session ran on claude-sonnet-5.
       if (opened.provider && opened.model) setActive({ provider: opened.provider as ProviderId, model: opened.model });
-      setMessages([{ id: "sys", role: "system", content: `Opened ${opened.workspace} · ${opened.provider}/${opened.model}` }]);
+      // A newly opened session starts from an empty transcript, not the previous project's.
+      setChat({ ...initialChatState(), messages: [{ id: "sys", role: "system", content: `Opened ${opened.workspace} · ${opened.provider}/${opened.model}` }] });
       await refreshSessions(trimmed);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -239,7 +199,7 @@ export function ChatScreen(props: {
     try {
       await setMode(next);
       setModeState(next);
-      setMessages((prev) => [...prev, { id: `mode-${Date.now()}`, role: "system", content: `Mode → ${next}` }]);
+      addSystemMessage(`Mode → ${next}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -256,16 +216,12 @@ export function ChatScreen(props: {
     const objective = draft.trim();
     setDraft("");
     setBusy(true);
-    setError(null);
-    assistantBuffer.current = "";
-    setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: "user", content: objective }]);
+    setChat((current) => appendUserMessage(current, objective));
     try {
       const result = await sendTurn(objective);
       setSessionId(result.sessionId);
       const cost = await getCost();
-      setCostReport(cost.report);
-      setDisplayTotal(cost.displayTotal);
-      setBudgetFraction(cost.budgetFraction);
+      setCost(cost.report, cost.displayTotal, cost.budgetFraction);
       setWarning(cost.warning);
       const todoState = await getTodos();
       setTodos(todoState.todos);
@@ -280,7 +236,7 @@ export function ChatScreen(props: {
   async function handleUndo() {
     try {
       await undoTurn();
-      setMessages((prev) => [...prev, { id: `undo-${Date.now()}`, role: "system", content: "Undid last turn checkpoint." }]);
+      addSystemMessage("Undid last turn checkpoint.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -294,7 +250,7 @@ export function ChatScreen(props: {
       setActive({ provider, model });
       // Said in the transcript rather than only in the header: a model change alters what every
       // later answer costs and how it reasons, so it belongs in the record of the conversation.
-      setMessages((prev) => [...prev, { id: `model-${Date.now()}`, role: "system", content: `Model → ${provider}/${model}` }]);
+      addSystemMessage(`Model → ${provider}/${model}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -323,7 +279,9 @@ export function ChatScreen(props: {
         title?: string;
       };
       setSessionId(resumed.sessionId);
-      setMessages([{ id: "resume", role: "system", content: `Resumed ${resumed.title || resumed.sessionId}` }]);
+      // Resuming replaces the transcript, same as opening: what is on screen belongs to the
+      // session being left, not the one being joined.
+      setChat({ ...initialChatState(), messages: [{ id: "resume", role: "system", content: `Resumed ${resumed.title || resumed.sessionId}` }] });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -395,7 +353,7 @@ export function ChatScreen(props: {
             onPull={async () => {
               try {
                 const result = await pullSandbox();
-                setMessages((prev) => [...prev, { id: `pull-${Date.now()}`, role: "system", content: `Pulled sandbox to ${result.dest}` }]);
+                addSystemMessage(`Pulled sandbox to ${result.dest}`);
               } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
               }
