@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COMMANDS, completeCommand, completeFileMention, completeInput, completeModelArgument, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
+import { COMMANDS, completeCommand, inlineCompletion, completeFileMention, completeInput, completeModelArgument, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 
 describe("command registry", () => {
   it("lists every command exactly once, each starting with a slash", () => {
@@ -227,5 +227,59 @@ describe("isKnownCommand", () => {
   it("recognises every command in the table and nothing else", () => {
     for (const command of COMMANDS) expect(isKnownCommand(command.name)).toBe(true);
     expect(isKnownCommand("/nope")).toBe(false);
+  });
+});
+
+describe("inlineCompletion", () => {
+  it("completes a unique prefix to the whole command", () => {
+    expect(inlineCompletion("/def")).toEqual({ suffix: "ender", alternatives: 0 });
+    expect(inlineCompletion("/hel")).toEqual({ suffix: "p", alternatives: 0 });
+  });
+
+  it("offers the shortest match when several are possible, and says how many others there were", () => {
+    // /mod prefixes /mode, /model and /models. The shortest is the least presumptuous guess: one
+    // more keystroke reaches either of the others, where completing straight to /models would have
+    // to be undone to get back to /mode.
+    expect(inlineCompletion("/mod")).toEqual({ suffix: "e", alternatives: 2 });
+  });
+
+  it("offers nothing once the command is complete, so a finished word is not decorated", () => {
+    expect(inlineCompletion("/help")).toEqual({ suffix: "", alternatives: 0 });
+    expect(inlineCompletion("/cost")).toEqual({ suffix: "", alternatives: 0 });
+  });
+
+  it("offers nothing for a bare slash or for something that matches no command", () => {
+    expect(inlineCompletion("/")).toEqual({ suffix: "", alternatives: 0 });
+    expect(inlineCompletion("/zzz")).toEqual({ suffix: "", alternatives: 0 });
+  });
+
+  it("stays out of ordinary prose, including a sentence that happens to contain a slash", () => {
+    expect(inlineCompletion("fix the bug")).toEqual({ suffix: "", alternatives: 0 });
+    expect(inlineCompletion("look at src/mod")).toEqual({ suffix: "", alternatives: 0 });
+  });
+
+  it("completes a model id after /model, against the models actually available", () => {
+    const models = ["claude-sonnet-5", "claude-sonnet-5-mini", "gpt-5.6-terra"];
+    expect(inlineCompletion("/model claude-son", models)).toEqual({ suffix: "net-5", alternatives: 1 });
+    expect(inlineCompletion("/model gpt", models)).toEqual({ suffix: "-5.6-terra", alternatives: 0 });
+  });
+
+  it("offers nothing for a model argument that is already whole, or matches nothing", () => {
+    const models = ["claude-sonnet-5"];
+    expect(inlineCompletion("/model claude-sonnet-5", models)).toEqual({ suffix: "", alternatives: 0 });
+    expect(inlineCompletion("/model zzz", models)).toEqual({ suffix: "", alternatives: 0 });
+  });
+
+  it("never offers a suffix that does not actually finish a real command", () => {
+    // Whatever it proposes, typed-plus-suffix has to be a command that exists — otherwise pressing
+    // right arrow would produce something the parser rejects.
+    const names = new Set<string>(COMMANDS.map((command) => command.name));
+    for (const command of COMMANDS) {
+      for (let length = 2; length < command.name.length; length += 1) {
+        const typed = command.name.slice(0, length);
+        const { suffix } = inlineCompletion(typed);
+        if (suffix !== "") expect(names.has(typed + suffix), `${typed} -> ${typed}${suffix}`).toBe(true);
+      }
+    }
   });
 });

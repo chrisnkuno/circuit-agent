@@ -161,6 +161,39 @@ export function suggestionsFor(line: string, models: readonly string[] = []): { 
   return matches.map((command) => ({ command: command.name, ...(command.args ? { args: command.args } : {}), description: command.description }));
 }
 
+/**
+ * The rest of the word, for the greyed-out completion shown after the cursor as you type.
+ *
+ * Search-engine behaviour, and deliberately *not* the reserved-row dropdown this replaces. That
+ * dropdown needed rows of its own, and rows have to be taken from the transcript by scrolling it —
+ * which is destructive, and was being done to the very rows the input bar draws on. Ghost text
+ * costs no rows at all: it is painted after the cursor on a line readline is already redrawing, so
+ * there is nothing to reserve and nothing to give back.
+ *
+ * The shortest match wins when several are possible, because it is the least presumptuous guess —
+ * typing `/mod` offers `/mode` rather than reaching past it for `/models`, and one more keystroke
+ * gets you either. `alternatives` is how many others were also possible, so the caller can say so
+ * rather than implying the offer is the only answer.
+ */
+export function inlineCompletion(line: string, models: readonly string[] = []): { suffix: string; alternatives: number } {
+  const none = { suffix: "", alternatives: 0 };
+  const model = /^(\/models?\s+)(\S+)$/.exec(line);
+  if (model) {
+    const fragment = model[2].toLowerCase();
+    const matched = models.filter((id) => id.toLowerCase().startsWith(fragment)).sort((a, b) => a.length - b.length);
+    if (matched.length === 0 || matched[0].length === fragment.length) return none;
+    return { suffix: matched[0].slice(model[2].length), alternatives: matched.length - 1 };
+  }
+  // Only while the line is a bare command word. Once it has an argument the completion belongs to
+  // that argument, and guessing at the command again would offer to rewrite what was already typed.
+  if (!/^\/\S*$/.test(line) || line === "/") return none;
+  const matched = COMMANDS.map((command) => command.name)
+    .filter((name) => name.startsWith(line))
+    .sort((left, right) => left.length - right.length);
+  if (matched.length === 0 || matched[0] === line) return none;
+  return { suffix: matched[0].slice(line.length), alternatives: matched.length - 1 };
+}
+
 export function isKnownCommand(name: string): boolean {
   return COMMANDS.some((command) => command.name === name);
 }

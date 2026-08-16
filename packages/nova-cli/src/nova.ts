@@ -24,7 +24,7 @@ import { PinnedScreen } from "./screen";
 import { barChart, heatStrip, lineChart } from "./charts";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
-import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
+import { completeInput, inlineCompletion, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
 import { installShortcuts, openChooser, openModelPicker, openPalette, withBorrowedKeyboard } from "./shortcuts";
 import { runChooser, type ChooserItem } from "./chooser";
@@ -2409,7 +2409,9 @@ async function main(): Promise<number> {
       // it borrows them by scrolling the transcript, which is destructive, and it would be doing
       // that to rows the inline bar is drawn on. Two owners of the bottom of the screen is the
       // mistake that produced the blank-space bug; one owner is the rule. Under `--pin` the region
-      // is real and the dropdown keeps working. Elsewhere Tab still completes, `/help` still lists,
+      // is real and the dropdown keeps working. Elsewhere the inline bar shows ghost-text
+      // completion instead (see `paintGhost`), which costs no rows at all. Tab still completes,
+      // `/help` still lists,
       // and Ctrl+G still opens the searchable palette.
       if (inlineBar()) return;
       const line = (readline as { line?: string }).line ?? "";
@@ -2430,7 +2432,43 @@ async function main(): Promise<number> {
         return `  ${style.cyan(head.padEnd(width + 2))}${style.dim(entry.description)}`;
       }));
     });
+    /**
+     * The greyed-out rest of the command, painted after the cursor as you type.
+     *
+     * What replaces the dropdown for the inline bar. It writes *after* the cursor and puts the
+     * cursor straight back, so readline's idea of where it is never changes and the row count never
+     * changes either — the two things that made the reserved-row dropdown unsafe here.
+     *
+     * Erasing to end of line first is what keeps a shrinking suggestion from leaving its own tail
+     * behind (`/mode` back to `/mod` would otherwise strand the old `l`). Anything still on screen
+     * at submit is wiped by `promptBox.erase`, which already clears these rows whole.
+     */
+    const paintGhost = () => setImmediate(() => {
+      if (turnActive || browsing || !promptBox.isDrawn) return;
+      const line = (readline as { line?: string }).line ?? "";
+      const cursor = (readline as { cursor?: number }).cursor ?? line.length;
+      // Only at the end of the line: a completion offered from the middle would be describing text
+      // the cursor is not actually about to extend.
+      if (cursor !== line.length) { out.write("\x1b7\x1b[K\x1b8"); return; }
+      const { suffix, alternatives } = inlineCompletion(line, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model));
+      const hint = suffix === "" ? "" : `${style.dim(suffix)}${alternatives > 0 ? style.dim(`  +${alternatives}`) : ""}`;
+      out.write(`\x1b7\x1b[K${hint}\x1b8`);
+    });
+
+    /** Right arrow at the end of the line takes the offer, the way fish and every browser bar do. */
+    const acceptGhost = (_str: string | undefined, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {
+      if (!key || key.name !== "right" || key.ctrl || key.meta) return;
+      if (turnActive || browsing || !promptBox.isDrawn) return;
+      const line = (readline as { line?: string }).line ?? "";
+      const cursor = (readline as { cursor?: number }).cursor ?? 0;
+      if (cursor !== line.length) return; // mid-line, the arrow means "move right"
+      const { suffix } = inlineCompletion(line, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model));
+      if (suffix !== "") readline.write(suffix);
+    };
+
     process.stdin.on("keypress", paintSuggestions);
+    process.stdin.on("keypress", paintGhost);
+    process.stdin.on("keypress", acceptGhost);
   }
 
   /**
