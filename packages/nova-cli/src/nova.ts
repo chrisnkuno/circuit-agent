@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, wrapPlain } from "./tui";
+import { box, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, table, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -781,7 +781,7 @@ export function renderProviders(environment: Record<string, string | undefined>,
   // writes escape codes into the file someone is about to read.
   const paint = (text: string, apply: (value: string) => string) => (depth === "none" ? text : apply(text));
   const statuses = describeProviders(environment);
-  const lines: string[] = [];
+  const rows: string[][] = [];
 
   for (const status of statuses) {
     const mark = status.configured ? paint(glyphs.check, style.green) : paint(glyphs.circleEmpty, style.dim);
@@ -790,10 +790,15 @@ export function renderProviders(environment: Record<string, string | undefined>,
       // `nova settings` leads: it stores the key for next time, where an exported variable lives
       // only as long as the shell does. The variable name still appears, for CI and containers.
       : paint(`nova settings, or set ${status.missing.join(" and ")}`, style.yellow);
-    lines.push(`  ${mark} ${status.label.padEnd(14)} ${detail}`);
+    rows.push([mark, status.label, detail]);
   }
   const exaConfigured = Boolean(environment.EXA_API_KEY?.trim());
-  lines.push(`  ${exaConfigured ? paint(glyphs.check, style.green) : paint(glyphs.circleEmpty, style.dim)} ${"Exa search".padEnd(14)} ${exaConfigured ? paint("web_search enabled", style.dim) : paint("nova settings, or set EXA_API_KEY", style.yellow)}`);
+  rows.push([
+    exaConfigured ? paint(glyphs.check, style.green) : paint(glyphs.circleEmpty, style.dim),
+    "Exa search",
+    exaConfigured ? paint("web_search enabled", style.dim) : paint("nova settings, or set EXA_API_KEY", style.yellow),
+  ]);
+  const lines: string[] = [table(["", "provider", "status"], rows, { depth, glyphs })];
 
   const unpriced = statuses.filter((status) => status.configured && status.pricing === "unknown");
   if (unpriced.length > 0) {

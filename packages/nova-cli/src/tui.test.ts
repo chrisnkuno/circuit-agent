@@ -17,6 +17,7 @@ import {
   sparkline,
   Spinner,
   StatusBar,
+  table,
   thinkingVerb,
   wrapPlain,
 } from "./tui";
@@ -176,6 +177,58 @@ describe("progressBar", () => {
     const highEnd = lastColorOf(high)!;
     // The default gradient runs blue (high blue channel) toward warm (low blue channel).
     expect(Number(highEnd[3])).toBeLessThan(Number(lowEnd[3]));
+  });
+});
+
+describe("table", () => {
+  it("widens each column to fit its widest cell, header included", () => {
+    const rendered = plain(table(["name", "note"], [["a", "short"], ["much longer name", "x"]], { depth: "none" }));
+    const lines = rendered.split("\n");
+    // Every row (borders included) is the same length — the whole point of a fixed grid.
+    const widths = new Set(lines.map((line) => visibleWidth(line)));
+    expect(widths.size).toBe(1);
+    expect(lines[0]).toMatch(/^╭─+╮$/);
+  });
+
+  it("separates the header from the body with a rule that lines up with the vertical rules", () => {
+    const rendered = plain(table(["a", "b"], [["1", "2"]], { depth: "none" }));
+    const lines = rendered.split("\n");
+    // top, header, separator, one body row, bottom
+    expect(lines).toHaveLength(5);
+    expect(lines[2]).toMatch(/^├─+┼─+┤$/);
+  });
+
+  it("renders an empty body as header and rules only, without throwing", () => {
+    const rendered = table(["only"], [], { depth: "none" });
+    expect(rendered.split("\n")).toHaveLength(4); // top, header, separator, bottom
+  });
+
+  it("pads a short cell out to the column width rather than leaving ragged rows", () => {
+    const rendered = plain(table(["col"], [["a"], ["bb"], ["ccc"]], { depth: "none" }));
+    const bodyLines = rendered.split("\n").slice(3, -1);
+    const widths = new Set(bodyLines.map((line) => visibleWidth(line)));
+    expect(widths.size).toBe(1);
+  });
+
+  it("shrinks the widest column first when the table would not otherwise fit", () => {
+    const rendered = plain(table(["short", "very long column that dominates the row"], [["x", "y"]], { depth: "none", width: 30 }));
+    for (const line of rendered.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(30);
+  });
+
+  it("does not leak escape codes when colour is off, but does when it is on", () => {
+    expect(table(["a"], [["1"]], { depth: "none" })).not.toMatch(ESCAPE);
+    expect(table(["a"], [["1"]], { depth: "truecolor" })).toMatch(ESCAPE);
+  });
+
+  it("draws double-lined borders when asked, distinct from the default round style", () => {
+    const rendered = table(["a"], [["1"]], { depth: "none", borderStyle: "double" });
+    expect(rendered).toMatch(/^╔/);
+    expect(rendered).toContain("║");
+  });
+
+  it("stays inside ASCII on an ASCII terminal", () => {
+    const rendered = table(["a"], [["1"]], { depth: "none", glyphs: ASCII_GLYPHS });
+    for (const character of rendered) expect(character.codePointAt(0)).toBeLessThan(128);
   });
 });
 

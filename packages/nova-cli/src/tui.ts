@@ -184,6 +184,57 @@ export function progressBar(fraction: number, width: number, options: ProgressBa
 }
 
 /**
+ * Aligned columns with a header rule — Nova's answer to Bubbles' `table` component, for the two
+ * places that were hand-padding strings with `.padEnd()` instead: `/providers` and the model list.
+ *
+ * Column widths come from the content itself (header or widest cell, whichever is longer), then
+ * shrink the widest column first if the total would not fit — the same "clip the thing that has
+ * room to lose, not everything equally" choice `box()` already makes for a single block of text.
+ * Cells arrive pre-painted (colour codes and all); `visibleWidth` already discounts ANSI, which is
+ * the only reason colouring a status column doesn't throw off every column after it.
+ */
+export function table(
+  columns: readonly string[],
+  rows: readonly (readonly string[])[],
+  options: { depth: ColorDepth; width?: number; glyphs?: GlyphSet; borderStyle?: "round" | "single" | "double" | "none" },
+): string {
+  const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  const border = borderGlyphsFor(options.borderStyle ?? "round", glyphs);
+  const terminalWidth = Math.max(1, options.width ?? process.stdout.columns ?? 80);
+  const count = columns.length;
+  const widths = columns.map((header, index) =>
+    Math.max(visibleWidth(header), ...rows.map((row) => visibleWidth(row[index] ?? ""))));
+
+  // Each column costs its content plus one space of padding on each side, plus the vertical rules:
+  // count + 1 of them bracket count columns.
+  const budget = terminalWidth - (count + 1) - count * 2;
+  while (widths.reduce((sum, width) => sum + width, 0) > Math.max(count, budget)) {
+    const widest = widths.indexOf(Math.max(...widths));
+    if (widths[widest] <= 3) break; // nothing left worth shrinking
+    widths[widest] -= 1;
+  }
+
+  const cell = (text: string, width: number): string => {
+    const clipped = visibleWidth(text) > width
+      ? `${sliceToWidth(text, Math.max(0, width - visibleWidth(glyphs.ellipsis)))}${glyphs.ellipsis}`
+      : text;
+    return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
+  };
+  const rule = (left: string, mid: string, right: string): string =>
+    `${left}${widths.map((width) => border.horizontal.repeat(width + 2)).join(mid)}${right}`;
+  const row = (cells: readonly string[]): string =>
+    `${border.vertical} ${widths.map((width, index) => cell(cells[index] ?? "", width)).join(` ${border.vertical} `)} ${border.vertical}`;
+
+  return [
+    rule(border.topLeft, border.horizontal, border.topRight),
+    row(columns.map((header) => paint(header, DIM, options.depth))),
+    rule(border.teeLeft, border.cross, border.teeRight),
+    ...rows.map((line) => row(line)),
+    rule(border.bottomLeft, border.horizontal, border.bottomRight),
+  ].join("\n");
+}
+
+/**
  * What the spinner claims to be doing, rotating slowly.
  *
  * A word that never changes reads as a frozen program; one that changes every frame reads as
