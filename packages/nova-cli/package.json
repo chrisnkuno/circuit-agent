@@ -1,6 +1,6 @@
 {
   "name": "@circuit-nova/nova-cli",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Nova — a coding agent in your terminal. Runs against your working tree or an isolated remote sandbox, with guarded approvals, git checkpoints, and real cost accounting.",
   "keywords": [
     "cli",
