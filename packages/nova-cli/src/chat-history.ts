@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@circuit-nova/nova-core/agent-runtime";
 import type { SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { BOLD, CYAN, DIM, paint, paintAll } from "./ansi";
+import { barChart } from "./charts";
 import { UNICODE_GLYPHS } from "./glyphs";
 import { renderMarkdown } from "./markdown";
 import { GUTTER, clip, heading, rule, type SectionStyle } from "./sections";
@@ -87,6 +88,48 @@ export function searchHistory(entries: readonly HistoryEntry[], query: string): 
     return queryTerms.length > 0 && queryTerms.every((term) => haystack.includes(term));
   });
   return matched.sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+/**
+ * Turns per day across the recent past — the shape of how this project is actually worked on.
+ *
+ * `/history` answered "what did I do" and never "when, and how much". A total cannot show that the
+ * work is three heavy days and a fortnight of nothing, which is the only reading that tells you
+ * whether a session is part of a push or a one-off.
+ *
+ * Days with no sessions are emitted as empty bars rather than skipped, because a gap *is* the
+ * information: a chart that lists only active days draws a flat wall of work and hides every pause.
+ */
+export function renderHistoryUsage(
+  entries: readonly HistoryEntry[],
+  style: SectionStyle,
+  options: { now?: number; days?: number } = {},
+): string {
+  if (entries.length === 0) return "";
+  const glyphs = style.glyphs ?? UNICODE_GLYPHS;
+  const days = Math.max(2, options.days ?? 14);
+  const now = options.now ?? Date.now();
+  const DAY = 86_400_000;
+  // Bucketed by local calendar day, not by 24-hour blocks counted back from now: "Tuesday" is what
+  // a person remembers, and an offset window would split one evening's work across two bars.
+  const startOfDay = (at: number) => { const date = new Date(at); date.setHours(0, 0, 0, 0); return date.getTime(); };
+  const today = startOfDay(now);
+  const buckets = new Map<number, number>();
+  for (let index = days - 1; index >= 0; index -= 1) buckets.set(today - index * DAY, 0);
+  for (const entry of entries) {
+    const day = startOfDay(entry.updatedAt);
+    if (buckets.has(day)) buckets.set(day, (buckets.get(day) ?? 0) + entry.turns);
+  }
+  if ([...buckets.values()].every((value) => value === 0)) return "";
+
+  const rows = barChart(
+    [...buckets].map(([day, turns]) => ({
+      label: new Date(day).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      value: turns,
+    })),
+    { width: Math.max(24, Math.min(64, style.width - GUTTER.length)), depth: style.depth, glyphs, format: (value) => `${Math.round(value)}` },
+  );
+  return [heading(`turns per day ${glyphs.middot} last ${days} days`, 2, style), ...rows.map((row) => `${GUTTER}${row}`)].join("\n");
 }
 
 /** The list view: recency, size, and the id `/history <id>` takes. */

@@ -5,6 +5,7 @@ import {
   parseHistoryCommand,
   relativeTime,
   renderHistoryList,
+  renderHistoryUsage,
   renderReplay,
   searchHistory,
   summarizeSession,
@@ -199,5 +200,44 @@ describe("the /history grammar", () => {
 
   it("ignores anything that is not the command", () => {
     expect(parseHistoryCommand("/historical")).toBeNull();
+  });
+});
+
+describe("renderHistoryUsage", () => {
+  const style = { width: 80, depth: "none" as const };
+  const DAY = 86_400_000;
+  const now = new Date("2026-08-16T12:00:00Z").getTime();
+  const entry = (daysAgo: number, turns: number, id = `s${daysAgo}`) =>
+    ({ id, title: "t", updatedAt: now - daysAgo * DAY, turns, messages: turns * 2 });
+
+  it("draws a bar per day across the window, including the days with no work", () => {
+    const rendered = renderHistoryUsage([entry(0, 5), entry(3, 2)], style, { now, days: 5 });
+    // Five days requested means five bars, not two — the quiet days are the information.
+    expect(rendered.split("\n").filter((line) => line.includes("░") || line.includes("█"))).toHaveLength(5);
+  });
+
+  it("sums every session that lands on the same day", () => {
+    const both = renderHistoryUsage([entry(0, 3, "a"), entry(0, 4, "b")], style, { now, days: 2 });
+    const one = renderHistoryUsage([entry(0, 7, "c")], style, { now, days: 2 });
+    // 3 + 4 and 7 are the same day's work and must draw the same bar.
+    expect(both.split("\n").at(-1)).toBe(one.split("\n").at(-1));
+  });
+
+  it("says nothing at all when there is nothing to show", () => {
+    expect(renderHistoryUsage([], style, { now })).toBe("");
+    // Every session older than the window leaves an all-zero chart, which is noise rather than news.
+    expect(renderHistoryUsage([entry(90, 4)], style, { now, days: 7 })).toBe("");
+  });
+
+  it("ignores sessions from outside the window rather than folding them into the edge bar", () => {
+    const withOld = renderHistoryUsage([entry(0, 2), entry(60, 99)], style, { now, days: 3 });
+    const withoutOld = renderHistoryUsage([entry(0, 2)], style, { now, days: 3 });
+    expect(withOld).toBe(withoutOld);
+  });
+
+  it("never exceeds the width it was given", () => {
+    for (const line of renderHistoryUsage([entry(0, 5)], { width: 40, depth: "none" }, { now, days: 4 }).split("\n")) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+    }
   });
 });

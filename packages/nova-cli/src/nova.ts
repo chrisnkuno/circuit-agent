@@ -21,6 +21,7 @@ import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
 import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, PromptBox, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
+import { barChart, heatStrip, lineChart } from "./charts";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
@@ -89,6 +90,7 @@ import {
   parseHistoryCommand,
   relativeTime,
   renderHistoryList,
+  renderHistoryUsage,
   renderReplay,
   searchHistory,
   summarizeSession,
@@ -1252,7 +1254,12 @@ async function main(): Promise<number> {
       out.write(`${heading(`"${command.query}" ${glyphs.middot} ${found.length} match${found.length === 1 ? "" : "es"}`, 2, style_)}\n`);
       out.write(`${renderHistoryList(found, style_)}\n`);
     } else {
-      out.write(`${renderHistoryList(await historyEntries(), style_)}\n`);
+      {
+        const entries = await historyEntries();
+        out.write(`${renderHistoryList(entries, style_)}\n`);
+        const usage = renderHistoryUsage(entries, style_);
+        if (usage) out.write(`${usage}\n`);
+      }
     }
     await stateHistory.close();
     return 0;
@@ -2988,7 +2995,12 @@ async function main(): Promise<number> {
           out.write(style.yellow(`  ${historyCommand.reason}\n`));
           break;
         case "list":
-          out.write(`${renderHistoryList(await historyEntries(), style_, { current: agent.sessionId })}\n`);
+          {
+            const entries = await historyEntries();
+            out.write(`${renderHistoryList(entries, style_, { current: agent.sessionId })}\n`);
+            const usage = renderHistoryUsage(entries, style_);
+            if (usage) out.write(`${usage}\n`);
+          }
           break;
         case "search": {
           const nativeHits = await stateHistory.search(historyCommand.query, 20);
@@ -3451,11 +3463,34 @@ async function main(): Promise<number> {
     }
     if (input === "/cost") {
       const history = ledger.history;
-      // The shape of spend across turns, not just the total — a flat line and a spike to the
-      // same total are two very different sessions to have had.
-      const trend = history.length > 1 ? `  ${style.dim(`spend  ${sparkline(history.map((turn) => turn.cost?.micros ?? 0), glyphs)}`)}\n` : "";
       const fraction = ledger.budgetFraction;
-      out.write(`${ledger.formatReport()}\n${trend}`);
+      out.write(`${ledger.formatReport()}\n`);
+      // The shape of spend across turns, not just the total — a flat line and a spike to the same
+      // total are two very different sessions to have had. A sparkline said that in one row and
+      // compressed a long session into illegibility; a bar per turn stays readable and can carry
+      // the figure beside it. Kept to the last dozen turns, since a chart taller than a screen is
+      // not a chart. The sparkline remains the right tool inside the *status bar*, where there is
+      // genuinely only one row.
+      if (history.length > 1) {
+        const recent = history.slice(-12);
+        out.write(`${style.dim(`  spend per turn${history.length > recent.length ? ` (last ${recent.length} of ${history.length})` : ""}`)}\n`);
+        for (const line of barChart(
+          recent.map((turn) => ({ label: `turn ${turn.turnNumber}`, value: turn.cost?.micros ?? 0 })),
+          { width: Math.min(72, contentWidth()), depth: renderDepth, glyphs, format: (value) => formatMoney({ micros: value, currency: recent.find((turn) => turn.cost)?.cost?.currency ?? "USD" }) },
+        )) out.write(`  ${line}\n`);
+      }
+      // Throughput, which no view answered before: "why did that turn feel slow" is a question
+      // about tokens per second, and a total cannot answer it. Needs a few turns before the shape
+      // means anything.
+      const throughput = history
+        .filter((turn) => turn.elapsedMs > 0)
+        .map((turn) => (turn.usage.totalTokens / turn.elapsedMs) * 1_000);
+      if (throughput.length > 2) {
+        out.write(`${style.dim("\n  tokens/sec per turn")}\n`);
+        for (const line of lineChart(throughput, { width: Math.min(72, contentWidth()), height: 5, depth: renderDepth, glyphs })) {
+          out.write(`  ${style.dim(line)}\n`);
+        }
+      }
       if (fraction !== undefined) {
         // Gradient runs the theme's own success colour toward its error colour — a bar barely
         // filled reads calm because that is all of the gradient it has exposed yet, and one nearly
