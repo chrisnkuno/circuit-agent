@@ -101,6 +101,14 @@ export async function withBorrowedKeyboard<T>(
   host: KeyboardHost,
   self: unknown,
   body: (keys: AsyncIterable<PaletteKey>, paint: (frame: string) => void) => Promise<T>,
+  /**
+   * Where frames land. Defaults to a free-floating overlay printed at the cursor (what the
+   * full-screen palette, model picker and settings menu all want) — but a caller already holding
+   * reserved rows of its own (the inline suggestion dropdown, drawn into the pinned footer's
+   * scroll-region reservation) needs to paint *there* instead, or the borrowed chooser would draw
+   * a second, competing menu under the first.
+   */
+  surface: { paint: (frame: string) => void; erase: () => void } = painter(host.output),
 ): Promise<T> {
   const borrowed = host.input.listeners("keypress").filter((listener) => listener !== self);
   for (const listener of borrowed) host.input.off("keypress", listener as never);
@@ -121,7 +129,6 @@ export async function withBorrowedKeyboard<T>(
     }
   }
 
-  const surface = painter(host.output);
   try {
     return await body(keys(), surface.paint);
   } finally {

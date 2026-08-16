@@ -75,4 +75,22 @@ describe("borrowing the terminal for a menu", () => {
     await withBorrowedKeyboard(terminal, undefined, async () => undefined);
     expect(terminal.input.listeners("keypress")).toContain(listener);
   });
+
+  it("paints through a caller-supplied surface instead of the default overlay, when one is given", async () => {
+    // The inline suggestion dropdown already holds its own reserved rows (via the pinned footer's
+    // scroll region) — it must not also get the free-floating overlay every other menu uses, or
+    // two competing menus would be on screen at once.
+    const terminal = host();
+    const frames: string[] = [];
+    let erased = false;
+    const surface = { paint: (frame: string) => frames.push(frame), erase: () => { erased = true; } };
+    await withBorrowedKeyboard(terminal, undefined, async (_keys, paint) => {
+      paint("one\ntwo");
+      return undefined;
+    }, surface);
+    expect(frames).toEqual(["one\ntwo"]);
+    expect(erased).toBe(true);
+    // Nothing reached the terminal directly — the default overlay painter never ran.
+    expect(terminal.written).toEqual([]);
+  });
 });

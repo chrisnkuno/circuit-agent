@@ -25,7 +25,8 @@ import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
-import { installShortcuts, openChooser, openModelPicker, openPalette } from "./shortcuts";
+import { installShortcuts, openChooser, openModelPicker, openPalette, withBorrowedKeyboard } from "./shortcuts";
+import { runChooser, type ChooserItem } from "./chooser";
 import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
 import { hostOf, providerBaseUrl } from "./endpoints";
 import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
@@ -2259,6 +2260,48 @@ async function main(): Promise<number> {
     });
 
     /**
+     * True navigation for the dropdown: borrows the keyboard exactly the way the full palette and
+     * model picker already do (`withBorrowedKeyboard`), so Up/Down move a real highlighted
+     * selection instead of falling through to readline's own history navigation — which is what
+     * used to happen, since two independent listeners both saw the same keystroke with no way for
+     * one to tell the other "I've got this one".
+     *
+     * Deliberately does not accept typed characters while browsing (`filter: false`): the line
+     * itself is never touched here, so there is nothing to reconcile afterward. Escape, or any key
+     * that is not a navigation key, ends browsing with `rl.line` exactly as the user left it —
+     * pressing a letter to keep narrowing "exits browse mode and that key still lands", not "gets
+     * eaten". Accepting a row submits it through the *pending* `question()` via `rl.write`, the
+     * same public API a real Enter keypress would drive — nothing here reaches into readline's
+     * private state.
+     */
+    const browseSuggestions = async (line: string, suggestions: readonly { command: string; args?: string; description: string }[]): Promise<void> => {
+      if (!screen) return;
+      // A model-argument suggestion's own `command` is the bare model id ("claude-sonnet-5"), not
+      // a runnable line — reattach whatever prefix was actually typed ("/model ") so accepting one
+      // submits the full command, not the id alone read as a chat message.
+      const modelPrefix = /^\/models?\s+/.exec(line)?.[0];
+      const items: ChooserItem<string>[] = suggestions.map((entry) => ({
+        value: modelPrefix ? `${modelPrefix}${entry.command}` : entry.command,
+        label: entry.args ? `${entry.command} ${entry.args}` : entry.command,
+        description: entry.description,
+      }));
+      const host = { readline, input: process.stdin, output: process.stdout };
+      const surface = {
+        paint: (frame: string) => screen?.renderSuggestions(frame.split("\n")),
+        erase: () => screen?.clearSuggestions(),
+      };
+      const chosen = await withBorrowedKeyboard(host, undefined, (keys, paint) => runChooser(keys, items, paint, {
+        width: process.stdout.columns ?? 80,
+        height: items.length,
+        filter: false,
+        paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
+        glyphs,
+      }), surface);
+      if (chosen) rl.write(`${chosen}\n`);
+    };
+    let browsing = false;
+
+    /**
      * The suggestion dropdown, repainted from whatever is on the line.
      *
      * Driven off keypresses rather than off a wrapper around input, because readline owns the line
@@ -2266,11 +2309,20 @@ async function main(): Promise<number> {
      * defers to readline's own handler, which is registered first — reading `line` synchronously
      * would see the state from before the keystroke and leave the list one character stale.
      */
-    const paintSuggestions = () => setImmediate(() => {
-      if (turnActive) return;
+    const paintSuggestions = (_str: string | undefined, key: { name?: string } | undefined) => setImmediate(() => {
+      if (turnActive || browsing) return;
       const line = (readline as { line?: string }).line ?? "";
       const suggestions = suggestionsFor(line, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model));
       if (suggestions.length === 0) { screen?.clearSuggestions(); return; }
+      if (key?.name === "up" || key?.name === "down") {
+        browsing = true;
+        // Errors here must not become an unhandled rejection that takes the process down mid-turn
+        // over what is, worst case, a dropdown that failed to open — the keyboard would already
+        // have been restored by `withBorrowedKeyboard`'s own `finally`, so falling back to the
+        // ordinary passive dropdown next keystroke is a full recovery, not a degraded state.
+        browseSuggestions(line, suggestions).catch(() => undefined).finally(() => { browsing = false; });
+        return;
+      }
       const width = Math.max(...suggestions.map((entry) => entry.command.length + (entry.args ? entry.args.length + 1 : 0)));
       screen?.renderSuggestions(suggestions.map((entry) => {
         const head = entry.args ? `${entry.command} ${entry.args}` : entry.command;
