@@ -6,6 +6,7 @@ import { SessionList, type SessionSummary } from "../components/SessionList";
 import { Message } from "../components/Message";
 import { ModelPicker } from "../components/ModelPicker";
 import { DiffPanel } from "../components/DiffPanel";
+import { ScanPanel } from "../components/ScanPanel";
 import { shouldFollow } from "../lib/transcript";
 import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
 import {
@@ -55,6 +56,7 @@ export function ChatScreen(props: {
   const [todos, setTodos] = useState<Array<{ id: string; content: string; status: string }>>([]);
   const [pinned, setPinned] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [showScan, setShowScan] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [active, setActive] = useState<{ provider: ProviderId; model: string }>({ provider: props.settings.provider, model: props.settings.model });
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -154,7 +156,7 @@ export function ChatScreen(props: {
     const onKey = (event: KeyboardEvent) => {
       // A modal owns the keyboard while it is open; the approval dialog in particular must not
       // have Escape mean two different things at once.
-      if (approval || showDiff) return;
+      if (approval || showDiff || showScan) return;
       const action = matchShortcut({
         key: event.key,
         ctrlKey: event.ctrlKey,
@@ -382,6 +384,7 @@ export function ChatScreen(props: {
             onUndo={handleUndo}
             onCancel={() => cancelTurn()}
             onShowDiff={() => setShowDiff(true)}
+            onScan={() => setShowScan(true)}
             onToggleSandbox={() => {
               setSandbox((v) => !v);
               setUpload(true);
@@ -506,6 +509,7 @@ export function ChatScreen(props: {
       </div>
 
       <DiffPanel open={showDiff} onClose={() => setShowDiff(false)} />
+      <ScanPanel open={showScan} onClose={() => setShowScan(false)} />
       {approval ? <ApprovalModal approval={approval} onRespond={handleApproval} /> : null}
     </div>
   );

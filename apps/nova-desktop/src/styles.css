@@ -1175,3 +1175,33 @@ button {
 }
 .crash-actions { display: flex; gap: 8px; }
 .crash-note { margin: 0; font-size: 12px; opacity: 0.7; }
+
+/* Secret scan — see components/ScanPanel.tsx. Severity is carried by colour *and* by the word, so
+   it survives a colour-blind reader and a greyscale screenshot; the dot alone would not. */
+.scan-counts { display: flex; gap: 8px; margin: 8px 0; }
+.scan-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(127, 127, 127, 0.15);
+}
+.scan-list { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; }
+.scan-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 4px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  font-size: 13px;
+}
+.scan-dot { width: 8px; height: 8px; border-radius: 50%; background: #888; }
+.scan-where { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.scan-kind { opacity: 0.75; font-size: 12px; }
+.scan-masked { opacity: 0.6; font-size: 12px; white-space: nowrap; }
+.sev-critical { color: #ff6b6b; }
+.scan-dot.sev-critical { background: #ff6b6b; }
+.sev-high { color: #ffa94d; }
+.scan-dot.sev-high { background: #ffa94d; }
+.sev-medium { color: #ffd43b; }
+.scan-dot.sev-medium { background: #ffd43b; }

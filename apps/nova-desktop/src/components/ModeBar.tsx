@@ -22,6 +22,7 @@ export function ModeBar(props: {
   onUndo: () => void;
   onCancel: () => void;
   onShowDiff: () => void;
+  onScan: () => void;
   onToggleSandbox: () => void;
   onPull: () => void;
 }) {
@@ -52,6 +53,9 @@ export function ModeBar(props: {
       <div className="mode-actions">
         <button className="btn ghost" onClick={props.onShowDiff} type="button" title="See what changed since the last checkpoint">
           Changes
+        </button>
+        <button className="btn ghost" onClick={props.onScan} type="button" title="Scan the working tree for likely hardcoded secrets — no model turn needed">
+          Scan
         </button>
         <button className="btn ghost" disabled={props.busy} onClick={props.onUndo} type="button" title="Revert the last turn's file changes">
           Undo
