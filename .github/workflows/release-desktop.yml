@@ -1,9 +1,18 @@
 name: Release Desktop
 
-# Builds the Nova Windows installer (self-contained, no Node needed) on a v* tag
-# and publishes it to GitHub Releases. Also generates the signed `latest.json`
-# the app's auto-updater checks against, so installed apps pick up new versions
-# automatically.
+# Builds the Nova desktop installers (self-contained — no Node needed on the user's machine) on a
+# v* tag and publishes them to GitHub Releases, together with the signed `latest.json` the app's
+# auto-updater checks against.
+#
+# Three artifacts, from three jobs writing into the same release:
+#   Windows x64   — NSIS installer + MSI
+#   macOS arm64   — .dmg for Apple silicon
+#   macOS x64     — .dmg for Intel
+#
+# macOS is built as two per-architecture bundles rather than one universal binary, because the
+# sidecar is an `externalBin` that Tauri resolves by target triple: a universal app would need a
+# universal sidecar, and two honest single-arch downloads beat one that is subtly wrong on half the
+# machines it lands on.
 #
 # To release a new version:
 #   1. Bump `version` in apps/nova-desktop/src-tauri/tauri.conf.json AND
@@ -11,10 +20,14 @@ name: Release Desktop
 #   2. Push a tag matching the version: `git tag v0.2.0 && git push origin v0.2.0`
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
-#   TAURI_SIGNING_PRIVATE_KEY        — content of the private key from
-#                                       `npm run tauri signer generate`
+#   TAURI_SIGNING_PRIVATE_KEY          — from `npm run tauri signer generate`
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password (unset if none)
 # The matching public key is baked into apps/nova-desktop/src-tauri/tauri.conf.json.
+#
+# Optional, for a macOS build users can open without right-click → Open. Without all of these the
+# .dmg still builds and still runs, but it is unsigned and Gatekeeper will warn on first launch:
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
 
 on:
   push:
@@ -27,7 +40,24 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    strategy:
+      # One platform failing must not delete the artifacts the others already uploaded to the
+      # release — a half-published release is recoverable, a cancelled one loses the successes.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            label: Windows x64
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            label: macOS (Apple silicon)
+          - os: macos-latest
+            triple: x86_64-apple-darwin
+            label: macOS (Intel)
+
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +84,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
 
       - name: Install desktop dependencies
         working-directory: apps/nova-desktop
@@ -65,17 +97,32 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The runner's own architecture is not the answer when building the Intel bundle on an
+          # Apple-silicon runner: `rustc --print host-tuple` would say aarch64 and the sidecar would
+          # be built for the wrong machine. Naming the target is what keeps the two in step.
+          NOVA_SIDECAR_TARGET: ${{ matrix.triple }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/nova-desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Nova ${{ github.ref_name }}"
           releaseBody: |
-            Nova Desktop for Windows — self-contained, no Node required.
+            Nova Desktop — self-contained, no Node required.
 
-            - Installer: `Nova_${{ github.ref_name }}_x64-setup.exe` (NSIS)
-            - Auto-updates: installed apps will update themselves from this release.
-            - Source: circuit-agent
+            - **Windows**: `Nova_${{ github.ref_name }}_x64-setup.exe` (NSIS) or the `.msi`
+            - **macOS (Apple silicon)**: `Nova_${{ github.ref_name }}_aarch64.dmg`
+            - **macOS (Intel)**: `Nova_${{ github.ref_name }}_x64.dmg`
+
+            Auto-updates: installed apps will update themselves from this release.
+
+            If macOS reports the app cannot be opened because the developer cannot be verified,
+            the build is unsigned — right-click the app and choose Open to run it once.
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-pc-windows-msvc
+          args: --target ${{ matrix.triple }}
           updaterJsonPreferNsis: true
