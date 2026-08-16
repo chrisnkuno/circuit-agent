@@ -1,7 +1,7 @@
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import type { KeypressEvent } from "./keybindings";
 import { visibleWidth } from "./markdown";
-import { paginator } from "./tui";
+import { paginator, SpringAnimator } from "./tui";
 
 /**
  * One set of navigation rules, shared by every menu Nova shows.
@@ -183,6 +183,13 @@ export type RenderChooserOptions = {
   legend?: string;
   /** Characters this terminal can draw; the cursor and the legend's arrows come from here. */
   glyphs?: GlyphSet;
+  /**
+   * The row the cursor is moving away from, for one transitional frame. Marked with a dim cursor
+   * alongside the new selection's bright one — a terminal grid has no cell "between" row 3 and row
+   * 4 to sweep a cursor through, so the glide `runChooser` drives is this instead: the outgoing row
+   * fading rather than vanishing, for the one frame before it settles to a single marker.
+   */
+  transitionFrom?: number;
 };
 
 export function renderChooser<T>(state: ChooserState, items: readonly ChooserItem<T>[], options: RenderChooserOptions): string {
@@ -216,6 +223,7 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
     if (item.header && item.header !== lastHeader) lines.push(paint.cyan(clipTo(`  ${item.header}`, width)));
     lastHeader = item.header ?? lastHeader;
     const active = index === state.selected;
+    const fadingOut = !active && index === options.transitionFrom;
     // Numbered by position *in the window*: the row labelled 3 is the third row you can see, which
     // is the only reading of "press 3" that survives a list longer than the screen.
     const number = offset < 9 ? `${offset + 1}.` : "  ";
@@ -232,7 +240,8 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
     const labelBudget = Math.min(labelWidth, hasTail ? Math.max(1, Math.floor(room * 0.6)) : room);
     const shownLabel = clipTo(item.label, labelBudget);
     const padded = shownLabel + " ".repeat(Math.max(0, labelBudget - visibleWidth(shownLabel)));
-    const head = `${active ? paint.green(glyphs.prompt) : " "} ${paint.dim(number)} ${padded}  `;
+    const marker = active ? paint.green(glyphs.prompt) : fadingOut ? paint.dim(glyphs.prompt) : " ";
+    const head = `${marker} ${paint.dim(number)} ${padded}  `;
     const tail = `${item.hint ? ` ${item.hint}` : ""}${item.description ? `  ${item.description}` : ""}`;
     // The tail is cut *before* it is painted: clipping a coloured string mid-sequence bleeds that
     // colour down the rest of the page.
@@ -290,10 +299,20 @@ export async function runChooser<T>(
   };
   paint(renderChooser(state, items, liveOptions()));
 
+  // The cursor's glide: a terminal grid has no cell "between" two rows to sweep a marker through,
+  // so a single-step move gets one transitional frame — the outgoing row's marker left dim rather
+  // than erased outright — before settling to just the new row's. A real `SpringAnimator` decides
+  // *when* that settle happens rather than a fixed delay, and is cancelled outright by the next
+  // keystroke: a person moving quickly should never feel the glide as added latency, only ever see
+  // it on a step slow enough to notice.
+  let glide: SpringAnimator | undefined;
+  const settleGlide = () => { glide?.stop(); glide = undefined; };
+
   for await (const input of keys) {
     // `height` is passed so a digit means the row the renderer numbered; without it the two
     // disagree the moment the list is longer than the screen.
     const current = liveOptions();
+    const previousSelected = state.selected;
     const step = advanceChooser(state, items, input, {
       filter: options.filter ?? false,
       page: options.page ?? current.height ?? 8,
@@ -301,10 +320,26 @@ export async function runChooser<T>(
     });
     state = step.state;
     if (step.done) {
+      settleGlide(); // a chooser that returns must not leave a timer ticking after it
       if (step.done.index === undefined) return undefined;
       return filterItems(items, state.query)[step.done.index]?.value;
     }
-    paint(renderChooser(state, items, liveOptions()));
+    settleGlide();
+    const isSingleStep = (input.key.name === "up" || input.key.name === "down") && Math.abs(state.selected - previousSelected) === 1;
+    if (!isSingleStep || previousSelected === state.selected) {
+      paint(renderChooser(state, items, liveOptions()));
+      continue;
+    }
+    paint(renderChooser(state, items, { ...liveOptions(), transitionFrom: previousSelected }));
+    const animator: SpringAnimator = new SpringAnimator(0, (value) => {
+      if (value < 0.6) return;
+      animator.stop();
+      glide = undefined;
+      paint(renderChooser(state, items, liveOptions()));
+    }, { intervalMs: 30 });
+    glide = animator;
+    animator.retarget(1);
   }
+  settleGlide(); // the keyboard was returned mid-glide (dismissed some other way) — nothing left to finish
   return undefined;
 }

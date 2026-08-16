@@ -160,6 +160,18 @@ describe("rendering a chooser", () => {
     ];
     expect(renderChooser({ selected: 0, query: "" }, grouped, { paint }).match(/Group/g)).toHaveLength(1);
   });
+
+  it("marks the outgoing row alongside the incoming one during a transition, not just the new selection", () => {
+    const withTransition = renderChooser({ selected: 1, query: "" }, items, { paint, transitionFrom: 0 });
+    expect((withTransition.match(/❯/g) ?? []).length).toBe(2);
+    const withoutTransition = renderChooser({ selected: 1, query: "" }, items, { paint });
+    expect((withoutTransition.match(/❯/g) ?? []).length).toBe(1);
+  });
+
+  it("never double-marks a row transitioning to itself", () => {
+    const rendered = renderChooser({ selected: 1, query: "" }, items, { paint, transitionFrom: 1 });
+    expect((rendered.match(/❯/g) ?? []).length).toBe(1);
+  });
 });
 
 describe("driving a chooser end to end", () => {
@@ -193,6 +205,34 @@ describe("driving a chooser end to end", () => {
     const frames: string[] = [];
     await runChooser(keys([press("down"), press("down"), press("return")]), items, (frame) => frames.push(frame), { paint });
     expect(frames).toHaveLength(3);
+  });
+
+  /** Like `keys()`, but a plain number in the sequence is a real millisecond pause instead of a key. */
+  async function* keysWithDelay(sequence: readonly (ReturnType<typeof press> | number)[]) {
+    for (const item of sequence) {
+      if (typeof item === "number") { await new Promise((resolve) => setTimeout(resolve, item)); continue; }
+      yield item;
+    }
+  }
+
+  it("glides a single-step move: one extra frame appears if given real time, none if dismissed immediately", async () => {
+    // Fast: the next key arrives before the glide's settle tick ever fires, so it never paints —
+    // a person moving quickly must not feel the glide as latency.
+    const fast: string[] = [];
+    await runChooser(keys([press("down"), press("return")]), items, (frame) => fast.push(frame), { paint });
+    expect(fast).toHaveLength(2); // opening frame, one transitional frame for the step
+
+    // Slow: real time passes before the next key, so the glide actually reaches its settle frame.
+    const slow: string[] = [];
+    await runChooser(keysWithDelay([press("down"), 150, press("return")]), items, (frame) => slow.push(frame), { paint });
+    expect(slow).toHaveLength(3); // opening, transitional, and the settled repaint
+  });
+
+  it("does not glide a jump — Home, End, paging, or a digit — only a single arrow-key step", async () => {
+    const frames: string[] = [];
+    await runChooser(keysWithDelay([press("end"), 150, press("return")]), items, (frame) => frames.push(frame), { paint });
+    // A jump paints once and stays there; the extra 150ms bought a glide nothing to settle.
+    expect(frames).toHaveLength(2);
   });
 });
 

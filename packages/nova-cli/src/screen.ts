@@ -1,4 +1,5 @@
 import { computeLayout, type ScreenLayout } from "./layout";
+import { SpringAnimator } from "./tui";
 
 /**
  * Owns the terminal control side of the pinned footer; `layout.ts` owns the math.
@@ -28,6 +29,15 @@ export type PinnedScreenOptions = {
    * released immediately after, so every line of actual output scrolls into real history.
    */
   holdRegion?: boolean;
+  /**
+   * Resizes the dropdown over a few frames instead of jumping straight to the new row count.
+   *
+   * Off by default — every test in `screen.test.ts` asserts an exact, synchronous escape-sequence
+   * output, which an animation running on a timer would break. `nova.ts` turns it on for a real
+   * interactive session, where a resize the user actually watches happen is worth a spring instead
+   * of a snap, now that the snap itself is correct (see the shrink branch below).
+   */
+  animate?: boolean;
 };
 
 export class PinnedScreen {
@@ -37,10 +47,15 @@ export class PinnedScreen {
   private readonly holdRegion: boolean;
   /** True while a region is set — either held for the session, or borrowed by the dropdown. */
   private regionActive = false;
+  private readonly animate: boolean;
+  /** The rows most recently asked for — read by the animator's own ticks, which run after the call that started them returns. */
+  private suggestionLines: readonly string[] = [];
+  private rowsAnimator: SpringAnimator | undefined;
 
   constructor(private readonly stream: ScreenStream, options: PinnedScreenOptions = {}) {
     this.layout = computeLayout(stream.rows ?? 24, stream.columns ?? 80);
     this.holdRegion = options.holdRegion ?? true;
+    this.animate = options.animate ?? false;
   }
 
   /** Whether this screen owns a pinned row to draw a status line on. */
@@ -64,6 +79,10 @@ export class PinnedScreen {
     // Rows reserved against the old geometry describe nothing about the new one, and keeping the
     // count would shrink the region by rows the dropdown no longer occupies.
     this.suggestionRows = 0;
+    // A spring mid-flight is animating toward a row count and a scroll region that both just
+    // stopped existing; anything it ticks next would paint against stale geometry.
+    this.rowsAnimator?.stop();
+    this.rowsAnimator = undefined;
     this.layout = computeLayout(this.stream.rows ?? 24, this.stream.columns ?? 80);
     if (this.holdRegion) {
       this.setRegion();
@@ -151,10 +170,30 @@ export class PinnedScreen {
   renderSuggestions(lines: readonly string[]): void {
     if (this.layout.footerRows === 0) return;
     const wanted = Math.min(lines.length, this.maxSuggestionRows());
+    this.suggestionLines = lines;
     if (wanted === 0) { this.clearSuggestions(); return; }
 
-    if (wanted > this.suggestionRows) {
-      const extra = wanted - this.suggestionRows;
+    if (!this.animate) { this.applyRows(wanted); return; }
+
+    // Redirected, not restarted: a keystroke arriving mid-resize should change where the spring is
+    // headed, not snap it back to a standstill and make the animation start over.
+    if (!this.rowsAnimator) {
+      this.rowsAnimator = new SpringAnimator(this.suggestionRows, (value) => this.applyRows(Math.round(value)));
+    }
+    this.rowsAnimator.retarget(wanted);
+  }
+
+  /**
+   * Jumps — or, mid-animation, steps — the reserved rows to exactly `target`, then repaints the
+   * (possibly unchanged) current content into whatever rows now exist. Content is always painted
+   * from `this.suggestionLines`, the *final* target lines: growing an animation therefore reveals
+   * real suggestions one row at a time rather than interpolating fake ones, and shrinking clears the
+   * rows no longer wanted while the ones still on screen keep showing the correct text throughout.
+   */
+  private applyRows(target: number): void {
+    const lines = this.suggestionLines;
+    if (target > this.suggestionRows) {
+      const extra = target - this.suggestionRows;
       // Borrowed, not held: without --pin there is no standing region, so one is set for exactly
       // as long as the dropdown is on screen. Nothing is printed to the transcript while the user
       // is typing a command, so no line can be lost to it — and `clearSuggestions` gives it back.
@@ -163,18 +202,18 @@ export class PinnedScreen {
       // reservation already cut out of the region, and `SU` only scrolls within the current margins.
       this.stream.write(`\x1b7\x1b[${this.layout.scrollTop};${this.layout.scrollBottom}r`);
       this.stream.write(`\x1b[${extra}S`);
-      this.suggestionRows = wanted;
+      this.suggestionRows = target;
       this.stream.write(`\x1b[${this.layout.scrollTop};${this.transcriptBottom()}r\x1b8`);
-    } else if (wanted < this.suggestionRows) {
-      // Fewer matches than a moment ago (typing narrowed them, or a history/completion redraw
-      // changed the line) — clear the rows no longer wanted and widen the region's bottom margin
-      // back to reclaim them. Without this the dropdown only ever grew: it shrank the row count it
-      // drew into but never gave the freed rows back, leaving blank reserved space behind — a
-      // "big gap" under a suggestion list that had just gotten shorter.
+    } else if (target < this.suggestionRows) {
+      // Fewer rows than a moment ago (typing narrowed the matches, a history/completion redraw
+      // changed the line, or an animation is mid-shrink) — clear the rows no longer wanted and widen
+      // the region's bottom margin back to reclaim them. Without this the dropdown only ever grew:
+      // it shrank the row count it drew into but never gave the freed rows back, leaving blank
+      // reserved space behind — a "big gap" under a suggestion list that had just gotten shorter.
       const top = this.transcriptBottom() + 1;
       this.stream.write("\x1b7\x1b[?25l");
-      for (let offset = wanted; offset < this.suggestionRows; offset += 1) this.stream.write(`\x1b[${top + offset};1H\x1b[2K`);
-      this.suggestionRows = wanted;
+      for (let offset = target; offset < this.suggestionRows; offset += 1) this.stream.write(`\x1b[${top + offset};1H\x1b[2K`);
+      this.suggestionRows = target;
       this.stream.write(`\x1b[${this.layout.scrollTop};${this.transcriptBottom()}r\x1b8\x1b[?25h`);
     }
 
@@ -188,6 +227,7 @@ export class PinnedScreen {
 
   /** Takes the reserved rows back. The blank gap left behind fills with the next transcript write. */
   clearSuggestions(): void {
+    this.rowsAnimator?.stop();
     if (this.suggestionRows === 0) return;
     const top = this.transcriptBottom() + 1;
     this.stream.write("\x1b7\x1b[?25l");

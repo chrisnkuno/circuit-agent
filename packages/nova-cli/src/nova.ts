@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, table, wrapPlain } from "./tui";
+import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -2001,10 +2001,26 @@ async function main(): Promise<number> {
     // where a person notices the agent misunderstood them; a pause after this one would be too late.
     const cooldown = remainingCooldown(pace, lastTurnEndedAt);
     if (cooldown > 0) {
-      const label = (remaining: number) => style.dim(`  ${paceBadge(pace, glyphs)} ${glyphs.middot} pausing ${formatCountdown(remaining)} before the next turn`);
-      const handle = toolLines.append(label(cooldown));
+      const totalCooldown = cooldown;
+      const label = (remaining: number, fill: number) =>
+        style.dim(`  ${paceBadge(pace, glyphs)} ${glyphs.middot} pausing [${progressBar(fill, 12, { depth: renderDepth, glyphs })}] ${formatCountdown(remaining)} before the next turn`);
+      const handle = toolLines.append(label(cooldown, 1));
+      // Two clocks, not one: CountdownTimer stays the second-by-second source the text reads from
+      // (a bar's own physics has no business deciding what a person reads as "6s"), while the bar's
+      // fill eases toward whatever fraction that implies on its own, faster cadence — so the shrink
+      // reads as continuous motion between each second's change instead of only the number moving.
+      let remainingNow = cooldown;
+      const bar = new SpringAnimator(1, (fill) => toolLines.update(handle, label(remainingNow, fill)), { intervalMs: 60 });
       await new Promise<void>((resolve) => {
-        new CountdownTimer(cooldown, (remaining) => toolLines.update(handle, label(remaining)), () => { forgetToolLines(); resolve(); }).start();
+        new CountdownTimer(cooldown, (remaining) => {
+          remainingNow = remaining;
+          bar.retarget(Math.max(0, Math.min(1, remaining / totalCooldown)));
+        }, () => {
+          remainingNow = 0;
+          bar.snapTo(0);
+          forgetToolLines();
+          resolve();
+        }).start();
       });
     }
     const taskSafety = assessTaskSafety(request);
@@ -2226,14 +2242,30 @@ async function main(): Promise<number> {
   }
 
   const where = workspace.kind === "e2b" ? `sandbox ${workspace.label.split(":")[1]}` : path.basename(args.root);
-  out.write(`${renderBanner({
+  const bannerOptions = {
     width: process.stdout.columns ?? 80,
     depth,
     glyphs,
     subtitle: `${mode} ${glyphs.middot} ${spec.label} ${resolvedModelId} ${glyphs.middot} ${where}`,
     // Seeded per session, so the sky is stable while you are looking at it.
     seed: Date.now() & 0xffff,
-  })}\n`);
+  };
+  if (depth === "none") {
+    out.write(`${renderBanner(bannerOptions)}\n`);
+  } else {
+    // The sky settles in rather than arriving lit — the wordmark itself never dims (see
+    // `banner.ts`), so the one thing a person needs to read first is legible from the very first
+    // frame, and only the stars around it are what spring up to full brightness.
+    const bannerBlock = new ReplaceableBlock(out);
+    for (const line of renderBanner({ ...bannerOptions, intensity: 0 }).split("\n")) bannerBlock.append(line);
+    await new Promise<void>((resolve) => {
+      const animator: SpringAnimator = new SpringAnimator(0, (value) => {
+        bannerBlock.updateAll(renderBanner({ ...bannerOptions, intensity: value }).split("\n"));
+        if (animator.settled) resolve();
+      }, { intervalMs: 50 });
+      animator.retarget(1);
+    });
+  }
   // `/guide` sits on the opening line beside `/help`, because the two answer different questions —
   // one lists what you can type, the other explains what any of it is for — and a manual nobody is
   // told about is a manual nobody reads.
@@ -2264,7 +2296,7 @@ async function main(): Promise<number> {
   if (ttyMode) {
     // Always constructed, because the suggestion dropdown needs its geometry either way; only the
     // *holding* of the scroll region — the part that costs scrollback — is what `--pin` buys.
-    screen = new PinnedScreen(process.stdout, { holdRegion: pinFooter });
+    screen = new PinnedScreen(process.stdout, { holdRegion: pinFooter, animate: true });
     screen.enter();
     showIdleStatus();
     process.stdout.on("resize", () => {
@@ -3366,24 +3398,35 @@ async function main(): Promise<number> {
       // same total are two very different sessions to have had.
       const trend = history.length > 1 ? `  ${style.dim(`spend  ${sparkline(history.map((turn) => turn.cost?.micros ?? 0), glyphs)}`)}\n` : "";
       const fraction = ledger.budgetFraction;
-      // Gradient runs the theme's own success colour toward its error colour — a bar barely
-      // filled reads calm because that is all of the gradient it has exposed yet, and one nearly
-      // spent reveals almost the whole run toward the warning end, without a separate threshold
-      // check anywhere in this file deciding when to turn it red.
-      const rgbToken = (value: string): Rgb | undefined => {
-        const parsed = parseColor(value);
-        // A named ANSI colour (e.g. high-contrast's "brightGreen") parses to a palette index, not
-        // an RGB triple — the gradient has no use for one, so it falls back to progressBar's own
-        // default rather than interpolating something that isn't a colour.
-        return typeof parsed === "object" ? parsed : undefined;
-      };
-      const meter = fraction === undefined ? "" : `  ${style.dim("budget")} [${progressBar(fraction, 24, {
-        depth: renderDepth,
-        glyphs,
-        from: rgbToken(palette.tokens.success),
-        to: rgbToken(palette.tokens.error),
-      })}] ${style.dim(`${Math.round(Math.min(1, fraction) * 100)}%`)}\n`;
-      out.write(`${ledger.formatReport()}\n${trend}${meter}`);
+      out.write(`${ledger.formatReport()}\n${trend}`);
+      if (fraction !== undefined) {
+        // Gradient runs the theme's own success colour toward its error colour — a bar barely
+        // filled reads calm because that is all of the gradient it has exposed yet, and one nearly
+        // spent reveals almost the whole run toward the warning end, without a separate threshold
+        // check anywhere in this file deciding when to turn it red.
+        const rgbToken = (value: string): Rgb | undefined => {
+          const parsed = parseColor(value);
+          // A named ANSI colour (e.g. high-contrast's "brightGreen") parses to a palette index, not
+          // an RGB triple — the gradient has no use for one, so it falls back to progressBar's own
+          // default rather than interpolating something that isn't a colour.
+          return typeof parsed === "object" ? parsed : undefined;
+        };
+        const from = rgbToken(palette.tokens.success);
+        const to = rgbToken(palette.tokens.error);
+        // The bar fills from empty rather than jumping straight to the true fraction — spend
+        // visibly "catches up" to where it actually is instead of teleporting there, the same
+        // spring `progressBar` itself already leaves the gradient's shape to.
+        const meterLine = (value: number) => `  ${style.dim("budget")} [${progressBar(value, 24, { depth: renderDepth, glyphs, from, to })}] ${style.dim(`${Math.round(Math.min(1, value) * 100)}%`)}`;
+        const meter = new ReplaceableBlock(out);
+        const handle = meter.append(meterLine(0));
+        await new Promise<void>((resolve) => {
+          const animator: SpringAnimator = new SpringAnimator(0, (value) => {
+            meter.update(handle, meterLine(value));
+            if (animator.settled) resolve();
+          });
+          animator.retarget(fraction);
+        });
+      }
       continue;
     }
     if (input === "/where") {

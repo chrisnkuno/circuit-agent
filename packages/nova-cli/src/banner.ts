@@ -31,6 +31,13 @@ export type BannerOptions = {
    * instead of arriving as punctuation.
    */
   glyphs?: GlyphSet;
+  /**
+   * How lit the sky is, 0 to 1. Defaults to fully lit — the ordinary, static banner every existing
+   * caller already draws. A caller animating the opening banner passes a rising value across
+   * several redraws instead; the wordmark itself is never dimmed, only the stars around it, so the
+   * one thing a person needs to read first is never the part still settling in.
+   */
+  intensity?: number;
 };
 
 /** What the terminal can actually render, from the environment rather than from hope. */
@@ -59,6 +66,19 @@ const STAR_COLORS: Rgb[] = [
   [186, 230, 253],
   [224, 242, 254],
 ];
+
+/** Where a star sits before it has "come on" — near the night sky's own base, not black. */
+const STAR_DIM_ANCHOR: Rgb = [10, 14, 26];
+
+/** A star's colour partway to its final brightness — Harmonica's spring drives `intensity` from the caller. */
+function dimmed(color: Rgb, intensity: number): Rgb {
+  const t = Math.max(0, Math.min(1, intensity));
+  return [
+    Math.round(STAR_DIM_ANCHOR[0] + (color[0] - STAR_DIM_ANCHOR[0]) * t),
+    Math.round(STAR_DIM_ANCHOR[1] + (color[1] - STAR_DIM_ANCHOR[1]) * t),
+    Math.round(STAR_DIM_ANCHOR[2] + (color[2] - STAR_DIM_ANCHOR[2]) * t),
+  ];
+}
 
 function paint(text: string, [red, green, blue]: Rgb, depth: ColorDepth): string {
   if (depth === "none") return text;
@@ -116,7 +136,7 @@ function random(seed: number): () => number {
  * Density falls off toward the wordmark so the letters stay legible — the stars are the setting,
  * not the subject.
  */
-function starLine(width: number, density: number, next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS): string {
+function starLine(width: number, density: number, next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS, intensity = 1): string {
   let line = "";
   for (let column = 0; column < width; column += 1) {
     if (next() > density) {
@@ -126,7 +146,7 @@ function starLine(width: number, density: number, next: () => number, depth: Col
     const brightness = next();
     const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
     const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
-    line += paint(glyph, color, depth);
+    line += paint(glyph, intensity === 1 ? color : dimmed(color, intensity), depth);
   }
   return line.trimEnd();
 }
@@ -139,6 +159,7 @@ function starLine(width: number, density: number, next: () => number, depth: Col
  */
 export function renderBanner(options: BannerOptions): string {
   const { width, depth } = options;
+  const intensity = options.intensity ?? 1;
   const next = random(options.seed ?? 0x5EED);
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
   const ascii = glyphs === ASCII_GLYPHS || glyphs.boxHorizontal === ASCII_GLYPHS.boxHorizontal;
@@ -147,7 +168,8 @@ export function renderBanner(options: BannerOptions): string {
   const stars = glyphs.starGlyphs;
 
   if (width < wordmarkWidth + 4) {
-    const compact = `${paint(glyphs.star, STAR_COLORS[3], depth)} ${paint("NOVA", NIGHT_GRADIENT[4], depth)} ${paint(glyphs.star, STAR_COLORS[3], depth)}`;
+    const starColor = intensity === 1 ? STAR_COLORS[3] : dimmed(STAR_COLORS[3], intensity);
+    const compact = `${paint(glyphs.star, starColor, depth)} ${paint("NOVA", NIGHT_GRADIENT[4], depth)} ${paint(glyphs.star, starColor, depth)}`;
     return options.subtitle ? `${compact} ${paint(options.subtitle, NIGHT_GRADIENT[0], depth)}` : compact;
   }
 
@@ -155,16 +177,16 @@ export function renderBanner(options: BannerOptions): string {
   const pad = " ".repeat(indent);
   const lines: string[] = [];
 
-  lines.push(starLine(width - 1, 0.05, next, depth, stars));
-  lines.push(starLine(width - 1, 0.03, next, depth, stars));
+  lines.push(starLine(width - 1, 0.05, next, depth, stars, intensity));
+  lines.push(starLine(width - 1, 0.03, next, depth, stars, intensity));
 
   // Lit from the top down: the wordmark brightens as it descends, like a horizon glow.
   wordmark.forEach((row, index) => {
     const color = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 1)];
-    lines.push(`${flank(indent, next, depth, stars)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${paint(row, color, depth)}${trailing(next, depth, stars)}`);
+    lines.push(`${flank(indent, next, depth, stars, intensity)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${paint(row, color, depth)}${trailing(next, depth, stars, intensity)}`);
   });
 
-  lines.push(starLine(width - 1, 0.035, next, depth, stars));
+  lines.push(starLine(width - 1, 0.035, next, depth, stars, intensity));
 
   if (options.subtitle) {
     const subtitleIndent = Math.max(2, Math.floor((width - options.subtitle.length) / 2));
@@ -183,7 +205,7 @@ function flankWidth(indent: number): number {
   return indent > 8 ? 4 : 0;
 }
 
-function flank(indent: number, next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS): string {
+function flank(indent: number, next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS, intensity = 1): string {
   const reserved = flankWidth(indent);
   if (reserved === 0) return "";
   if (next() > 0.4) return " ".repeat(reserved);
@@ -193,15 +215,15 @@ function flank(indent: number, next: () => number, depth: ColorDepth, stars: rea
   const position = Math.floor(next() * reserved);
   const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
   const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
-  return `${" ".repeat(position)}${paint(glyph, color, depth)}${" ".repeat(reserved - position - 1)}`;
+  return `${" ".repeat(position)}${paint(glyph, intensity === 1 ? color : dimmed(color, intensity), depth)}${" ".repeat(reserved - position - 1)}`;
 }
 
-function trailing(next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS): string {
+function trailing(next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS, intensity = 1): string {
   if (next() > 0.35) return "";
   const brightness = 0.55 + next() * 0.45;
   const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
   const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
-  return `${" ".repeat(2 + Math.floor(next() * 4))}${paint(glyph, color, depth)}`;
+  return `${" ".repeat(2 + Math.floor(next() * 4))}${paint(glyph, intensity === 1 ? color : dimmed(color, intensity), depth)}`;
 }
 
 /** The one-line hint under the banner, kept separate so callers can drop it. */

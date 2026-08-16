@@ -10,17 +10,19 @@ import {
   formatTokens,
   MarkdownStream,
   novaSpinnerFrame,
+  paginator,
   progressBar,
   PROMPT_PREFIX_COLUMNS,
   promptStatusRoom,
   renderPromptBox,
   ReplaceableBlock,
   rowsOccupied,
-  paginator,
   scrollIndicator,
   scrollPercent,
   sparkline,
   Spinner,
+  Spring,
+  SpringAnimator,
   StatusBar,
   table,
   thinkingVerb,
@@ -412,6 +414,43 @@ describe("ReplaceableBlock", () => {
     expect(block.update(5, "x")).toBe(false);
     expect(block.update(-1, "x")).toBe(false);
   });
+
+  it("updateAll rewrites every line in a single redraw, not one redraw per line", () => {
+    const { stream, writes } = fakeStream();
+    const block = new ReplaceableBlock(stream, () => 80);
+    block.append("one");
+    block.append("two");
+    block.append("three");
+    writes.length = 0;
+
+    block.updateAll(["1", "2", "3"]);
+    // Erases exactly the three rows the block occupied, once — not three separate erase-and-reprint
+    // passes the way three individual `update()` calls would produce.
+    expect(writes.filter((chunk) => chunk === "\x1b[1A\x1b[2K")).toHaveLength(3);
+    expect(writes.slice(-3)).toEqual(["1\n", "2\n", "3\n"]);
+  });
+
+  it("updateAll leaves an entry alone when fewer texts are given than there are lines", () => {
+    const { stream, writes } = fakeStream();
+    const block = new ReplaceableBlock(stream, () => 80);
+    block.append("one");
+    block.append("two");
+    writes.length = 0;
+
+    block.updateAll(["1"]);
+    expect(writes.slice(-2)).toEqual(["1\n", "two\n"]);
+  });
+
+  it("updateAll ignores extra texts beyond the lines the block already holds", () => {
+    const { stream, writes } = fakeStream();
+    const block = new ReplaceableBlock(stream, () => 80);
+    block.append("one");
+    writes.length = 0;
+
+    expect(() => block.updateAll(["1", "2", "3"])).not.toThrow();
+    expect(writes.at(-1)).toBe("1\n");
+    expect(writes.filter((chunk) => chunk === "1\n" || chunk === "2\n" || chunk === "3\n")).toEqual(["1\n"]);
+  });
 });
 
 describe("MarkdownStream", () => {
@@ -614,6 +653,113 @@ describe("CountdownTimer", () => {
     const afterStop = ticks;
     vi.advanceTimersByTime(3_000);
     expect(ticks).toBe(afterStop);
+  });
+});
+
+describe("Spring", () => {
+  it("moves toward the target, never past it, for a critically-damped spring starting at rest", () => {
+    const spring = new Spring(18, 1);
+    let position = 0;
+    let velocity = 0;
+    for (let step = 0; step < 200; step += 1) {
+      [position, velocity] = spring.update(position, velocity, 10, 1 / 60);
+      expect(position).toBeLessThanOrEqual(10.0001); // no overshoot at critical damping
+    }
+    expect(position).toBeCloseTo(10, 2);
+  });
+
+  it("overshoots and settles for an under-damped spring, unlike a critically-damped one", () => {
+    const under = new Spring(18, 0.3);
+    let position = 0;
+    let velocity = 0;
+    let overshot = false;
+    for (let step = 0; step < 200; step += 1) {
+      [position, velocity] = under.update(position, velocity, 10, 1 / 60);
+      if (position > 10) overshot = true;
+    }
+    expect(overshot).toBe(true);
+    expect(position).toBeCloseTo(10, 1);
+  });
+
+  it("stays stable at a coarse timestep, the property a naive Euler integrator lacks", () => {
+    // A terminal redraw tick is tens of milliseconds, not a 60fps frame — this is the actual
+    // operating regime, and the whole reason a closed-form integrator was used instead of x += v*dt.
+    const spring = new Spring(18, 0.86);
+    let position = 0;
+    let velocity = 0;
+    for (let step = 0; step < 50; step += 1) [position, velocity] = spring.update(position, velocity, 5, 0.1);
+    expect(Number.isFinite(position)).toBe(true);
+    expect(position).toBeCloseTo(5, 1);
+  });
+
+  it("does nothing when already at the target with no velocity", () => {
+    const spring = new Spring(18, 1);
+    const [position, velocity] = spring.update(5, 0, 5, 1 / 60);
+    expect(position).toBeCloseTo(5, 5);
+    expect(velocity).toBeCloseTo(0, 5);
+  });
+});
+
+describe("SpringAnimator", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("ticks toward the target and eventually settles exactly on it", () => {
+    const values: number[] = [];
+    const animator = new SpringAnimator(0, (value) => values.push(value), { intervalMs: 40 });
+    animator.retarget(10);
+    vi.advanceTimersByTime(40 * 40); // generous — the point is it settles, not exactly when
+    expect(values.at(-1)).toBe(10);
+    expect(animator.settled).toBe(true);
+  });
+
+  it("settles immediately without starting a timer when already within epsilon of the target", () => {
+    let ticks = 0;
+    const spy = new SpringAnimator(0, () => { ticks += 1; }, { intervalMs: 40 });
+    spy.retarget(0.001); // already within epsilon of 0
+    expect(ticks).toBe(1); // one notification that it's there, no timer running
+    expect(spy.settled).toBe(true);
+    vi.advanceTimersByTime(1_000);
+    expect(ticks).toBe(1); // nothing further ticks — there was never a timer to fire
+  });
+
+  it("stops calling onTick once it settles from a real animation, rather than ticking forever", () => {
+    let ticks = 0;
+    const animator = new SpringAnimator(0, () => { ticks += 1; }, { intervalMs: 40 });
+    animator.retarget(10);
+    vi.advanceTimersByTime(40 * 40);
+    expect(animator.settled).toBe(true);
+    const afterSettling = ticks;
+    vi.advanceTimersByTime(1_000);
+    expect(ticks).toBe(afterSettling);
+  });
+
+  it("redirects from wherever it currently is, without resetting to the old position", () => {
+    const values: number[] = [];
+    const animator = new SpringAnimator(0, (value) => values.push(value), { intervalMs: 40 });
+    animator.retarget(10);
+    vi.advanceTimersByTime(40 * 3); // partway there, not settled
+    const midpoint = values.at(-1)!;
+    expect(midpoint).toBeGreaterThan(0);
+    expect(midpoint).toBeLessThan(10);
+    animator.retarget(20); // redirected before reaching 10
+    vi.advanceTimersByTime(40); // the very next tick
+    // The next tick starts from the midpoint already reached, not from 0 or from 10.
+    expect(values.at(-1)).toBeGreaterThanOrEqual(midpoint);
+  });
+
+  it("snapTo jumps immediately and stops any animation in flight", () => {
+    const values: number[] = [];
+    const animator = new SpringAnimator(0, (value) => values.push(value), { intervalMs: 40 });
+    animator.retarget(10);
+    vi.advanceTimersByTime(40 * 3);
+    animator.snapTo(50);
+    expect(values.at(-1)).toBe(50);
+    expect(animator.value).toBe(50);
+    expect(animator.settled).toBe(true);
+    const countAfterSnap = values.length;
+    vi.advanceTimersByTime(1_000);
+    expect(values.length).toBe(countAfterSnap); // nothing further ticks after a snap
   });
 });
 

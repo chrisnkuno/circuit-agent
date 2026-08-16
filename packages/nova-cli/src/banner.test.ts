@@ -63,3 +63,48 @@ describe("banner", () => {
     expect(renderTagline("/help", "truecolor")).toContain("[38;2;");
   });
 });
+
+describe("the sky settling in", () => {
+  it("defaults to fully lit, identical to never passing intensity at all", () => {
+    expect(renderBanner({ width: 88, depth: "truecolor", seed: 11 }))
+      .toBe(renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 1 }));
+  });
+
+  it("never moves a star or reshapes the wordmark — only intensity changes, positions do not", () => {
+    // Stripped of colour, an unlit sky and a fully lit one must draw the exact same characters in
+    // the exact same places: intensity is a colour blend, not a second source of randomness.
+    const dim = plain(renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 0 }));
+    const bright = plain(renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 1 }));
+    expect(dim).toBe(bright);
+  });
+
+  it("draws no colour at all differently by intensity when colour itself is off", () => {
+    // paint() is already a no-op at depth "none" — dimming a colour that is never emitted cannot
+    // show up in the output, and the whole animation is pointless work on a terminal with no colour.
+    expect(renderBanner({ width: 88, depth: "none", seed: 11, intensity: 0 }))
+      .toBe(renderBanner({ width: 88, depth: "none", seed: 11, intensity: 1 }));
+  });
+
+  it("blends a star's colour toward the dim anchor at low intensity, away from it as intensity rises", () => {
+    const colorOf = (rendered: string) => [...rendered.matchAll(/38;2;(\d+);(\d+);(\d+)m/g)].map((match) => match.slice(1).map(Number));
+    const low = colorOf(renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 0.1 }));
+    const high = colorOf(renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 0.9 }));
+    expect(low.length).toBe(high.length); // same stars exist at both intensities
+    // The first two lines of sky are pure stars, with no letterform sharing the row.
+    const firstColorLow = low[0];
+    const firstColorHigh = high[0];
+    // A low-intensity star sits closer to the dim anchor (10,14,26) than the same star at high
+    // intensity does — the exact blend depends on which star it is, but the direction cannot be wrong.
+    const distance = (color: number[], anchor: number[]) => color.reduce((sum, value, index) => sum + Math.abs(value - anchor[index]), 0);
+    const anchor = [10, 14, 26];
+    expect(distance(firstColorLow, anchor)).toBeLessThan(distance(firstColorHigh, anchor));
+  });
+
+  it("never dims the wordmark itself, even at zero intensity", () => {
+    // Identity comes first: the letters must read immediately, only the sky around them settles in.
+    const dim = renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 0 });
+    const bright = renderBanner({ width: 88, depth: "truecolor", seed: 11, intensity: 1 });
+    const wordmarkLine = (rendered: string) => rendered.split("\n").find((line) => line.includes("███╗   ██╗"));
+    expect(wordmarkLine(dim)).toBe(wordmarkLine(bright));
+  });
+});
