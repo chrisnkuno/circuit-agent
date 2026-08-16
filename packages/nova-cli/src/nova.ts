@@ -2256,6 +2256,12 @@ async function main(): Promise<number> {
     // The sky settles in rather than arriving lit — the wordmark itself never dims (see
     // `banner.ts`), so the one thing a person needs to read first is legible from the very first
     // frame, and only the stars around it are what spring up to full brightness.
+    //
+    // Safe where the dropdown's row animation was not, and for a reason worth stating: every frame
+    // here occupies the *same* rows. `renderBanner` returns a fixed number of lines whose widths do
+    // not depend on `intensity` — it changes colour, never geometry — so the redraw erases exactly
+    // the rows it reprints and nothing scrolls. Animating a fixed frame is repainting; animating a
+    // frame's size is scrolling, and only one of those is reversible.
     const bannerBlock = new ReplaceableBlock(out);
     for (const line of renderBanner({ ...bannerOptions, intensity: 0 }).split("\n")) bannerBlock.append(line);
     await new Promise<void>((resolve) => {
@@ -2265,6 +2271,7 @@ async function main(): Promise<number> {
       }, { intervalMs: 50 });
       animator.retarget(1);
     });
+    bannerBlock.forget(); // committed to scrollback; nothing may rewrite it again
   }
   // `/guide` sits on the opening line beside `/help`, because the two answer different questions —
   // one lists what you can type, the other explains what any of it is for — and a manual nobody is
@@ -2296,7 +2303,7 @@ async function main(): Promise<number> {
   if (ttyMode) {
     // Always constructed, because the suggestion dropdown needs its geometry either way; only the
     // *holding* of the scroll region — the part that costs scrollback — is what `--pin` buys.
-    screen = new PinnedScreen(process.stdout, { holdRegion: pinFooter, animate: true });
+    screen = new PinnedScreen(process.stdout, { holdRegion: pinFooter });
     screen.enter();
     showIdleStatus();
     process.stdout.on("resize", () => {

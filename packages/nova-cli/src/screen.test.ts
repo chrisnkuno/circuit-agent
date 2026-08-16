@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PinnedScreen, type ScreenStream } from "./screen";
 
 function fakeStream(rows: number, columns: number): ScreenStream & { writes: string[] } {
@@ -243,76 +243,36 @@ describe("the suggestion dropdown", () => {
   });
 });
 
-describe("the suggestion dropdown, animated", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
-
-  it("does not jump straight to the target row count the way the default does", () => {
+describe("the rule that a frame's size is never animated", () => {
+  it("reserves rows in exactly one scroll, however many rows the dropdown grows by", () => {
+    // The regression this exists for: easing `suggestionRows` toward its target issued one `SU`
+    // per animation frame instead of one per resize. `SU` scrolls real transcript content away,
+    // so five frames of "growth" permanently ate five lines of the user's session and left a
+    // widening band of blank space above the prompt. A frame's *contents* may be animated; its
+    // *size* is one atomic step, because growing it is destructive and not a repaint.
     const stream = fakeStream(40, 100);
-    const screen = new PinnedScreen(stream, { animate: true });
-    screen.enter();
+    const screen = new PinnedScreen(stream, { holdRegion: false });
+    screen.renderSuggestions(["one", "two", "three", "four", "five"]);
+    const scrolls = stream.writes.filter((line) => /\x1b\[\d+S/.test(line));
+    expect(scrolls).toEqual(["\x1b[5S"]);
+  });
+
+  it("issues no further scroll at all when the list is replaced by one of the same height", () => {
+    const stream = fakeStream(40, 100);
+    const screen = new PinnedScreen(stream, { holdRegion: false });
+    screen.renderSuggestions(["one", "two", "three"]);
     stream.writes.length = 0;
-
-    screen.renderSuggestions(["one", "two", "three"]);
-    // The very first call kicks the spring off from rest — real growth takes more than one tick,
-    // so the region has not yet been widened all the way to 3 rows.
-    const grownTo3 = stream.writes.some((line) => line.includes("\x1b[3S"));
-    expect(grownTo3).toBe(false);
+    screen.renderSuggestions(["uno", "dos", "tres"]);
+    expect(stream.writes.filter((line) => /\x1b\[\d+S/.test(line))).toEqual([]);
   });
 
-  it("reaches exactly the target row count once the animation settles, same as the non-animated end state", () => {
+  it("never scrolls to shrink — freed rows are given back by moving the margin, not by scrolling", () => {
     const stream = fakeStream(40, 100);
-    const screen = new PinnedScreen(stream, { animate: true });
-    screen.enter();
-    screen.renderSuggestions(["one", "two", "three"]);
-    vi.advanceTimersByTime(3_000); // generous — the point is convergence, not a specific frame count
-    expect(stream.writes.at(-1)).toBe("\x1b8\x1b[?25h");
-    expect(stream.writes.join("")).toContain("\x1b[35;1H\x1b[2Kone");
-    expect(stream.writes.join("")).toContain("\x1b[37;1H\x1b[2Kthree");
-  });
-
-  it("redirects mid-animation instead of restarting from zero when the list changes again", () => {
-    const stream = fakeStream(40, 100);
-    const screen = new PinnedScreen(stream, { animate: true });
-    screen.enter();
-    screen.renderSuggestions(["one", "two", "three", "four", "five"]); // target 5
-    vi.advanceTimersByTime(40); // a couple ticks in, not settled
-    vi.advanceTimersByTime(40);
-    const midFlight = stream.writes.filter((line) => line.includes("[2K")).length;
-    screen.renderSuggestions(["one"]); // redirected down to 1 before ever reaching 5
-    vi.advanceTimersByTime(3_000);
-    // It never had to have grown all the way to 5 rows before shrinking — the animation redirects
-    // from wherever it currently is.
-    expect(midFlight).toBeGreaterThan(0);
-    expect(stream.writes.join("")).toContain("one");
-  });
-
-  it("dismisses instantly on clearSuggestions rather than animating the retreat to zero", () => {
-    const stream = fakeStream(40, 100);
-    const screen = new PinnedScreen(stream, { animate: true });
-    screen.enter();
-    screen.renderSuggestions(["one", "two", "three"]);
-    vi.advanceTimersByTime(3_000); // let it settle at 3
+    const screen = new PinnedScreen(stream, { holdRegion: false });
+    screen.renderSuggestions(["one", "two", "three", "four"]);
     stream.writes.length = 0;
-
-    screen.clearSuggestions();
-    // Exactly the same shape the non-animated clear produces: one immediate write, not a sequence
-    // of shrinking frames over time.
-    expect(stream.writes).toEqual(["\x1b7\x1b[?25l", "\x1b[35;1H\x1b[2K", "\x1b[36;1H\x1b[2K", "\x1b[37;1H\x1b[2K", "\x1b[1;37r\x1b8\x1b[?25h"]);
-    const afterClear = stream.writes.length;
-    vi.advanceTimersByTime(3_000); // a stale timer firing afterward would append more writes
-    expect(stream.writes.length).toBe(afterClear);
-  });
-
-  it("stops ticking once settled, rather than redrawing identical content forever", () => {
-    const stream = fakeStream(40, 100);
-    const screen = new PinnedScreen(stream, { animate: true });
-    screen.enter();
-    screen.renderSuggestions(["one", "two"]);
-    vi.advanceTimersByTime(3_000);
-    const settledCount = stream.writes.length;
-    vi.advanceTimersByTime(5_000);
-    expect(stream.writes.length).toBe(settledCount);
+    screen.renderSuggestions(["one"]);
+    expect(stream.writes.filter((line) => /\x1b\[\d+S/.test(line))).toEqual([]);
   });
 });
 
