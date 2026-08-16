@@ -1,6 +1,7 @@
 import { UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import type { KeypressEvent } from "./keybindings";
 import { visibleWidth } from "./markdown";
+import { paginator } from "./tui";
 
 /**
  * One set of navigation rules, shared by every menu Nova shows.
@@ -238,7 +239,10 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
     lines.push(`  ${head}${paint.dim(clipTo(tail, Math.max(0, room - visibleWidth(padded) - 2)))}`);
   }
 
-  lines.push(paint.dim(clipTo(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}`, width)));
+  // Only worth naming once the window can't show the whole list at once — a menu that fits has
+  // nothing a position would add over just seeing every row.
+  const position = visible.length > height ? `  ${paginator(state.selected, visible.length)}` : "";
+  lines.push(paint.dim(clipTo(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}${position}`, width)));
   return lines.join("\n");
 }
 

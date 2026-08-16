@@ -260,6 +260,23 @@ export function scrollIndicator(fraction: number): string {
 }
 
 /**
+ * "Where am I in this list" — Bubbles' `paginator`, for the menus (`/palette`, the model picker,
+ * settings) whose window scrolls continuously rather than in fixed pages. `"arabic"` (the default)
+ * is what fits that: a position among a count, not a page among pages, since nothing here is
+ * actually paged. `"dots"` is kept for a caller that genuinely does have discrete pages — a handful
+ * of them, or the row becomes longer than the thing it is describing the position of.
+ */
+export function paginator(current: number, total: number, options: { style?: "arabic" | "dots"; glyphs?: GlyphSet } = {}): string {
+  const count = Math.max(1, Math.floor(total));
+  const index = Math.max(0, Math.min(Math.floor(current), count - 1));
+  if (options.style === "dots") {
+    const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+    return Array.from({ length: count }, (_, position) => (position === index ? glyphs.bullet : glyphs.middot)).join(" ");
+  }
+  return `${index + 1}/${count}`;
+}
+
+/**
  * What the spinner claims to be doing, rotating slowly.
  *
  * A word that never changes reads as a frozen program; one that changes every frame reads as

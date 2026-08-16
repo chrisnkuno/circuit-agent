@@ -147,6 +147,12 @@ describe("rendering a chooser", () => {
     expect(renderChooser({ selected: 37, query: "" }, many, { paint, height: 5 })).toContain("row 37");
   });
 
+  it("names where the selection sits once the list overflows the window, and stays silent when it fits", () => {
+    const many = Array.from({ length: 40 }, (_unused, index) => ({ value: index, label: `row ${index}` }));
+    expect(renderChooser({ selected: 37, query: "" }, many, { paint, height: 5 })).toContain("38/40");
+    expect(renderChooser({ selected: 0, query: "" }, items, { paint, height: 20 })).not.toMatch(/\d+\/\d+/);
+  });
+
   it("heads a group once rather than above every row in it", () => {
     const grouped: ChooserItem<string>[] = [
       { value: "a", label: "A", header: "Group" },

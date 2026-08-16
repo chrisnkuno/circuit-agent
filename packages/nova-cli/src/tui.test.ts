@@ -14,6 +14,7 @@ import {
   renderPromptBox,
   ReplaceableBlock,
   rowsOccupied,
+  paginator,
   scrollIndicator,
   scrollPercent,
   sparkline,
@@ -256,6 +257,27 @@ describe("scrollPercent and scrollIndicator", () => {
   it("clamps an out-of-range offset instead of reporting past either end", () => {
     expect(scrollPercent(-5, 100, 10)).toBe(0);
     expect(scrollPercent(9_999, 100, 10)).toBe(1);
+  });
+});
+
+describe("paginator", () => {
+  it("shows a one-based position among a count, arabic style by default", () => {
+    expect(paginator(0, 42)).toBe("1/42");
+    expect(paginator(11, 42)).toBe("12/42");
+    expect(paginator(41, 42)).toBe("42/42");
+  });
+
+  it("clamps an out-of-range position instead of showing a nonsense one", () => {
+    expect(paginator(-5, 10)).toBe("1/10");
+    expect(paginator(999, 10)).toBe("10/10");
+  });
+
+  it("never reports a count below 1, so a list that turns out empty still renders", () => {
+    expect(paginator(0, 0)).toBe("1/1");
+  });
+
+  it("marks the current page with a solid dot in dot style, the rest with a plain one", () => {
+    expect(paginator(1, 3, { style: "dots" })).toBe("· • ·");
   });
 });
 
