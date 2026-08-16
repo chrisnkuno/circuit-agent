@@ -4,13 +4,14 @@ import type { NovaMode } from "../lib/settings";
  * Three different kinds of control used to sit in one flat row, all looking alike: a choice of
  * mode, two one-shot actions, and an unrelated toggle. Grouping them is most of the readability
  * win — and the modes are a radio group, so saying that out loud is what lets a screen reader
- * announce "Build, 2 of 3" instead of three unrelated buttons.
+ * announce "Build, 2 of 4" instead of four unrelated buttons.
  */
 
 const MODES: Array<{ id: NovaMode; label: string; hint: string }> = [
   { id: "plan", label: "Plan", hint: "Read and reason only — no edits, no commands" },
   { id: "build", label: "Build", hint: "Every edit and command asks first" },
   { id: "auto", label: "Auto", hint: "Ordinary edits apply; sensitive actions still ask" },
+  { id: "defender", label: "Defender", hint: "Security review — find and fix real issues; every change still asks" },
 ];
 
 export function ModeBar(props: {

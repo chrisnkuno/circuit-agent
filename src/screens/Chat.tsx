@@ -175,6 +175,7 @@ export function ChatScreen(props: {
         case "plan": void handleMode("plan"); break;
         case "build": void handleMode("build"); break;
         case "auto": void handleMode("auto"); break;
+        case "defender": void handleMode("defender"); break;
         case "focus-composer": composerRef.current?.focus(); break;
       }
     };

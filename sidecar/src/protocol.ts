@@ -1,7 +1,14 @@
 /** Shared IPC types between the React UI, Tauri shell, and Node sidecar. */
 
 export type ProviderId = "circuitnotion" | "openai" | "anthropic";
-export type NovaMode = "plan" | "build" | "auto";
+/**
+ * Re-exported from agent-core rather than restated, because a second copy of this union is a copy
+ * that drifts: `defender` shipped in the CLI and this file kept saying there were three modes, so
+ * the desktop could not offer a mode the engine underneath it had supported for weeks.
+ */
+import type { NovaMode } from "@circuit-nova/nova-core/nova-cli/permissions";
+
+export type { NovaMode };
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
 
 export const CIRCUITNOTION_DEFAULT_BASE_URL = "https://api.circuitnotion.com/v1";
