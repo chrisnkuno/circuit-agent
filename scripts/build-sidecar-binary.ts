@@ -70,8 +70,20 @@ function build(triple: string): string {
   return outfile;
 }
 
+/**
+ * Which triples to build, most explicit first.
+ *
+ * `NOVA_SIDECAR_TARGET` exists for the one case the host cannot answer: a release job building the
+ * Intel macOS bundle on an Apple-silicon runner. Tauri is told `--target x86_64-apple-darwin`, but
+ * `rustc --print host-tuple` still says `aarch64`, so a host-derived sidecar would be the wrong
+ * architecture — packaged without complaint, and broken only once someone runs it. Bun
+ * cross-compiles, so naming the target is all that is needed to get this right.
+ */
 const requested = process.argv.slice(2).filter((argument) => !argument.startsWith("-"));
-const triples = requested.length > 0 ? requested : [hostTriple()];
+const fromEnvironment = (process.env.NOVA_SIDECAR_TARGET ?? "").trim();
+const triples = requested.length > 0
+  ? requested
+  : fromEnvironment !== "" ? fromEnvironment.split(",").map((entry) => entry.trim()).filter(Boolean) : [hostTriple()];
 
 mkdirSync(OUT_DIR, { recursive: true });
 for (const triple of triples) {
