@@ -104,8 +104,10 @@ export type LineChartOptions = {
  *
  * That resolution is the whole reason to use braille: a block-character plot has one point per
  * cell, so a 40x8 chart holds 320 positions, where the same cells in braille hold 2,560 — enough
- * that a latency series reads as a *curve* rather than as a staircase. ntcharts' canvas is built on
- * the same trick.
+ * that a latency series reads as a *curve* rather than as a staircase. ntcharts reaches for the
+ * same trick — its `BrailleGrid` (canvas/graph) scales a plot to the "4 high and 2 wide" dot grid
+ * a braille rune addresses, then draws the finished patterns onto its ordinary one-rune-per-cell
+ * canvas, which is exactly the two-layer arrangement below.
  *
  * A terminal that cannot draw braille gets a coarse one-point-per-cell plot instead, which is worse
  * but is a chart; braille rendered as question marks is not.

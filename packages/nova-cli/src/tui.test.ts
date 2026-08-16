@@ -697,6 +697,37 @@ describe("Spring", () => {
     expect(position).toBeCloseTo(5, 1);
   });
 
+  it("is exactly implicit Euler — the integrator it claims to be, not merely something spring-shaped", () => {
+    // Derived independently from the backward-Euler equations rather than copied from the source
+    // under test, so this fails if that implementation drifts into a different scheme:
+    //   v' = [v - dt·w²·(x - target)] / (1 + 2·z·w·dt + dt²·w²)      x' = x + dt·v'
+    const reference = (x: number, v: number, target: number, dt: number, w: number, z: number): [number, number] => {
+      const determinant = 1 + 2 * z * w * dt + dt * dt * w * w;
+      const velocity = (v - dt * w * w * (x - target)) / determinant;
+      return [x + dt * velocity, velocity];
+    };
+    const spring = new Spring(18, 0.86);
+    let [ax, av] = [0, 0];
+    let [bx, bv] = [0, 0];
+    for (let step = 0; step < 200; step += 1) {
+      [ax, av] = spring.update(ax, av, 10, 1 / 60);
+      [bx, bv] = reference(bx, bv, 10, 1 / 60, 18, 0.86);
+      expect(ax).toBeCloseTo(bx, 10);
+      expect(av).toBeCloseTo(bv, 10);
+    }
+  });
+
+  it("converges rather than diverging at a timestep far past anything a terminal would produce", () => {
+    // The one property the implicit form is chosen for. Forward Euler blows up here; this must not.
+    const spring = new Spring(18, 0.86);
+    for (const dt of [0.1, 0.5, 2, 10]) {
+      let [position, velocity] = [0, 0];
+      for (let step = 0; step < 500; step += 1) [position, velocity] = spring.update(position, velocity, 5, dt);
+      expect(Number.isFinite(position), `dt ${dt}`).toBe(true);
+      expect(position, `dt ${dt}`).toBeCloseTo(5, 3);
+    }
+  });
+
   it("does nothing when already at the target with no velocity", () => {
     const spring = new Spring(18, 1);
     const [position, velocity] = spring.update(5, 0, 5, 1 / 60);

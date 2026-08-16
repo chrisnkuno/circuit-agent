@@ -127,11 +127,23 @@ export class CountdownTimer {
 }
 
 /**
- * A damped harmonic oscillator — Charm's Harmonica, ported: the same closed-form spring integrator,
- * unconditionally stable at any timestep rather than only small ones. A naive Euler spring blows up
- * or visibly stutters once `dt` gets coarse; a terminal repaints at whatever rate is comfortable to
- * look at (tens of milliseconds), which is coarse enough that stability at real redraw intervals —
- * not just at 60fps — is the property that actually matters here.
+ * A damped harmonic oscillator, in the spirit of Charm's Harmonica but not the same algorithm.
+ *
+ * Harmonica solves the spring *exactly*: `NewSpring` precomputes a state-transition matrix from the
+ * closed-form analytic solution, branching on the three damping regimes (two real exponentials when
+ * over-damped, `exp` against `cos`/`sin` when under-damped, the `t·exp` marginal case at exactly
+ * critical). This is the implicit — backward — Euler form instead, which is an approximation of the
+ * same system rather than the solution to it.
+ *
+ * That is a deliberate trade, for one reason: Harmonica bakes `deltaTime` into its coefficients at
+ * construction, so a spring driven at a rate that changes has to be rebuilt to stay correct. This
+ * takes `dt` per step, which is what a terminal actually offers — a repaint interval that slips
+ * whenever the event loop is busy. It keeps the property that matters, unconditional stability: a
+ * *forward* Euler spring diverges once `dt` grows past its natural period, where this one converges
+ * at any timestep at all (verified out to a ten-second step, which no redraw will ever be).
+ *
+ * Accuracy is the thing given up, and it does not matter here. Nothing in a terminal reads the
+ * intermediate positions of a settling animation as data; they are there to be looked at.
  */
 export class Spring {
   constructor(private readonly angularFrequency: number, private readonly dampingRatio: number) {}
