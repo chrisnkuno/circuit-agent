@@ -1,7 +1,8 @@
 import type { ColorDepth } from "./banner";
 import { terminalStream, type OutputStream } from "./output";
-import { borderGlyphsFor, UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
+import { ASCII_GLYPHS, borderGlyphsFor, UNICODE_GLYPHS, type GlyphSet } from "./glyphs";
 import { newMarkdownState, renderMarkdownLine, visibleWidth, type MarkdownState } from "./markdown";
+import { rgbTo256, type Rgb } from "./theme";
 
 /**
  * The pinned status region beneath the scrolling transcript, and the pieces it is built from.
@@ -115,6 +116,71 @@ export function sparkline(values: readonly number[], glyphs: GlyphSet = UNICODE_
   const max = Math.max(...values);
   if (max <= 0) return levels[0].repeat(values.length);
   return values.map((value) => levels[Math.min(levels.length - 1, Math.floor((Math.max(0, value) / max) * (levels.length - 1)))]).join("");
+}
+
+/** Sub-character fill precision, low to high — the partial cell at the fill's leading edge. */
+const PARTIAL_BLOCKS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+const FULL_BLOCK = "█";
+const TRACK_BLOCK = "░";
+
+export type ProgressBarOptions = {
+  depth: ColorDepth;
+  /** ASCII terminals get `#`/`-` at whole-cell precision; anything else gets eighth-cell blocks. */
+  glyphs?: GlyphSet;
+  /** Gradient endpoints. Defaults to Nova's own sky: starlight blue cooling into warm gold. */
+  from?: Rgb;
+  to?: Rgb;
+};
+
+const DEFAULT_GRADIENT_FROM: Rgb = { r: 138, g: 180, b: 248 }; // starry-night --primary
+const DEFAULT_GRADIENT_TO: Rgb = { r: 255, g: 138, b: 155 }; // starry-night --error
+
+function lerp(from: Rgb, to: Rgb, t: number): Rgb {
+  return { r: from.r + (to.r - from.r) * t, g: from.g + (to.g - from.g) * t, b: from.b + (to.b - from.b) * t };
+}
+
+function paintRgb(text: string, rgb: Rgb, depth: ColorDepth): string {
+  if (depth === "none") return text;
+  const r = Math.round(rgb.r);
+  const g = Math.round(rgb.g);
+  const b = Math.round(rgb.b);
+  const code = depth === "truecolor" ? `\x1b[38;2;${r};${g};${b}m` : `\x1b[38;5;${rgbTo256({ r, g, b })}m`;
+  return `${code}${text}\x1b[0m`;
+}
+
+/**
+ * A gradient-filled meter — Nova's answer to Bubbles' `progress` component. Bounded to `width`
+ * cells, filled left to right at eighth-cell precision so a fraction like 37% lands somewhere
+ * *inside* a cell rather than always rounding to the nearest whole block.
+ *
+ * The gradient runs across the bar's *full* width, not just its filled portion, so how much of it
+ * you see is itself information: a bar barely filled shows only the gradient's cool end, and one
+ * nearly full reveals almost the whole run toward its warm end — the same "starts calm, gets more
+ * urgent as it fills" read a budget or health bar earns by design, for free, from one mechanism.
+ */
+export function progressBar(fraction: number, width: number, options: ProgressBarOptions): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
+  const cells = Math.max(1, Math.floor(width));
+  const from = options.from ?? DEFAULT_GRADIENT_FROM;
+  const to = options.to ?? DEFAULT_GRADIENT_TO;
+  const ascii = options.glyphs === ASCII_GLYPHS;
+  const eighths = ascii ? cells : cells * 8;
+  const filledEighths = Math.round(clamped * eighths);
+
+  let bar = "";
+  for (let index = 0; index < cells; index += 1) {
+    const t = cells <= 1 ? 0 : index / (cells - 1);
+    const rgb = lerp(from, to, t);
+    if (ascii) {
+      bar += index < filledEighths ? paintRgb("#", rgb, options.depth) : "-";
+      continue;
+    }
+    const cellStart = index * 8;
+    if (filledEighths >= cellStart + 8) bar += paintRgb(FULL_BLOCK, rgb, options.depth);
+    else if (filledEighths > cellStart) bar += paintRgb(PARTIAL_BLOCKS[filledEighths - cellStart], rgb, options.depth);
+    else bar += options.depth === "none" ? TRACK_BLOCK : `\x1b[2m${TRACK_BLOCK}\x1b[0m`;
+  }
+  return bar;
 }
 
 /**

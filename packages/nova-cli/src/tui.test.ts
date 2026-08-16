@@ -8,6 +8,7 @@ import {
   formatTokens,
   MarkdownStream,
   novaSpinnerFrame,
+  progressBar,
   PROMPT_PREFIX_COLUMNS,
   promptStatusRoom,
   renderPromptBox,
@@ -123,6 +124,58 @@ describe("sparkline", () => {
   it("stays in the ASCII set when given the ASCII glyph set", () => {
     const line = sparkline([1, 5, 2], ASCII_GLYPHS);
     for (const character of line) expect(character.codePointAt(0)).toBeLessThan(128);
+  });
+});
+
+describe("progressBar", () => {
+  it("draws an empty track at 0% and a fully filled bar at 100%, both at the requested width", () => {
+    const empty = plain(progressBar(0, 10, { depth: "none" }));
+    const full = plain(progressBar(1, 10, { depth: "none" }));
+    expect(visibleWidth(empty)).toBe(10);
+    expect(visibleWidth(full)).toBe(10);
+    expect(empty).toBe("░".repeat(10));
+    expect(full).toBe("█".repeat(10));
+  });
+
+  it("clamps a fraction outside 0..1 rather than drawing past the bar's own ends", () => {
+    expect(plain(progressBar(-0.5, 8, { depth: "none" }))).toBe(plain(progressBar(0, 8, { depth: "none" })));
+    expect(plain(progressBar(1.5, 8, { depth: "none" }))).toBe(plain(progressBar(1, 8, { depth: "none" })));
+  });
+
+  it("treats a non-finite fraction as empty rather than throwing or drawing garbage", () => {
+    expect(plain(progressBar(Number.NaN, 8, { depth: "none" }))).toBe(plain(progressBar(0, 8, { depth: "none" })));
+  });
+
+  it("lands a fraction inside a cell at sub-character precision, not just on whole blocks", () => {
+    // 37% of 10 cells is 3.7 — neither 3 nor 4 whole blocks alone is the honest answer.
+    const rendered = plain(progressBar(0.37, 10, { depth: "none" }));
+    expect(rendered).not.toBe(plain(progressBar(0.3, 10, { depth: "none" })));
+    expect(rendered).not.toBe(plain(progressBar(0.4, 10, { depth: "none" })));
+    expect(rendered.slice(0, 3)).toBe("███");
+    expect(rendered.slice(4)).toBe("░".repeat(6));
+  });
+
+  it("paints nothing when colour is off, and something when it is on", () => {
+    expect(progressBar(0.5, 10, { depth: "none" })).not.toMatch(ESCAPE);
+    expect(progressBar(0.5, 10, { depth: "truecolor" })).toMatch(ESCAPE);
+  });
+
+  it("only ever draws whole ASCII cells on an ASCII terminal, never a fractional block", () => {
+    const rendered = progressBar(0.37, 10, { depth: "none", glyphs: ASCII_GLYPHS });
+    for (const character of rendered) expect(character.codePointAt(0)).toBeLessThan(128);
+    expect(rendered).toBe("####------");
+  });
+
+  it("shows more of the gradient as the fraction grows, since the gradient runs across the whole width", () => {
+    // A 10% bar exposes only cells near the gradient's cool end; run its colours forward and a
+    // deeply-filled bar's tail should reach further toward the warm end than a barely-filled one's.
+    const low = progressBar(0.2, 20, { depth: "truecolor" });
+    const high = progressBar(0.9, 20, { depth: "truecolor" });
+    const lastColorOf = (rendered: string) => [...rendered.matchAll(/38;2;(\d+);(\d+);(\d+)m/g)].at(-1);
+    const lowEnd = lastColorOf(low)!;
+    const highEnd = lastColorOf(high)!;
+    // The default gradient runs blue (high blue channel) toward warm (low blue channel).
+    expect(Number(highEnd[3])).toBeLessThan(Number(lowEnd[3]));
   });
 });
 

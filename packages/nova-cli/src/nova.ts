@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, formatStatusLine, MarkdownStream, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, wrapPlain } from "./tui";
+import { box, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, StatusBar, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -42,7 +42,7 @@ import { JobStream, WatchRegistry, sandboxWarning } from "./job-stream";
 import { tabPanes, type WorkspaceSnapshot } from "./workspace-model";
 import { explainScreenRefusal, withFullScreen, type ScreenCapabilities, type TerminalControls } from "./screen-host";
 import { findTopic, parseGuideCommand, renderGuideIndex, renderGuideTopic, renderWholeGuide, searchTopics } from "./guide";
-import { DEFAULT_THEME_NAME, NO_COLOR_PALETTE, buildPalette, detectPreferredTheme, findBuiltinTheme, parseThemeCommand, type Palette } from "./theme";
+import { DEFAULT_THEME_NAME, NO_COLOR_PALETTE, buildPalette, detectPreferredTheme, findBuiltinTheme, parseColor, parseThemeCommand, type Palette, type Rgb } from "./theme";
 import { discoverThemes, findTheme, themeDirectory } from "./theme-files";
 import { buildWanderPrompt, gatherWanderEvidence, parseWanderCommand, wanderJobObjective } from "./wander";
 import { WANDER_LAB_FILES } from "@circuit-nova/nova-core/wander";
@@ -3327,7 +3327,25 @@ async function main(): Promise<number> {
       // The shape of spend across turns, not just the total — a flat line and a spike to the
       // same total are two very different sessions to have had.
       const trend = history.length > 1 ? `  ${style.dim(`spend  ${sparkline(history.map((turn) => turn.cost?.micros ?? 0), glyphs)}`)}\n` : "";
-      out.write(`${ledger.formatReport()}\n${trend}`);
+      const fraction = ledger.budgetFraction;
+      // Gradient runs the theme's own success colour toward its error colour — a bar barely
+      // filled reads calm because that is all of the gradient it has exposed yet, and one nearly
+      // spent reveals almost the whole run toward the warning end, without a separate threshold
+      // check anywhere in this file deciding when to turn it red.
+      const rgbToken = (value: string): Rgb | undefined => {
+        const parsed = parseColor(value);
+        // A named ANSI colour (e.g. high-contrast's "brightGreen") parses to a palette index, not
+        // an RGB triple — the gradient has no use for one, so it falls back to progressBar's own
+        // default rather than interpolating something that isn't a colour.
+        return typeof parsed === "object" ? parsed : undefined;
+      };
+      const meter = fraction === undefined ? "" : `  ${style.dim("budget")} [${progressBar(fraction, 24, {
+        depth: renderDepth,
+        glyphs,
+        from: rgbToken(palette.tokens.success),
+        to: rgbToken(palette.tokens.error),
+      })}] ${style.dim(`${Math.round(Math.min(1, fraction) * 100)}%`)}\n`;
+      out.write(`${ledger.formatReport()}\n${trend}${meter}`);
       continue;
     }
     if (input === "/where") {
