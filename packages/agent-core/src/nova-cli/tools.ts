@@ -8,7 +8,7 @@ import { isFindDelete, isRecursiveForceRemoval } from "./command";
 import type { HookRegistry } from "./hooks";
 import { NestedInstructionTracker } from "./nested-instructions";
 import { NOVA_CAPABILITIES } from "./permissions";
-import { COMBINED_SECRET_PATTERN, findSecretsInLine } from "./secret-scan";
+import { COMBINED_SECRET_PATTERN, findSecretsInLine, SEVERITY_RANK, type SecretFinding } from "./secret-scan";
 import { assertSupportedSchema, validateToolArguments, type ToolInputSchema } from "./tool-schema";
 import type { ToolProvider } from "./tool-providers";
 import { collectExternalTools } from "./tool-providers";
@@ -144,6 +144,21 @@ export function isRefusedCommand(command: string): boolean {
     || isFindDelete(command);
 }
 
+export type PlacedSecretFinding = SecretFinding & { path: string; line: number };
+
+/**
+ * The `scan_secrets` tool's own logic, exported so a UI surface (`nova.ts`'s `/scan`) can run the
+ * identical scan directly — without spending a model turn, and without the two ever drifting into
+ * scanning slightly different things. Sorted worst-first: a findings list a person reads top to
+ * bottom should read most-consequential first, the same convention `DEFENDER_PLAYBOOKS`' own
+ * category ordering already follows.
+ */
+export async function scanWorkspaceForSecrets(workspace: Pick<NovaWorkspace, "grep">, include?: string): Promise<PlacedSecretFinding[]> {
+  const matches = await workspace.grep(COMBINED_SECRET_PATTERN.source, { regex: true, include });
+  const findings = matches.flatMap((match) => findSecretsInLine(match.text).map((finding) => ({ path: match.path, line: match.line, ...finding })));
+  return findings.sort((left, right) => SEVERITY_RANK[left.severity] - SEVERITY_RANK[right.severity]);
+}
+
 export async function createNovaTools(options: NovaToolOptions): Promise<AgentTool[]> {
   const { workspace, todos } = options;
   const commandTimeoutMs = options.commandTimeoutMs ?? 120_000;
@@ -252,14 +267,13 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       parallelSafe: true,
       async execute(args) {
         const include = typeof args.include === "string" ? args.include : undefined;
-        const matches = await workspace.grep(COMBINED_SECRET_PATTERN.source, { regex: true, include });
-        const findings = matches.flatMap((match) => findSecretsInLine(match.text).map((finding) => ({ path: match.path, line: match.line, ...finding })));
+        const findings = await scanWorkspaceForSecrets(workspace, include);
         if (findings.length === 0) {
           return { content: "No likely secrets found by pattern in the scanned files.", data: { findings: [] } };
         }
-        const content = findings.map((finding) => `${finding.path}:${finding.line}: ${finding.kind} — ${finding.masked}`).join("\n");
+        const content = findings.map((finding) => `${finding.path}:${finding.line}: [${finding.severity}] ${finding.kind} — ${finding.masked}`).join("\n");
         return {
-          content: `${findings.length} possible secret${findings.length === 1 ? "" : "s"} found by pattern — verify each; a pattern match is a lead, not proof.\n${content}`,
+          content: `${findings.length} possible secret${findings.length === 1 ? "" : "s"} found by pattern, worst first — verify each; a pattern match is a lead, not proof.\n${content}`,
           data: { findings },
         };
       },

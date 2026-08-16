@@ -3521,6 +3521,33 @@ async function main(): Promise<number> {
       }
       continue;
     }
+    if (input === "/scan" || input.startsWith("/scan ")) {
+      const include = input.slice("/scan".length).trim() || undefined;
+      out.write(style.dim("  scanning for likely hardcoded secrets…\n"));
+      const findings = await agent.scanSecrets(include);
+      if (findings.length === 0) {
+        out.write(`  ${style.green(glyphs.check)} No likely secrets found by pattern${include ? ` in ${include}` : ""}.\n`);
+        continue;
+      }
+      const bySeverity = new Map<string, number>();
+      for (const finding of findings) bySeverity.set(finding.severity, (bySeverity.get(finding.severity) ?? 0) + 1);
+      out.write(`  ${style.yellow(`${findings.length} possible secret${findings.length === 1 ? "" : "s"}`)} found by pattern, worst first — verify each; a pattern match is a lead, not proof.\n`);
+      // Severity, not count-per-file: what a person triaging this list needs first is "how bad",
+      // read by shade — exactly what `heatStrip` is for over `barChart`, which would instead answer
+      // "how many" per row and bury the one critical finding among a pile of medium ones.
+      for (const line of heatStrip(
+        (["critical", "high", "medium"] as const)
+          .filter((severity) => bySeverity.has(severity))
+          .map((severity) => ({ label: severity, value: bySeverity.get(severity) ?? 0 })),
+        { width: Math.min(60, contentWidth()), depth: renderDepth, glyphs, max: findings.length },
+      )) out.write(`  ${line}\n`);
+      out.write("\n");
+      for (const finding of findings) {
+        const severityColor = finding.severity === "critical" ? style.red : finding.severity === "high" ? style.yellow : style.dim;
+        out.write(`  ${severityColor(`[${finding.severity}]`)} ${finding.path}:${finding.line}: ${finding.kind} — ${style.dim(finding.masked)}\n`);
+      }
+      continue;
+    }
     if (input === "/where") {
       out.write(`  ${workspace.kind === "e2b" ? style.yellow(workspace.label) : style.dim(workspace.label)}\n`);
       continue;

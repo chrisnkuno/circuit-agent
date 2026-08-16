@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { COMBINED_SECRET_PATTERN, findSecretsInLine, maskSecret } from "./secret-scan";
+import { COMBINED_SECRET_PATTERN, findSecretsInLine, maskSecret, SECRET_PATTERNS, SEVERITY_RANK } from "./secret-scan";
 
 describe("findSecretsInLine", () => {
-  it("finds an AWS access key", () => {
+  it("finds an AWS access key, ranked critical", () => {
     const found = findSecretsInLine('const key = "AKIAABCDEFGHIJKLMNOP";');
-    expect(found).toEqual([{ kind: "AWS access key", masked: "AKIA…MNOP (20 chars)" }]);
+    expect(found).toEqual([{ kind: "AWS access key", masked: "AKIA…MNOP (20 chars)", severity: "critical" }]);
   });
 
   it("finds a GitHub token", () => {
@@ -36,6 +36,22 @@ describe("findSecretsInLine", () => {
     // The 16-char minimum exists so `token = 'x'` (a variable named token, not a secret) is not a
     // false positive on every codebase that happens to use that word as an identifier.
     expect(findSecretsInLine('token = "short"')).toEqual([]);
+  });
+});
+
+describe("severity", () => {
+  it("gives every pattern a severity, and ranks critical above high above medium", () => {
+    for (const pattern of SECRET_PATTERNS) expect(["critical", "high", "medium"]).toContain(pattern.severity);
+    expect(SEVERITY_RANK.critical).toBeLessThan(SEVERITY_RANK.high);
+    expect(SEVERITY_RANK.high).toBeLessThan(SEVERITY_RANK.medium);
+  });
+
+  it("ranks a private key and a generic credential-looking assignment at opposite ends", () => {
+    const key = findSecretsInLine("-----BEGIN RSA PRIVATE KEY-----")[0];
+    const generic = findSecretsInLine('api_key = "abcdefghij1234567890"')[0];
+    expect(key.severity).toBe("critical");
+    expect(generic.severity).toBe("medium");
+    expect(SEVERITY_RANK[key.severity]).toBeLessThan(SEVERITY_RANK[generic.severity]);
   });
 });
 

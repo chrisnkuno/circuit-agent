@@ -64,7 +64,18 @@ describe("nova tool set", () => {
     expect(result.content).toContain("AWS access key");
     expect(result.content).toContain("AKIA…MNOP"); // masked
     expect(result.content).not.toContain("AKIAABCDEFGHIJKLMNOP"); // never the value in full
-    expect(result.data).toMatchObject({ findings: [{ path: "src/config.ts", line: 1, kind: "AWS access key" }] });
+    expect(result.content).toContain("[critical] AWS access key");
+    expect(result.data).toMatchObject({ findings: [{ path: "src/config.ts", line: 1, kind: "AWS access key", severity: "critical" }] });
+  });
+
+  it("orders findings worst severity first, regardless of which file they were found in", async () => {
+    await fs.writeFile(path.join(root, "src", "config.ts"), 'const token = "abcdefghij1234567890";\n');
+    await fs.writeFile(path.join(root, "src", "other.ts"), 'const key = "AKIAABCDEFGHIJKLMNOP";\n');
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const result = await toolNamed(tools, "scan_secrets").execute({}, context);
+    const findings = result.data!.findings as Array<{ severity: string }>;
+    expect(findings[0].severity).toBe("critical");
+    expect(findings.at(-1)!.severity).toBe("medium");
   });
 
   it("finds nothing in a project with no secret-shaped strings", async () => {

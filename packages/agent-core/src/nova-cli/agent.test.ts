@@ -465,6 +465,17 @@ describe("NovaAgent", () => {
     expect(gitCalls.some((args) => args[0] === "diff")).toBe(true);
   });
 
+  it("scans for secrets directly, worst severity first, without spending a model turn", async () => {
+    await fs.writeFile(path.join(root, "config.ts"), 'const token = "abcdefghij1234567890";\nconst key = "AKIAABCDEFGHIJKLMNOP";\n');
+    const model = scriptedModel([]);
+    const agent = new NovaAgent({ root, model, prices, mode: "plan", approve: async () => "deny" });
+
+    const findings = await agent.scanSecrets();
+    expect(findings.map((finding) => finding.severity)).toEqual(["critical", "medium"]);
+    expect(findings[0]).toMatchObject({ path: "config.ts", kind: "AWS access key" });
+    expect(model.requests).toHaveLength(0); // no model call was made
+  });
+
   it("lists every checkpoint taken so far, and disposes the workspace on request", async () => {
     const model = scriptedModel([{ finishReason: "stop", content: "Done." }, { finishReason: "stop", content: "Done again." }]);
     const agent = new NovaAgent({

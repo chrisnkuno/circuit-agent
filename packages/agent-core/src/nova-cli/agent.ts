@@ -19,7 +19,7 @@ import {
 } from "./session";
 import { loadLocalExternalTooling, type LocalExternalTooling } from "./external-tools";
 import { NestedInstructionTracker } from "./nested-instructions";
-import { createNovaTools, TodoList, type DelegateResult, type DelegateRunner, type TodoItem } from "./tools";
+import { createNovaTools, scanWorkspaceForSecrets, TodoList, type DelegateResult, type DelegateRunner, type PlacedSecretFinding, type TodoItem } from "./tools";
 import type { Expense } from "./cost";
 import { predictAgentUsage, type AgentCostPrediction } from "./cost";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
@@ -205,6 +205,11 @@ export class NovaAgent {
 
   diffStat(): Promise<string> {
     return this.checkpoints.diffStat();
+  }
+
+  /** The deterministic secret scan, run directly against the workspace — for `/scan`. No model turn, no approval: same read-only guarantee as the `scan_secrets` tool it shares its logic with. */
+  scanSecrets(include?: string): Promise<PlacedSecretFinding[]> {
+    return scanWorkspaceForSecrets(this.workspace, include);
   }
 
   /** Releases the backend. For E2B that stops the sandbox; locally it does nothing. */

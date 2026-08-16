@@ -69,6 +69,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     body: [
       "Four modes, and you can change them at any time. Plan reads and reasons but cannot write or run commands. Build is the default: edits are proposed and you approve them. Auto applies ordinary workspace edits without asking, while anything sensitive or reaching outside the workspace still stops for you. Defender turns Nova into a security reviewer — full tool access to actually scan and fix, but never auto-approved, the same posture as Build.",
       "Defender also looks outward: when web search is configured it checks current advisories against what the project actually depends on, remembers durable findings in project memory so the next review builds on this one, and closes out with concrete, costed remediation resources fitted to how the project actually hosts and deploys — not a generic checklist.",
+      "/scan runs the deterministic half of defender's own secrets playbook directly — no model turn, no mode switch needed. It is the same pattern-matching scan_secrets uses, worst severity first: a private key or a live cloud credential ahead of a merely credential-shaped variable name.",
       "The mode is per tab, so one piece of work can be on a short leash while another runs freely.",
     ],
     examples: [
@@ -77,8 +78,10 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       { input: "/auto", effect: "ordinary edits apply; sensitive actions still ask" },
       { input: "/defender", effect: "security review — find and fix real issues; every change still asks" },
       { input: "/mode", effect: "show which mode you are in" },
+      { input: "/scan", effect: "pattern-based secret scan, worst severity first, no model call" },
+      { input: "/scan src/**", effect: "same scan, limited to files matching the glob" },
     ],
-    covers: ["/mode", "/plan", "/build", "/auto", "/defender"],
+    covers: ["/mode", "/plan", "/build", "/auto", "/defender", "/scan"],
   },
   {
     id: "tabs",
