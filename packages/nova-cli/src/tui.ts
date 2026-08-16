@@ -868,6 +868,123 @@ export function renderPromptBox(options: {
 }
 
 /**
+ * The part of a line that has wrapped past its first row, given the column the cursor started at.
+ *
+ * Exists because readline wraps. Bubbles' `textinput` has no equivalent and needs none: its
+ * `handleOverflow` slides a horizontal viewport (`offset`/`offsetRight`) so the field is always
+ * exactly one row tall and the cursor is always inside it — the text scrolls sideways instead of
+ * ever reaching a second row. That is the better design and it is not available here, because
+ * readline owns echo and line editing (which is what buys history, completion and bracketed paste)
+ * and it wraps. So the box has to know what spilled, rather than prevent the spill.
+ */
+export function wrappedRemainder(line: string, startColumns: number, width: number): string {
+  let used = startColumns;
+  for (let index = 0; index < line.length; index += 1) {
+    const next = visibleWidth(line[index]);
+    if (used + next > width) return line.slice(index);
+    used += next;
+  }
+  return "";
+}
+
+/**
+ * Draws and erases the chat-style input bar *inline*, tracking only the rows it printed.
+ *
+ * The counterpart to `PinnedScreen`'s reserved-row version, and the one almost every session
+ * actually gets: pinning the footer costs the terminal's scrollback (a held `DECSTBM` region means
+ * scrolled-off lines are never saved), so it is off unless asked for — which left the default
+ * session with a bare `nova ›` and no bar at all. This draws the same box by printing it and then
+ * erasing exactly what it printed, which costs no scrollback and holds no region.
+ *
+ * The trade is that readline is redrawing the same rows. `question(prefix)` is what makes it
+ * survivable: the left border is handed over as the *prompt*, so readline reprints it as part of
+ * every editing redraw instead of overwriting it. The closing border has no such protection and is
+ * only guaranteed while the line is typed forward — hence `dropBorder`, which opens the box rather
+ * than letting the border sit under a line of text.
+ */
+export class PromptBox {
+  private drawn = false;
+  private borderCleared = false;
+
+  constructor(
+    private readonly stream: OutputStream = terminalStream,
+    private readonly options: {
+      depth: ColorDepth;
+      glyphs?: GlyphSet;
+      borderStyle?: "round" | "single" | "double" | "none";
+      columns?: () => number;
+    } = { depth: "none" },
+  ) {}
+
+  get isDrawn(): boolean {
+    return this.drawn;
+  }
+
+  private get width(): number {
+    // Floored at one: a degenerate stream can report zero columns (a 0x0 pty), and the erase below
+    // divides by this.
+    return Math.max(1, this.options.columns?.() ?? this.stream.columns ?? 80);
+  }
+
+  /**
+   * Renders the box and parks the cursor at the start of its input row, returning the prefix to
+   * hand to readline's `question()`.
+   */
+  draw(mode: string, workspace: string, status?: string): string {
+    const { top, prefix, bottom } = renderPromptBox({
+      mode,
+      workspace,
+      depth: this.options.depth,
+      width: this.width,
+      ...(status === undefined ? {} : { status }),
+      ...(this.options.glyphs === undefined ? {} : { glyphs: this.options.glyphs }),
+      ...(this.options.borderStyle === undefined ? {} : { borderStyle: this.options.borderStyle }),
+    });
+    this.stream.write(`${top}\n`);
+    this.stream.write(`\n${bottom}`);
+    // Back onto the input row at column one; `question()` writes the prefix from there.
+    this.stream.write("\x1b[1A\r");
+    this.drawn = true;
+    this.borderCleared = false;
+    return prefix;
+  }
+
+  /**
+   * Removes the box once a line resolves, leaving the cursor on the row the top border occupied so
+   * the caller can print the next transcript line exactly there.
+   *
+   * The count follows the geometry readline leaves behind at submit: it redraws `prefix + line`
+   * from column one (the prefix survives because it is the prompt), then finishes with a newline.
+   * `prefix` is four columns, so a submitted line of width `W` occupies
+   * `floor((4 + W - 1) / width)` rows below the border — plus the input row, the newline row, and
+   * the border row itself.
+   */
+  erase(submitted: string): void {
+    if (!this.drawn) return;
+    const rows = Math.floor((PROMPT_PREFIX_COLUMNS + visibleWidth(submitted) - 1) / this.width) + 3;
+    for (let index = 0; index < rows; index += 1) this.stream.write("\x1b[1A\x1b[2K");
+    this.drawn = false;
+  }
+
+  /**
+   * Opens the box once the typed line has wrapped past its input row, dropping the closing border
+   * and re-showing the wrapped remainder so the border cannot sit underneath text.
+   *
+   * Bubbles would not need this — see `wrappedRemainder`. Given readline does wrap, opening the box
+   * is the honest failure mode: a bar missing its bottom edge reads as "still typing", where a
+   * border stranded in the middle of a message reads as a rendering fault.
+   */
+  dropBorder(remainder: string): void {
+    if (!this.drawn || this.borderCleared || remainder === "") return;
+    // The cursor is on the border row the moment wrapping starts: clear it and rewrite the
+    // remainder, so the text that already wrapped onto it is not lost.
+    this.stream.write("\r\x1b[2K");
+    this.stream.write(remainder);
+    this.borderCleared = true;
+  }
+}
+
+/**
  * Wraps plain text at a column budget, breaking at word boundaries and hard-slicing only a word
  * longer than the whole budget.
  */

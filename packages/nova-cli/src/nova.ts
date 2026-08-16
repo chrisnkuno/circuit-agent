@@ -19,7 +19,7 @@ import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, r
 import { buildPickerRows } from "./model-picker";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
+import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, PromptBox, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
 import { PinnedScreen } from "./screen";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
@@ -1839,6 +1839,23 @@ async function main(): Promise<number> {
   const promptFrame = (status: string) =>
     renderPromptBox({ mode, workspace: where, depth, width: promptWidth(), status, glyphs, borderStyle: palette.borderStyle });
 
+  /**
+   * The inline input bar, for the sessions that do not pin a footer — which is almost all of them,
+   * since pinning costs the terminal's scrollback and is therefore off unless asked for.
+   *
+   * Without this the default session had no bar at all: `showStatus` fell through to a plain status
+   * line and the prompt to a bare `nova ›`. The chat-app box existed only under `--pin`, which is
+   * exactly backwards — the polish was reserved for the configuration almost nobody runs.
+   */
+  const promptBox = new PromptBox(out, {
+    depth,
+    glyphs,
+    borderStyle: palette.borderStyle,
+    columns: promptWidth,
+  });
+  /** True when the inline bar owns the bottom rows: a real TTY that is not holding a region. */
+  const inlineBar = (): boolean => ttyMode && screen !== undefined && !screen.pinned;
+
   /** How wide a status line may be to fit on the bar's top border beside the title. */
   const statusRoomFor = (width: number) => promptStatusRoom(mode, where, width, glyphs);
 
@@ -1853,6 +1870,11 @@ async function main(): Promise<number> {
       const frame = promptFrame(status);
       screen.renderStatus(frame.top);
       screen.renderPromptBottom(frame.bottom);
+    } else if (inlineBar() && !turnActive) {
+      // Between turns the inline bar carries the status on its own top border, so a separate
+      // status line would say the same thing twice, one row apart. Mid-turn there is no bar drawn
+      // — the activity line is the only status there is — and `statusBar` remains the right home.
+      statusBar.clear();
     } else if (ttyMode) statusBar.renderLine(status);
   };
 
@@ -2376,6 +2398,13 @@ async function main(): Promise<number> {
      */
     const paintSuggestions = (_str: string | undefined, key: { name?: string } | undefined) => setImmediate(() => {
       if (turnActive || browsing) return;
+      // The dropdown needs rows of its own, and only a held region actually has any: without one
+      // it borrows them by scrolling the transcript, which is destructive, and it would be doing
+      // that to rows the inline bar is drawn on. Two owners of the bottom of the screen is the
+      // mistake that produced the blank-space bug; one owner is the rule. Under `--pin` the region
+      // is real and the dropdown keeps working. Elsewhere Tab still completes, `/help` still lists,
+      // and Ctrl+G still opens the searchable palette.
+      if (inlineBar()) return;
       const line = (readline as { line?: string }).line ?? "";
       const suggestions = suggestionsFor(line, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model));
       if (suggestions.length === 0) { screen?.clearSuggestions(); return; }
@@ -2477,12 +2506,20 @@ async function main(): Promise<number> {
       // box to have a side of, and the old inline label is still the right thing — with the leading
       // blank line it has always had on a session with no screen of any kind to separate it from.
       const label = `${style.cyan(mode === "plan" ? "plan" : mode === "auto" ? "auto" : mode === "defender" ? "defender" : "nova")}${style.dim(` ${glyphs.caret} `)}`;
-      const promptLabel = screen?.pinned ? promptFrame(idleStatusLine()).prefix : screen ? label : `\n${label}`;
+      const promptLabel = screen?.pinned
+        ? promptFrame(idleStatusLine()).prefix
+        : inlineBar()
+          ? promptBox.draw(mode, where, idleStatusLine())
+          : screen ? label : `\n${label}`;
       rawInput = await readline.question(promptLabel);
     } catch (error) {
       if (isReadlineExit(error) || exitRequested) break;
       throw error;
     }
+    // Erased before anything else prints, and with the submitted line in hand so the count covers
+    // however many rows it wrapped onto. Leaves the cursor exactly where the top border was, which
+    // is where the "you" bubble for this message is about to go.
+    promptBox.erase(rawInput);
     // Before parking, so the transcript region is whole again before anything is written into it.
     screen?.clearSuggestions();
     screen?.parkInTranscript();

@@ -12,6 +12,7 @@ import {
   novaSpinnerFrame,
   paginator,
   progressBar,
+  PromptBox,
   PROMPT_PREFIX_COLUMNS,
   promptStatusRoom,
   renderPromptBox,
@@ -26,6 +27,7 @@ import {
   StatusBar,
   table,
   thinkingVerb,
+  wrappedRemainder,
   wrapPlain,
 } from "./tui";
 
@@ -941,5 +943,124 @@ describe("wrapPlain", () => {
     for (const line of wrapPlain("日本語のテキストがここにあります", 10)) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(10);
     }
+  });
+});
+
+describe("wrappedRemainder", () => {
+  it("returns nothing while the line still fits on its first row", () => {
+    expect(wrappedRemainder("a short line", 4, 80)).toBe("");
+    expect(wrappedRemainder("", 4, 80)).toBe("");
+  });
+
+  it("returns exactly the part that spilled onto the next row", () => {
+    // The input row starts four columns in, so at width 20 the first row holds sixteen
+    // characters and the remaining four spill over.
+    expect(wrappedRemainder("x".repeat(20), 4, 20)).toBe("x".repeat(4));
+  });
+
+  it("counts a double-width character as two columns, not one", () => {
+    // Width 12 with a four-column start leaves eight columns: 日本語日 fits, the rest wraps.
+    expect(wrappedRemainder("日本語".repeat(3), 4, 12)).toBe("本語日本語");
+  });
+
+  it("accounts for the starting column, not just the line", () => {
+    // The same line wraps sooner the further right it begins.
+    expect(wrappedRemainder("x".repeat(10), 0, 12)).toBe("");
+    expect(wrappedRemainder("x".repeat(10), 6, 12)).toBe("x".repeat(4));
+  });
+});
+
+describe("PromptBox", () => {
+  it("draws the box and parks the cursor at the start of the input row, returning the prefix", () => {
+    const { stream, writes, output } = fakeStream(60);
+    const promptBox = new PromptBox(stream, { depth: "none", columns: () => 60 });
+    expect(promptBox.isDrawn).toBe(false);
+
+    const prefix = promptBox.draw("build", "circuit-agent");
+    expect(plain(prefix)).toBe("│ › ");
+    expect(visibleWidth(plain(prefix))).toBe(PROMPT_PREFIX_COLUMNS);
+    expect(promptBox.isDrawn).toBe(true);
+    expect(writes).toHaveLength(3); // header row, closing border, cursor reposition
+    expect(output()).toContain("\x1b[1A\r"); // back onto the input row, column one
+  });
+
+  it("erases exactly the rows the box and the submitted line occupy, wrapping included", () => {
+    const { stream, writes } = fakeStream(80);
+    const promptBox = new PromptBox(stream, { depth: "none", columns: () => 80 });
+
+    promptBox.draw("build", "circuit-agent");
+    writes.length = 0;
+    promptBox.erase("");
+    expect(writes).toHaveLength(3); // input row, newline row, top border
+    for (const write of writes) expect(write).toBe("\x1b[1A\x1b[2K");
+
+    promptBox.draw("build", "circuit-agent");
+    writes.length = 0;
+    promptBox.erase("x".repeat(200)); // spills onto two further rows at width 80
+    expect(writes).toHaveLength(5);
+  });
+
+  it("erasing before anything was drawn is a safe no-op", () => {
+    const { stream, writes } = fakeStream();
+    new PromptBox(stream, { depth: "none" }).erase("");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("never divides by a zero-column stream — a 0x0 pty must not spin forever", () => {
+    const { stream, writes } = fakeStream(0);
+    const promptBox = new PromptBox(stream, { depth: "none", columns: () => 0 });
+    promptBox.draw("build", "x");
+    writes.length = 0;
+    promptBox.erase("some text");
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.length).toBeLessThan(100); // bounded, not an infinite erase
+  });
+
+  it("drops the closing border once, re-showing the wrapped text, and not again after", () => {
+    const { stream, writes, output } = fakeStream(60);
+    const promptBox = new PromptBox(stream, { depth: "none", columns: () => 60 });
+    promptBox.draw("build", "circuit-agent");
+    writes.length = 0;
+
+    promptBox.dropBorder("the remainder that wrapped");
+    expect(writes).toHaveLength(2);
+    expect(output()).toContain("\r\x1b[2K");
+    expect(output()).toContain("the remainder that wrapped");
+
+    promptBox.dropBorder("more"); // already opened — nothing further is written
+    expect(writes).toHaveLength(2);
+  });
+
+  it("ignores a dropBorder with nothing to show, or before the box exists", () => {
+    const { stream, writes } = fakeStream(60);
+    const promptBox = new PromptBox(stream, { depth: "none", columns: () => 60 });
+    promptBox.dropBorder("something"); // not drawn yet
+    expect(writes).toHaveLength(0);
+    promptBox.draw("build", "x");
+    writes.length = 0;
+    promptBox.dropBorder(""); // nothing wrapped
+    expect(writes).toHaveLength(0);
+  });
+
+  it("re-arms the border on the next draw, so a reopened box closes again", () => {
+    const { stream, writes } = fakeStream(60);
+    const promptBox = new PromptBox(stream, { depth: "none", columns: () => 60 });
+    promptBox.draw("build", "x");
+    promptBox.dropBorder("wrapped");
+    promptBox.erase("wrapped");
+    promptBox.draw("build", "x");
+    writes.length = 0;
+    promptBox.dropBorder("wrapped again");
+    expect(writes).toHaveLength(2); // opened again rather than staying latched open
+  });
+
+  it("paints colour only when colour was asked for", () => {
+    const bare = fakeStream(60);
+    new PromptBox(bare.stream, { depth: "none", columns: () => 60 }).draw("build", "x");
+    expect(bare.output()).not.toMatch(ESCAPE);
+
+    const painted = fakeStream(60);
+    new PromptBox(painted.stream, { depth: "truecolor", columns: () => 60 }).draw("build", "x");
+    expect(painted.output()).toMatch(ESCAPE);
   });
 });
