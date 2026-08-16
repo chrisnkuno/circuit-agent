@@ -1,0 +1,4 @@
+[test]
+# A DOM for every test file. Pure-logic tests are unaffected by its presence; component tests
+# cannot run without it.
+preload = ["./happydom.ts"]
