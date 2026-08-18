@@ -121,8 +121,15 @@ export function ChatScreen(props: {
   const { messages, approval, costReport, displayTotal, budgetFraction, error } = chat;
 
   /** Patches the tab in front. Every old `setSomething` became one of these. */
+  // Resolved through `findTab` rather than keyed straight into `updateTab`, for the same reason
+  // `patchChat` is: the id a caller captured before an open can be the local one the tab has since
+  // traded for the sidecar's, and a patch that matches nothing fails silently. `setBusy(false)` in
+  // an open's `finally` is exactly that case, and losing it leaves the tab busy for good.
   const patchTab = (patch: Partial<Omit<WindowTab, "tabId">>, id: string | undefined = tabId) =>
-    setTabsState((state) => (id ? updateTab(state, id, patch) : state));
+    setTabsState((state) => {
+      const target = id ? findTab(state, id) : undefined;
+      return target ? updateTab(state, target.tabId, patch) : state;
+    });
   const patchChat = (update: (chat: ChatState) => ChatState, id: string | undefined = tabId) =>
     setTabsState((state) => {
       const target = id ? findTab(state, id) : undefined;
