@@ -30,6 +30,11 @@ jobs:
       - name: Install workspace dependencies
         run: bun install --frozen-lockfile
         working-directory: .
+
+      # See release-desktop.yml: nova-core's types live in a gitignored dist.
+      - name: Build workspace packages
+        run: bun run build:packages
+        working-directory: .
       - name: Build Windows sidecar
         run: npm run sidecar:binary -- x86_64-pc-windows-msvc
       - name: Build Tauri (NSIS + MSI)

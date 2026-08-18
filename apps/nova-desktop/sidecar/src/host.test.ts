@@ -281,3 +281,50 @@ describe("files a turn creates", () => {
     await expect(request({ type: "session.open", root, mode: "auto", sandbox: true })).rejects.toThrow(/E2B_API_KEY/i);
   }, 60_000);
 });
+
+/**
+ * Reading a file without leaving the window.
+ *
+ * The explorer's preview asks the session for the file rather than the disk, which is the whole
+ * point: a sandboxed tab is working on a copy that does not exist on this machine, and answering
+ * "what is in this file" with a same-named local file would be worse than answering nothing.
+ */
+describe("reading a file for the explorer", () => {
+  it("returns what the file holds, through the session's own workspace", async () => {
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await tempProject("read-one");
+    await fs.writeFile(path.join(root, "readme.md"), "line one\nline two\n", "utf8");
+    const opened = await request({ type: "session.open", root }) as { tabId: string };
+
+    const result = await request({ type: "files.read", path: "readme.md", tabId: opened.tabId }) as { file: { content: string; totalLines: number } };
+    expect(result.file.content).toContain("line one");
+    expect(result.file.totalLines).toBe(3);
+  }, 60_000);
+
+  it("reads from the tab it was asked about, not from whichever is in front", async () => {
+    // The failure this prevents is silent: the preview would show a real file with the right name
+    // from the wrong project, and nothing on screen would say so.
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const first = await tempProject("read-a");
+    const second = await tempProject("read-b");
+    await fs.writeFile(path.join(first, "same.txt"), "FIRST", "utf8");
+    await fs.writeFile(path.join(second, "same.txt"), "SECOND", "utf8");
+    const a = await request({ type: "session.open", root: first }) as { tabId: string };
+    await request({ type: "session.open", root: second });
+
+    const result = await request({ type: "files.read", path: "same.txt", tabId: a.tabId }) as { file: { content: string } };
+    expect(result.file.content).toBe("FIRST");
+  }, 60_000);
+
+  it("refuses to read its way out of the project", async () => {
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await tempProject("read-escape");
+    await fs.writeFile(path.join(path.dirname(root), "outside.txt"), "SECRET", "utf8");
+    const opened = await request({ type: "session.open", root }) as { tabId: string };
+
+    await expect(request({ type: "files.read", path: "../outside.txt", tabId: opened.tabId })).rejects.toThrow();
+  }, 60_000);
+});

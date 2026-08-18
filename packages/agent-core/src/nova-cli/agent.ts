@@ -24,7 +24,7 @@ import { createNovaTools, scanWorkspaceForSecrets, TodoList, type DelegateResult
 import type { Expense } from "./cost";
 import { predictAgentUsage, type AgentCostPrediction } from "./cost";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
-import type { WorkspaceLimits } from "./workspace";
+import type { ReadResult, WorkspaceLimits } from "./workspace";
 
 /**
  * Nova CLI's agent: the hosted `BoundedAgentRuntime`, hosted locally instead.
@@ -216,6 +216,19 @@ export class NovaAgent {
    */
   listFiles(pattern = "**/*"): Promise<string[]> {
     return this.workspace.glob(pattern);
+  }
+
+  /**
+   * One file's contents, for looking at rather than for changing.
+   *
+   * The same guarantees as `listFiles`, and for the same reason: through `this.workspace`, so a
+   * sandboxed session shows the sandbox's copy and not the host's — reading the local disk here
+   * would show a file the agent is not working on, which is worse than showing nothing. Read-only,
+   * no model turn, no approval, and the workspace's own root confinement and size limits apply, so
+   * this cannot be pointed outside the project.
+   */
+  readFile(path: string, options: { offset?: number; limit?: number } = {}): Promise<ReadResult> {
+    return this.workspace.readFile(path, options);
   }
 
   /** The deterministic secret scan, run directly against the workspace — for `/scan`. No model turn, no approval: same read-only guarantee as the `scan_secrets` tool it shares its logic with. */

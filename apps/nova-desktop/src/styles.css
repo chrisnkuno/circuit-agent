@@ -1626,3 +1626,58 @@ button {
   font-size: 0.78rem;
   white-space: nowrap;
 }
+
+/* The explorer's two panes — tree on the left, the file itself on the right. See FilePanel.tsx.
+   A fixed two-column grid rather than a resizable split: the point of the pane is to answer "what
+   is in this file" without leaving the window, and a divider to drag is one more thing to fiddle
+   with before getting the answer. */
+.file-explorer { max-width: 1040px; width: 92vw; }
+.file-explorer-panes {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 1.4fr);
+  gap: 14px;
+  align-items: start;
+}
+.file-explorer-tree { min-width: 0; }
+.file-btn.selected { background: rgba(127, 127, 127, 0.22); }
+.file-preview {
+  min-width: 0;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  /* Matches .file-tree so the two panes end level rather than one dragging the modal taller. */
+  max-height: 460px;
+  overflow: auto;
+}
+.file-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.file-preview-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  /* A long path truncates at the front, keeping the file name — the end of a path identifies it. */
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-preview-body {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  /* Wide lines scroll inside the pane instead of widening the dialog. */
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+.file-preview-foot { margin: 8px 0 0; font-size: 11px; opacity: 0.7; }
+
+@media (max-width: 780px) {
+  .file-explorer-panes { grid-template-columns: 1fr; }
+}

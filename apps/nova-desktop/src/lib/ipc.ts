@@ -165,6 +165,19 @@ export async function listFiles(pattern?: string, tabId?: string) {
   return await sidecarRequest<{ files: string[] }>({ type: "files.list", ...(pattern ? { pattern } : {}), ...(tabId ? { tabId } : {}) });
 }
 
+/** What one file holds, as the session's workspace sees it — the sandbox's copy for a sandboxed tab. */
+export type FileContents = {
+  path: string;
+  content: string;
+  startLine: number;
+  totalLines: number;
+  truncated: boolean;
+};
+
+export async function readFile(path: string, tabId?: string, limit?: number) {
+  return await sidecarRequest<{ file?: FileContents }>({ type: "files.read", path, ...(limit ? { limit } : {}), ...(tabId ? { tabId } : {}) });
+}
+
 export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promise<UnlistenFn> {
   return await listen<IpcEvent>("sidecar-event", (event) => handler(event.payload));
 }
