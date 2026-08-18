@@ -51,37 +51,64 @@ export function ModeBar(props: {
           is a control most people will never be sure of. */}
       <span className="mode-hint">{active?.hint}</span>
 
+      {/*
+        * Three groups, not six buttons.
+        *
+        * They do genuinely different kinds of thing — look at something, change what has already
+        * happened, choose where the work runs — and a flat row said none of that. The separators
+        * are decorative and hidden from assistive technology, which reads the group labels instead.
+        */}
       <div className="mode-actions">
-        <button className="btn ghost" onClick={props.onShowDiff} type="button" title="See what changed since the last checkpoint">
-          Changes
-        </button>
-        <button className="btn ghost" onClick={props.onFiles} type="button" title="Browse the project and mention a file">
-          Files
-        </button>
-        <button className="btn ghost" onClick={props.onScan} type="button" title="Scan the working tree for likely hardcoded secrets — no model turn needed">
-          Scan
-        </button>
-        <button className="btn ghost" disabled={props.busy} onClick={props.onUndo} type="button" title="Revert the last turn's file changes">
-          Undo
-        </button>
-        <button className="btn ghost" disabled={!props.busy} onClick={props.onCancel} type="button" title="Stop the turn in progress">
-          Stop
-        </button>
-        <button
-          className={`btn ghost toggle ${props.sandbox ? "on" : ""}`}
-          disabled={props.busy}
-          onClick={props.onToggleSandbox}
-          type="button"
-          aria-pressed={props.sandbox}
-          title="Run the work on a remote E2B machine instead of this one"
-        >
-          Sandbox
-        </button>
-        {props.sandbox ? (
-          <button className="btn ghost" disabled={props.busy} onClick={props.onPull} type="button" title="Copy the sandbox's files back to this machine">
-            Pull files
+        <div className="btn-group" role="group" aria-label="Inspect the project">
+          <button className="btn ghost" onClick={props.onShowDiff} type="button" title="See what changed since the last checkpoint (Ctrl D)">
+            Changes
           </button>
-        ) : null}
+          <button className="btn ghost" onClick={props.onFiles} type="button" title="Browse the project, read a file, mention one (Ctrl P)">
+            Files
+          </button>
+          <button className="btn ghost" onClick={props.onScan} type="button" title="Scan the working tree for likely hardcoded secrets — no model turn needed">
+            Scan
+          </button>
+        </div>
+
+        <span className="action-sep" aria-hidden="true" />
+
+        <div className="btn-group" role="group" aria-label="This turn">
+          <button className="btn ghost" disabled={props.busy} onClick={props.onUndo} type="button" title="Revert the last turn's file changes (Ctrl Z)">
+            Undo
+          </button>
+          {/* Red only while there is something to stop: a permanently red button in a toolbar stops
+              meaning "careful" and starts meaning "decoration". */}
+          <button
+            className={`btn ${props.busy ? "danger" : "ghost"}`}
+            disabled={!props.busy}
+            onClick={props.onCancel}
+            type="button"
+            title="Stop the turn in progress (Esc)"
+          >
+            Stop
+          </button>
+        </div>
+
+        <span className="action-sep" aria-hidden="true" />
+
+        <div className="btn-group" role="group" aria-label="Where the work runs">
+          <button
+            className={`btn toggle ${props.sandbox ? "on" : "ghost"}`}
+            disabled={props.busy}
+            onClick={props.onToggleSandbox}
+            type="button"
+            aria-pressed={props.sandbox}
+            title="Run the work on a remote E2B machine instead of this one"
+          >
+            Sandbox
+          </button>
+          {props.sandbox ? (
+            <button className="btn ghost" disabled={props.busy} onClick={props.onPull} type="button" title="Copy the sandbox's files back to this machine">
+              Pull files
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

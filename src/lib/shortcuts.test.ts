@@ -68,6 +68,7 @@ describe("the documented list", () => {
     const produced = new Set([
       matchShortcut({ key: "Enter", ctrlKey: true }),
       matchShortcut({ key: "Escape" }),
+      matchShortcut({ key: "F1" }),
       matchShortcut({ key: "/", ctrlKey: true }),
       matchShortcut({ key: "m", ctrlKey: true }),
       matchShortcut({ key: "d", ctrlKey: true }),
@@ -184,5 +185,17 @@ describe("reaching the project's files", () => {
 
   it("is listed, so it can be found without being told", () => {
     expect(SHORTCUTS.some((binding) => binding.action === "files")).toBe(true);
+  });
+});
+
+describe("opening the guide", () => {
+  it("answers F1, the key every application uses for help", () => {
+    expect(matchShortcut({ key: "F1" })).toBe("guide");
+  });
+
+  it("answers F1 even mid-sentence", () => {
+    // Unlike the letter shortcuts: F1 is not a character on any layout, and "how does this work"
+    // is a question people have precisely while they are typing.
+    expect(matchShortcut({ key: "F1", typing: true })).toBe("guide");
   });
 });

@@ -7,6 +7,7 @@ import { Message } from "../components/Message";
 import { ModelPicker } from "../components/ModelPicker";
 import { DiffPanel } from "../components/DiffPanel";
 import { ScanPanel } from "../components/ScanPanel";
+import { GuidePanel } from "../components/GuidePanel";
 import { FilePanel } from "../components/FilePanel";
 import { sendsOnKey } from "../lib/composer";
 import { shouldFollow } from "../lib/transcript";
@@ -95,6 +96,7 @@ export function ChatScreen(props: {
   const [showDiff, setShowDiff] = useState(false);
   const [showScan, setShowScan] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   // The tab in front, and its fields under the names the rest of this screen already used. Reading
@@ -207,7 +209,7 @@ export function ChatScreen(props: {
     const onKey = (event: KeyboardEvent) => {
       // A modal owns the keyboard while it is open; the approval dialog in particular must not
       // have Escape mean two different things at once.
-      if (approval || showDiff || showScan || showFiles) return;
+      if (approval || showDiff || showScan || showFiles || showGuide) return;
       const action = matchShortcut({
         key: event.key,
         ctrlKey: event.ctrlKey,
@@ -224,6 +226,7 @@ export function ChatScreen(props: {
         case "undo": void handleUndo(); break;
         case "diff": setShowDiff(true); break;
         case "files": setShowFiles(true); break;
+        case "guide": setShowGuide((open) => !open); break;
         case "settings": props.onOpenSettings(); break;
         case "models": setModelMenuOpen((open) => !open); break;
         case "plan": void handleMode("plan"); break;
@@ -638,7 +641,13 @@ export function ChatScreen(props: {
             Browse…
           </button>
           <ModelPicker provider={active.provider} model={active.model} busy={busy} onPick={handleModel} open={modelMenuOpen} onOpenChange={setModelMenuOpen} />
-          <button className="btn ghost" type="button" onClick={props.onOpenSettings}>
+          {/* Beside Settings rather than buried in a panel: the two questions a new window raises
+              are "where do I put my key" and "how does this work", and they should be equally
+              easy to find. */}
+          <button className="btn ghost" type="button" onClick={() => setShowGuide(true)} title="How Nova works — modes, approvals, tabs, sandboxes (F1)">
+            Guide
+          </button>
+          <button className="btn ghost" type="button" onClick={props.onOpenSettings} title="API key, budget, sandbox (Ctrl ,)">
             Settings
           </button>
         </div>
@@ -840,6 +849,7 @@ export function ChatScreen(props: {
           composerRef.current?.focus();
         }}
       />
+      <GuidePanel open={showGuide} onClose={() => setShowGuide(false)} />
       {approval ? <ApprovalModal approval={approval} onRespond={handleApproval} /> : null}
     </div>
   );
