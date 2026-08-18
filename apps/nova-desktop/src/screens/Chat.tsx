@@ -223,6 +223,7 @@ export function ChatScreen(props: {
         case "stop": if (busy) void cancelTurn(); break;
         case "undo": void handleUndo(); break;
         case "diff": setShowDiff(true); break;
+        case "files": setShowFiles(true); break;
         case "settings": props.onOpenSettings(); break;
         case "models": setModelMenuOpen((open) => !open); break;
         case "plan": void handleMode("plan"); break;
