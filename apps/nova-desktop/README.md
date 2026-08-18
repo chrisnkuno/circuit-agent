@@ -9,12 +9,21 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar t
 - **Test this key** checks credentials before you commit to them, using the provider's model list —
   an authenticated call that generates no tokens, so it costs nothing
 - Chat with streaming assistant output, rendered with code blocks and per-block copy
-- Modes: Plan / Build / Auto, as one segmented control that states the posture it puts you in
+- Modes: Plan / Build / Auto / Defender, as one segmented control that states the posture it puts
+  you in — Plan cannot write at all, because the write tools are never offered to the model
 - Per-tool approval dialog showing the exact command, answerable with `Y` / `N` / `A` / `D` or Escape
 - **Tabs, running in parallel** — several pieces of work in one window, each with its own
   transcript, project, model, mode and cost, and all of them running at once. Ctrl+T opens one,
   Ctrl+W closes it, Ctrl+Tab and Ctrl+1…9 move between them. The strip says which tabs are working,
   which one is blocked on an approval, and what finished while you were looking elsewhere
+- **A file explorer that reads files**, not just names them: the project as a tree with flat search,
+  and a preview pane beside it. Contents come from the session's own workspace, so a sandboxed tab
+  shows the sandbox's copy rather than a same-named file on this machine — and the webview still
+  needs no filesystem permission of its own. Ctrl P opens it; mentioning a file into the composer
+  stays a separate, deliberate act
+- **A guide in the window** (F1). It is data rather than prose, and the suite asserts that every
+  shortcut the window offers is documented by some topic and that no topic claims a chord that does
+  not exist — so a feature added without a line in the guide fails the build
 - Sessions list + resume
 - Undo (git checkpoints), cost panel, cancel
 - The agent's plan as a live panel
@@ -22,8 +31,9 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar t
 - Follows the system light/dark setting
 - **Auto-update** — checks GitHub Releases and installs new versions in place
 - **Portable Windows build** — `release/windows/` folder with `Nova.exe` + sidecar, no installer required
-- Keyboard throughout: Ctrl+Enter send, Esc stop, Ctrl+M model, Ctrl+D changes, Ctrl+Z undo,
-  Ctrl+, settings, Alt+1/2/3 mode — listed in the Keyboard panel so they can be found
+- Keyboard throughout: Ctrl+Enter send, Esc stop, Ctrl+M model, Ctrl+D changes, Ctrl+P files,
+  Ctrl+Z undo, Ctrl+, settings, F1 guide, Alt+1/2/3/4 mode — listed in the Keyboard panel and in the
+  guide, both generated from the same table the matcher reads
 
 ## Design notes
 
