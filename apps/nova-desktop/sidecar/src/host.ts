@@ -28,6 +28,7 @@ import type { SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { createE2BProvider } from "@circuit-nova/nova-core/providers/factory";
 import { addMemory, forgetMemory, loadMemories, memoryFile, type MemoryKind, type MemoryScope } from "@circuit-nova/nova-core/nova-cli/memory";
 import { verifyCredentials } from "./verify.js";
+import { TabRegistry } from "./tabs.js";
 import type { IpcEvent, IpcRequest, NovaSettings, ProviderId } from "./protocol.js";
 import { DEFAULT_MODELS } from "./protocol.js";
 import { settingsToEnvironment } from "./settings.js";
@@ -57,17 +58,90 @@ function tokenPricesToCatalog(prices: TokenPrices | undefined, fxRwfPerUsd: numb
   };
 }
 
+/**
+ * Everything one tab holds — the whole of what used to be the host's own fields.
+ *
+ * That is the shape of the change: the host had a client, a workspace, a ledger, a mode, a root and
+ * a sandbox flag, and every request acted on them implicitly. All six were per-session all along;
+ * they were singular only because there was nowhere to put a second set.
+ *
+ * The ledger being in here rather than shared is the part worth saying out loud: two tabs are two
+ * pieces of work with two costs, and one shared ledger would report a refactor's spend against a
+ * bug hunt. Anything that genuinely is global — the settings, the daemon — stays on the host.
+ */
+type TabSlot = {
+  client: NovaDaemonClient;
+  workspace: NovaWorkspace;
+  ledger: CostLedger;
+  mode: NovaMode;
+  root: string;
+  sandbox: boolean;
+  title: string;
+  model?: string;
+  provider?: ProviderId;
+  /** True while a turn is in flight here, which is what makes a background tab's spinner honest. */
+  running: boolean;
+  /**
+   * Approvals this tab is waiting on, by request id.
+   *
+   * Kept per tab because that is the question the window asks — "does this tab need me?" — and
+   * because an answer has to reach the client whose session parked it. A single window-wide map
+   * would answer the first and lose the second.
+   */
+  pendingApprovals: Set<string>;
+};
+
 export class NovaHost {
   private settings: NovaSettings | null = null;
   private readonly daemon = new NovaSessionDaemon();
-  private client: NovaDaemonClient | null = null;
-  private workspace: NovaWorkspace | null = null;
-  private ledger: CostLedger | null = null;
-  private mode: NovaMode = "build";
-  private root: string | null = null;
-  private sandbox = false;
+  private readonly tabs = new TabRegistry<TabSlot>();
 
   constructor(private readonly emit: Emit) {}
+
+  /** The tab a request means, or a clear refusal when there is no session to mean. */
+  private slot(tabId?: string): TabSlot {
+    return this.tabs.resolve(tabId).payload;
+  }
+
+  /** Present-but-optional: for the paths that would rather answer "nothing yet" than throw. */
+  private maybeSlot(tabId?: string): TabSlot | undefined {
+    return this.tabs.find(tabId)?.payload;
+  }
+
+  /** How the window draws its strip: one row per tab, in the order they were opened. */
+  private listTabs() {
+    const activeId = this.tabs.activeId;
+    return {
+      activeTabId: activeId,
+      tabs: this.tabs.list().map((entry) => ({
+        tabId: entry.tabId,
+        sessionId: entry.sessionId,
+        title: entry.payload.title,
+        root: entry.payload.root,
+        mode: entry.payload.mode,
+        sandbox: entry.payload.sandbox,
+        model: entry.payload.model,
+        provider: entry.payload.provider,
+        running: entry.payload.running,
+        active: entry.tabId === activeId,
+      })),
+    };
+  }
+
+  /**
+   * Ends one tab, leaving the others running.
+   *
+   * The release is what actually stops the work: a client left connected keeps its session live in
+   * the daemon, and a sandboxed tab keeps paying for a remote machine nobody is watching.
+   */
+  private async closeTab(tabId: string) {
+    const { payload, nextActive } = this.tabs.close(tabId);
+    payload.running = false;
+    await payload.client.release(true);
+    payload.client.disconnect();
+    void nextActive; // `listTabs` reports the new front tab; naming it twice invites the two to disagree.
+    return { closed: tabId, ...this.listTabs() };
+  }
 
   async handle(request: IpcRequest): Promise<unknown> {
     switch (request.type) {
@@ -83,11 +157,18 @@ export class NovaHost {
       case "providers.verify":
         return await verifyCredentials(request.settings);
       case "session.open":
-        return await this.openSession(request.root, request.mode ?? "build", !!request.sandbox, !!request.upload);
+        return await this.openSession(request.root, request.mode ?? "build", !!request.sandbox, !!request.upload, request.tabId);
       case "session.scratch":
-        return await this.openScratchSession(request.mode ?? "build");
+        return await this.openScratchSession(request.mode ?? "build", request.tabId);
       case "session.list":
         return await listSessions(request.root);
+      case "tabs.list":
+        return this.listTabs();
+      case "tabs.activate":
+        this.tabs.activate(request.tabId);
+        return this.listTabs();
+      case "tabs.close":
+        return await this.closeTab(request.tabId);
       case "session.resume":
         return await this.resumeSession(
           request.root,
@@ -95,42 +176,45 @@ export class NovaHost {
           request.mode ?? "build",
           !!request.sandbox,
           !!request.upload,
+          request.tabId,
         );
       case "memory.list":
-        return await this.listMemories();
+        return await this.listMemories(request.tabId);
       case "memory.add":
-        return await this.addMemoryEntry(request.scope, request.text, request.kind);
+        return await this.addMemoryEntry(request.scope, request.text, request.kind, request.tabId);
       case "memory.forget":
-        return await this.forgetMemoryEntry(request.scope, request.index);
+        return await this.forgetMemoryEntry(request.scope, request.index, request.tabId);
       case "turn.send":
-        return await this.sendTurn(request.objective, request.id);
+        return await this.sendTurn(request.objective, request.id, request.tabId);
       case "mode.set":
-        return await this.setMode(request.mode);
+        return await this.setMode(request.mode, request.tabId);
       case "model.set":
-        return await this.setModel(request.provider, request.model);
+        return await this.setModel(request.provider, request.model, request.tabId);
       case "approval.respond":
         return this.respondApproval(request.requestId, request.decision);
       case "undo":
-        return await this.undo();
+        return await this.undo(request.tabId);
       case "cancel":
-        this.client?.cancel();
+        // Cancels only the tab it was asked about. A stop button that reached across tabs would end
+        // work the user can see is running somewhere else on screen.
+        this.maybeSlot(request.tabId)?.client.cancel();
         return { cancelled: true };
       case "cost.get":
-        return this.costSnapshot();
+        return this.costSnapshot(request.tabId);
       case "diff.get":
-        return { diff: (await this.client?.diffStat()) ?? "" };
+        return { diff: (await this.maybeSlot(request.tabId)?.client.diffStat()) ?? "" };
       case "todos.get":
-        return { todos: this.client?.todos ?? [] };
+        return { todos: this.maybeSlot(request.tabId)?.client.todos ?? [] };
       case "files.list":
         // Through the workspace, so a sandboxed session lists the sandbox's files and not this
         // machine's. Read-only and free, like the scan.
-        return { files: (await this.client?.listFiles(request.pattern)) ?? [] };
+        return { files: (await this.maybeSlot(request.tabId)?.client.listFiles(request.pattern)) ?? [] };
       case "scan.secrets":
         // Deterministic and read-only, so it runs without a model turn and without an approval —
         // the same guarantee the `scan_secrets` tool carries, reached directly.
-        return { findings: (await this.client?.scanSecrets(request.include)) ?? [] };
+        return { findings: (await this.maybeSlot(request.tabId)?.client.scanSecrets(request.include)) ?? [] };
       case "sandbox.pull":
-        return await this.pullSandbox(request.dest);
+        return await this.pullSandbox(request.dest, request.tabId);
       case "dispose":
         await this.disposeAgent();
         return { disposed: true };
@@ -190,14 +274,20 @@ export class NovaHost {
     return workspace;
   }
 
-  private async buildAgent(root: string, mode: NovaMode, sandbox: boolean, upload: boolean, record?: SessionRecord) {
+  /**
+   * Builds a session and puts it in a tab — a new one, or in place of what a named tab held.
+   *
+   * The line this replaces was `await this.disposeAgent()`: opening anything used to begin by
+   * destroying whatever was open, which is the entire reason the window could hold one piece of work.
+   * Now only the named tab's own previous session is released, and only after the new one is built,
+   * so a failure to open leaves the tab with the session it already had rather than with nothing.
+   */
+  private async buildAgent(root: string, mode: NovaMode, sandbox: boolean, upload: boolean, record?: SessionRecord, tabId?: string) {
     const settings = this.requireSettings();
     const { next, resolved, env } = await this.resolveModel(settings);
     this.settings = next;
-    await this.disposeAgent();
 
     const workspace = await this.createWorkspace(root, sandbox, upload, env);
-    this.workspace = workspace;
     const catalog = tokenPricesToCatalog(resolved.prices, settings.fxRwfPerUsd ?? 1320);
     const display = settings.currency?.trim() || "RWF";
     const rates =
@@ -213,13 +303,17 @@ export class NovaHost {
           ]
         : [];
     const budget = settings.budget != null && settings.budget > 0 ? fromUnits(settings.budget, display) : undefined;
-    this.ledger = new CostLedger({ prices: resolved.prices, display, rates, budget });
+    const ledger = new CostLedger({ prices: resolved.prices, display, rates, budget });
 
-    this.client = this.daemon.connect({
-      id: `desktop_${Date.now()}`,
+    // One daemon client per tab, each with its own subscription. Two tabs sharing a client would
+    // share its notification stream, and a `NovaDaemonClient` holds one active session anyway —
+    // `sessionId` on it is a single value, so a second session in the same client would have
+    // silently redirected every later request onto whichever opened last.
+    const client = this.daemon.connect({
+      id: `desktop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       onNotification: (notification) => this.forwardDaemonNotification(notification),
     });
-    const opened = await this.client.open(({ onEvent, approve }) => new NovaAgent({
+    const opened = await client.open(({ onEvent, approve }) => new NovaAgent({
       root,
       model: resolved.provider,
       prices: catalog,
@@ -236,10 +330,37 @@ export class NovaHost {
           : {}),
       },
     }), record);
-    this.root = root;
-    this.mode = mode;
-    this.sandbox = sandbox;
+    const slot: TabSlot = {
+      client,
+      workspace,
+      ledger,
+      mode,
+      root,
+      sandbox,
+      title: titleFor(root),
+      model: resolved.model,
+      // Narrowed to the ids the desktop's own settings can express: agent-core resolves a wider set
+      // (Ollama and friends) than this window offers, and a tab records what it can round-trip.
+      provider: (["circuitnotion", "openai", "anthropic"] as const).find((id) => id === resolved.spec.id),
+      running: false,
+      pendingApprovals: new Set<string>(),
+    };
+
+    // Into the tab that asked, or a new one. Replacing returns the session that was there, which is
+    // released *after* the new one is live: releasing first would leave a tab holding nothing at all
+    // for as long as a sandbox takes to start, and holding nothing if it failed to.
+    const existing = tabId ? this.tabs.find(tabId) : undefined;
+    const entry = existing
+      ? { tabId: existing.tabId, previous: this.tabs.replace(existing.tabId, opened.sessionId, slot) }
+      : { tabId: this.tabs.add(opened.sessionId, slot).tabId, previous: undefined };
+    if (entry.previous) {
+      entry.previous.running = false;
+      await entry.previous.client.release(true).catch(() => undefined);
+      entry.previous.client.disconnect();
+    }
+
     return {
+      tabId: entry.tabId,
       sessionId: opened.sessionId,
       root,
       mode,
@@ -247,6 +368,7 @@ export class NovaHost {
       workspace: opened.workspaceLabel,
       model: resolved.model,
       provider: resolved.spec.id,
+      title: slot.title,
     };
   }
 
@@ -257,33 +379,38 @@ export class NovaHost {
    * scratch chat still lands somewhere real rather than being silently dropped — and lands in the
    * same place the next scratch chat will read it from.
    */
-  private memoryRoot(): string {
-    return this.root ?? path.join(os.homedir(), ".nova", "scratch");
+  private memoryRoot(tabId?: string): string {
+    // The *tab's* project, not the window's: two tabs on two projects have two project memories, and
+    // filing a fact learned in one against the other is a quiet way to corrupt both.
+    return this.maybeSlot(tabId)?.root ?? path.join(os.homedir(), ".nova", "scratch");
   }
 
-  private async listMemories() {
-    const entries = await loadMemories(this.memoryRoot(), process.env);
+  private async listMemories(tabId?: string) {
+    const root = this.memoryRoot(tabId);
+    const entries = await loadMemories(root, process.env);
     return {
       entries,
       files: {
-        project: memoryFile("project", this.memoryRoot(), process.env),
-        user: memoryFile("user", this.memoryRoot(), process.env),
+        project: memoryFile("project", root, process.env),
+        user: memoryFile("user", root, process.env),
       },
     };
   }
 
-  private async addMemoryEntry(scope: MemoryScope, text: string, kind?: string) {
-    const result = await addMemory(scope, text, this.memoryRoot(), process.env, { kind: (kind ?? "fact") as MemoryKind });
-    return { file: result.file, changed: result.changed, entries: await loadMemories(this.memoryRoot(), process.env) };
+  private async addMemoryEntry(scope: MemoryScope, text: string, kind?: string, tabId?: string) {
+    const root = this.memoryRoot(tabId);
+    const result = await addMemory(scope, text, root, process.env, { kind: (kind ?? "fact") as MemoryKind });
+    return { file: result.file, changed: result.changed, entries: await loadMemories(root, process.env) };
   }
 
-  private async forgetMemoryEntry(scope: MemoryScope, index: number) {
-    const result = await forgetMemory(scope, index, this.memoryRoot(), process.env);
-    return { file: result.file, changed: result.changed, entries: await loadMemories(this.memoryRoot(), process.env) };
+  private async forgetMemoryEntry(scope: MemoryScope, index: number, tabId?: string) {
+    const root = this.memoryRoot(tabId);
+    const result = await forgetMemory(scope, index, root, process.env);
+    return { file: result.file, changed: result.changed, entries: await loadMemories(root, process.env) };
   }
 
-  private async openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
-    return await this.buildAgent(path.resolve(root), mode, sandbox, upload);
+  private async openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean, tabId?: string) {
+    return await this.buildAgent(path.resolve(root), mode, sandbox, upload, undefined, tabId);
   }
 
   /**
@@ -299,54 +426,88 @@ export class NovaHost {
    * created on demand. Every tool works normally, files land somewhere findable, and opening a
    * project later is an ordinary session switch rather than a change of mode.
    */
-  private async openScratchSession(mode: NovaMode) {
+  private async openScratchSession(mode: NovaMode, tabId?: string) {
     const scratch = path.join(os.homedir(), ".nova", "scratch");
     await fs.mkdir(scratch, { recursive: true });
     // Never sandboxed: a scratch session is a conversation, and paying for a remote sandbox to hold
     // a directory nobody asked for is a cost with no matching benefit.
-    return { ...(await this.buildAgent(scratch, mode, false, false)), scratch: true };
+    return { ...(await this.buildAgent(scratch, mode, false, false, undefined, tabId)), scratch: true };
   }
 
-  private async resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
+  private async resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean, tabId?: string) {
     const resolvedRoot = path.resolve(root);
     const record = await loadSession(resolvedRoot, sessionId);
     if (!record) throw new Error(`Session ${sessionId} not found.`);
-    const opened = await this.buildAgent(resolvedRoot, mode, sandbox, upload, record);
+    const opened = await this.buildAgent(resolvedRoot, mode, sandbox, upload, record, tabId);
     return { ...opened, title: record.title, resumed: true };
   }
 
-  private async setMode(mode: NovaMode) {
-    if (!this.client || !this.root) throw new Error("Open a project session first.");
-    const sessionId = this.client.sessionId;
-    const loaded = await loadSession(this.root, sessionId);
-    const opened = await this.buildAgent(this.root, mode, this.sandbox, false, loaded ?? undefined);
+  /**
+   * Switching mode rebuilds the agent, in place, in its own tab.
+   *
+   * Rebuilt because mode is baked into the agent's permission posture at construction; in place
+   * because the tab is the thing the user is looking at, and a mode switch that opened a tenth tab
+   * would be a surprising way to answer "make this one read-only".
+   */
+  private async setMode(mode: NovaMode, tabId?: string) {
+    const entry = this.tabs.resolve(tabId);
+    const slot = entry.payload;
+    const loaded = await loadSession(slot.root, entry.sessionId);
+    const opened = await this.buildAgent(slot.root, mode, slot.sandbox, false, loaded ?? undefined, entry.tabId);
     return { ...opened, mode };
   }
 
-  private async setModel(provider: ProviderId | undefined, model: string) {
+  private async setModel(provider: ProviderId | undefined, model: string, tabId?: string) {
     if (!this.settings) throw new Error("Configure Settings first.");
     const { next, resolved } = await this.resolveModel(this.settings, provider, model);
     this.settings = next;
-    if (!this.client || !this.root) {
-      return { provider: resolved.spec.id, model: resolved.model };
-    }
-    const sessionId = this.client.sessionId;
-    const loaded = await loadSession(this.root, sessionId);
-    const opened = await this.buildAgent(this.root, this.mode, this.sandbox, false, loaded ?? undefined);
+    const entry = this.tabs.find(tabId);
+    // No session open yet is not a failure here: the choice is settings, and it applies to the next
+    // session opened. Only a tab that exists gets rebuilt onto the new model.
+    if (!entry) return { provider: resolved.spec.id, model: resolved.model };
+    const slot = entry.payload;
+    const loaded = await loadSession(slot.root, entry.sessionId);
+    const opened = await this.buildAgent(slot.root, slot.mode, slot.sandbox, false, loaded ?? undefined, entry.tabId);
     return { ...opened, provider: resolved.spec.id, model: resolved.model };
   }
 
+  /**
+   * Answers an approval.
+   *
+   * The request id is looked up across *every* tab rather than routed through the active one,
+   * because the tab a decision belongs to is not necessarily the tab in front: a background tab can
+   * park an approval, and the person answering it may well have moved on before they do. The daemon
+   * still binds the decision to that request's own action digest, so a stale id authorises nothing.
+   */
   private respondApproval(requestId: string, decision: PermissionDecision) {
-    if (!this.client) throw new Error("Open a project session first.");
-    this.client.decideApproval(requestId, decision);
+    const owner = this.tabs.list().find((entry) => entry.payload.pendingApprovals.has(requestId));
+    const client = owner?.payload.client ?? this.maybeSlot()?.client;
+    if (!client) throw new Error("Open a project session first.");
+    client.decideApproval(requestId, decision);
+    owner?.payload.pendingApprovals.delete(requestId);
     return { accepted: true };
   }
 
+  /**
+   * Every session event, stamped with the tab it belongs to.
+   *
+   * The stamp comes from the daemon's own `sessionId`, not from whichever tab happens to be in
+   * front. That distinction is the whole of correct routing: with two turns streaming at once, "the
+   * active tab" is the wrong answer roughly half the time, and being wrong here means one tab's
+   * answer appearing in another tab's transcript with nothing to indicate it.
+   */
   private forwardDaemonNotification(notification: DaemonNotification) {
+    const entry = this.tabs.bySession(notification.sessionId);
+    // An event from a session that has already been closed has nowhere to go. Dropping it is right:
+    // filing it under some other tab would be inventing a place for it.
+    if (!entry) return;
+    const tag = { tabId: entry.tabId, sessionId: notification.sessionId };
     if (notification.type === "agent_event") {
-      this.forwardNovaEvent(notification.event);
+      this.forwardNovaEvent(notification.event, tag);
     } else if (notification.type === "approval_requested") {
+      entry.payload.pendingApprovals.add(notification.request.id);
       this.emit({
+        ...tag,
         type: "approval_needed",
         requestId: notification.request.id,
         toolCallId: notification.request.toolCallId,
@@ -358,23 +519,25 @@ export class NovaHost {
     }
   }
 
-  private forwardNovaEvent(event: NovaEvent) {
+  private forwardNovaEvent(event: NovaEvent, tag: { tabId: string; sessionId: string }) {
     if (event.type === "checkpoint") {
-      this.emit({ type: "checkpoint", id: event.checkpoint.tree, label: event.checkpoint.label });
+      this.emit({ ...tag, type: "checkpoint", id: event.checkpoint.tree, label: event.checkpoint.label });
       return;
     }
     if (event.type !== "runtime") return;
     const runtime = event.event;
     if (runtime.type === "assistant_delta") {
-      this.emit({ type: "assistant_delta", text: runtime.text });
+      this.emit({ ...tag, type: "assistant_delta", text: runtime.text });
     } else if (runtime.type === "tool_call") {
       this.emit({
+        ...tag,
         type: "tool_call",
         toolCallId: runtime.toolCallId,
         name: runtime.toolName,
       });
     } else if (runtime.type === "tool_result") {
       this.emit({
+        ...tag,
         type: "tool_result",
         toolCallId: runtime.toolCallId,
         name: runtime.toolName,
@@ -384,87 +547,116 @@ export class NovaHost {
     }
   }
 
-  private async sendTurn(objective: string, commandId: string) {
-    if (!this.client) throw new Error("Open a project session first.");
-    if (this.ledger?.exhausted) {
+  /**
+   * Runs a turn in one tab.
+   *
+   * Nothing here awaits any other tab: `NovaSessionDaemon` serialises turns *per session* (each live
+   * session has its own `tail` promise), so two tabs sending at once genuinely run at once. That is
+   * what makes these tabs parallel rather than merely separate, and it is a property of the daemon
+   * this file inherited rather than one it had to build.
+   */
+  private async sendTurn(objective: string, commandId: string, tabId?: string) {
+    const entry = this.tabs.resolve(tabId);
+    const slot = entry.payload;
+    const tag = { tabId: entry.tabId, sessionId: entry.sessionId };
+    if (slot.ledger.exhausted) {
       throw new Error("Session budget exhausted. Raise the budget in Settings or start a new session.");
     }
-    this.emit({ type: "turn_status", status: "running" });
+    slot.running = true;
+    this.emit({ ...tag, type: "turn_status", status: "running" });
     const started = Date.now();
     try {
-      const result = await this.client.send(objective, commandId);
-      if (this.ledger) {
-        const turn = this.ledger.record({
+      const result = await slot.client.send(objective, commandId);
+      {
+        const turn = slot.ledger.record({
           usage: result.usage,
           iterations: result.iterations,
           toolCalls: result.toolCallsExecuted,
           elapsedMs: Date.now() - started,
         });
         this.emit({
+          ...tag,
           type: "cost",
-          report: this.ledger.formatTurn(turn),
-          displayTotal: this.ledger.displayTotal ? formatMoney(this.ledger.displayTotal) : undefined,
-          budgetFraction: this.ledger.budgetFraction,
+          report: slot.ledger.formatTurn(turn),
+          displayTotal: slot.ledger.displayTotal ? formatMoney(slot.ledger.displayTotal) : undefined,
+          budgetFraction: slot.ledger.budgetFraction,
         });
-        if (this.ledger.displayTotal && this.settings?.budget) {
-          const remainingMajor = this.settings.budget - this.ledger.displayTotal.micros / 1_000_000;
+        // The cap is this tab's remaining budget, held against this tab's own client. Sharing one
+        // limit across tabs would let a cheap tab's spend cut short an expensive tab's turn.
+        if (slot.ledger.displayTotal && this.settings?.budget) {
+          const remainingMajor = this.settings.budget - slot.ledger.displayTotal.micros / 1_000_000;
           if (remainingMajor > 0) {
             const remainingRwf = Math.max(1, Math.round(remainingMajor * (this.settings.fxRwfPerUsd ?? 1320)));
-            this.client.setModelSpendLimit(remainingRwf);
+            slot.client.setModelSpendLimit(remainingRwf);
           } else {
-            this.client.setModelSpendLimit(0);
+            slot.client.setModelSpendLimit(0);
           }
         }
       }
-      this.emit({ type: "turn_status", status: result.status, summary: result.summary });
+      this.emit({ ...tag, type: "turn_status", status: result.status, summary: result.summary });
       return {
         status: result.status,
         summary: result.summary,
-        sessionId: this.client.sessionId,
+        tabId: entry.tabId,
+        sessionId: entry.sessionId,
         iterations: result.iterations,
         toolCallsExecuted: result.toolCallsExecuted,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.emit({ type: "error", message });
-      this.emit({ type: "turn_status", status: "failed", summary: message });
+      this.emit({ ...tag, type: "error", message });
+      this.emit({ ...tag, type: "turn_status", status: "failed", summary: message });
       throw error;
+    } finally {
+      // In `finally` so a thrown turn cannot leave a tab claiming to be busy for the rest of the
+      // session — a spinner that never stops is indistinguishable from work that never finishes.
+      slot.running = false;
     }
   }
 
-  private async undo() {
-    if (!this.client) throw new Error("Open a project session first.");
-    const checkpoint = await this.client.undo();
+  private async undo(tabId?: string) {
+    const checkpoint = await this.slot(tabId).client.undo();
     return { undone: !!checkpoint, checkpoint };
   }
 
-  private costSnapshot() {
-    if (!this.ledger) return { report: "No cost data yet.", priced: false };
+  private costSnapshot(tabId?: string) {
+    const slot = this.maybeSlot(tabId);
+    if (!slot) return { report: "No cost data yet.", priced: false };
     return {
-      report: this.ledger.formatReport(),
-      priced: this.ledger.priced,
-      displayTotal: this.ledger.displayTotal ? formatMoney(this.ledger.displayTotal) : undefined,
-      budgetFraction: this.ledger.budgetFraction,
-      warning: this.ledger.budgetWarning(),
-      exhausted: this.ledger.exhausted,
+      report: slot.ledger.formatReport(),
+      priced: slot.ledger.priced,
+      displayTotal: slot.ledger.displayTotal ? formatMoney(slot.ledger.displayTotal) : undefined,
+      budgetFraction: slot.ledger.budgetFraction,
+      warning: slot.ledger.budgetWarning(),
+      exhausted: slot.ledger.exhausted,
     };
   }
 
-  private async pullSandbox(dest?: string) {
-    if (!this.client || !this.root || !this.workspace) throw new Error("Open a project session first.");
-    if (this.workspace.kind !== "e2b") throw new Error("Current session is not a sandbox.");
-    const target = path.resolve(dest?.trim() || path.join(this.root, "nova-pull"));
-    await downloadProject(this.workspace, target);
+  private async pullSandbox(dest?: string, tabId?: string) {
+    const slot = this.slot(tabId);
+    if (slot.workspace.kind !== "e2b") throw new Error("Current session is not a sandbox.");
+    const target = path.resolve(dest?.trim() || path.join(slot.root, "nova-pull"));
+    await downloadProject(slot.workspace, target);
     return { dest: target };
   }
 
+  /** Shutdown: every tab, not just the one in front — each holds a live session of its own. */
   private async disposeAgent() {
-    if (this.client) {
-      await this.client.release(true);
-      this.client.disconnect();
-      this.client = null;
+    for (const slot of this.tabs.drain()) {
+      slot.running = false;
+      await slot.client.release(true).catch(() => undefined);
+      slot.client.disconnect();
     }
-    this.workspace = null;
-    this.ledger = null;
   }
+}
+
+/**
+ * A tab's name: the folder it works in.
+ *
+ * The last path segment, because that is the part people recognise and the part that differs — a
+ * strip reading `circuit-agent`, `nova-docs`, `scratch` says what each tab is for, while one reading
+ * three truncated absolute paths that share a prefix says nothing at all.
+ */
+function titleFor(root: string): string {
+  return path.basename(root) || root;
 }

@@ -39,7 +39,7 @@ import { classifyNetworkError } from "./network";
 import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
 import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingKey, type SettingsPrompts } from "./settings";
 import { loadHistory, saveHistory } from "./history";
-import { renderTabStrip, parseTabCommand, shortModel, WorkspaceController } from "./tabs";
+import { renderTabStrip, parseTabCommand, SEQUENTIAL_TABS_NOTE, shortModel, WorkspaceController } from "./tabs";
 import { OutputRouter, TabSink, replayLines, terminalStream } from "./output";
 import { renderPatch } from "./patch-view";
 import { fetchableProviders, isCacheFresh, loadLiveModels, readModelCache } from "./model-fetch";
@@ -1765,6 +1765,9 @@ async function main(): Promise<number> {
     enterTab(next, { replay: true });
     return true;
   };
+  /** Whether this session has already explained that a background tab is paused rather than working. */
+  let explainedTabs = false;
+
   const showTabs = () => {
     // Detail on: once tabs can differ in model and location, which is which is the only thing the
     // strip is actually being read for.
@@ -3370,7 +3373,12 @@ async function main(): Promise<number> {
             break;
           case "list":
             showTabs();
-            if (tabs.size === 1) out.write(style.dim("  one tab — /tab new opens another\n"));
+            // The strip says what each tab *is*; neither it nor the titles say what a tab that is
+            // not in front is doing, which is the thing people get wrong. Listing tabs is someone
+            // asking exactly that question, so it is answered here.
+            out.write(style.dim(tabs.size === 1
+              ? "  one tab — /tab new opens another; only the tab in front runs\n"
+              : `  ${SEQUENTIAL_TABS_NOTE}\n`));
             break;
           case "new": {
             // Resolved before anything is opened, so a typo in --model or an unreachable sandbox
@@ -3426,6 +3434,12 @@ async function main(): Promise<number> {
             enterTab(opened);
             out.write(`${GUTTER}${style.dim("running")} ${style.cyan(shortModel(wanted.model))} ${style.dim(`${glyphs.middot} ${describeLocation(opened.payload.backend)}`)}\n`);
             showTabs();
+            // Once per session, on the tab that first creates the ambiguity. Every time would be
+            // nagging; never is how someone comes back to a paused tab expecting a finished job.
+            if (!explainedTabs) {
+              explainedTabs = true;
+              out.write(style.dim(`${GUTTER}${SEQUENTIAL_TABS_NOTE}\n`));
+            }
             break;
           }
           case "next": case "previous": {

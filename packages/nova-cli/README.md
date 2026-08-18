@@ -156,6 +156,14 @@ Every command with a shortcut also has an Alt mnemonic, which is the fuller set:
 | `Alt+D` diff | `Alt+U` undo | `Alt+C` cost | `Alt+O` tools |
 | `Alt+H` help | `Alt+T` new tab | `Alt+←` `Alt+→` tabs | `Alt+B` detach |
 
+**Tabs hold several pieces of work; the one in front is the one that runs.** Each tab keeps its own
+conversation, model, mode, cost and location, and switching away pauses that piece of work rather
+than leaving it running — a terminal transcript has one bottom, and two agents printing into it at
+once would interleave into something neither of them said. When you want work that keeps going while
+you do something else, that is `/detach`, `/jobs` and `/watch`: a detached job survives the terminal
+closing and streams into the session without taking the prompt. (Nova's desktop window is the other
+way round — it has a transcript per tab, so its tabs do run at the same time.)
+
 The function keys still work for the commands that had them (`F1` help, `F2` mode, `F3` model, `F4` wander, `F6` jobs, `F8` diff, `F9` todos) — several routes to the same command, so a terminal that swallows one does not cost you the feature. That redundancy is the reason there is a Ctrl layer at all: Alt is the modifier terminals are worst at delivering (tmux eats it by default, and macOS Terminal sends Option as a composition modifier unless you have found the "Use Option as Meta key" checkbox), so the most-used commands get a route that does not depend on it.
 
 Three of those Ctrl chords were readline line-editing keys, and taking them is not free. Each function moved to a key readline already handles natively, and `/keys` prints the move beside the chord that took it:

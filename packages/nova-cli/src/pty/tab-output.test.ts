@@ -82,6 +82,25 @@ describe("what a tab keeps, under a real pty", () => {
     await p.waitFor(/runs on the replica/, { timeoutMs: 30_000, since: inSecond });
   }, 90_000);
 
+  it("says that a background tab is paused, and where to send work that should keep running", async () => {
+    // The one thing about tabs people get wrong, checked where they actually meet it. Opening a
+    // second tab is the moment the assumption forms — especially for anyone who has used the
+    // desktop window, whose tabs genuinely do run at the same time.
+    const p = boot();
+    await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+    const opening = p.output().length;
+    p.writeLine("/tab new second");
+    const seen = await p.waitFor(/only the tab in front runs/, { timeoutMs: 30_000, since: opening });
+    expect(seen.slice(opening)).toContain("/detach");
+
+    // Listing tabs asks the same question, and answers it however many tabs there are.
+    const listing = p.output().length;
+    p.writeLine("/tab");
+    await p.waitFor(/only the tab in front runs/, { timeoutMs: 30_000, since: listing });
+    p.kill();
+  }, 90_000);
+
   it("keeps each tab's work in its own tab rather than in whichever is on screen", async () => {
     const p = boot();
     await p.waitFor(PROMPT, { timeoutMs: 30_000 });

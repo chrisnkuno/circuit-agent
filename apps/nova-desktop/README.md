@@ -11,6 +11,10 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar t
 - Chat with streaming assistant output, rendered with code blocks and per-block copy
 - Modes: Plan / Build / Auto, as one segmented control that states the posture it puts you in
 - Per-tool approval dialog showing the exact command, answerable with `Y` / `N` / `A` / `D` or Escape
+- **Tabs, running in parallel** — several pieces of work in one window, each with its own
+  transcript, project, model, mode and cost, and all of them running at once. Ctrl+T opens one,
+  Ctrl+W closes it, Ctrl+Tab and Ctrl+1…9 move between them. The strip says which tabs are working,
+  which one is blocked on an approval, and what finished while you were looking elsewhere
 - Sessions list + resume
 - Undo (git checkpoints), cost panel, cancel
 - The agent's plan as a live panel
@@ -28,6 +32,18 @@ Two decisions worth knowing before changing things:
 - **Nothing is fetched at runtime.** No webfonts, no CDN. The app uses each platform's own UI face
   and ships a real CSP in `tauri.conf.json`; a desktop window that waits on a third-party host to
   paint its own text is a window that breaks offline.
+- **Tabs are addressed, not assumed.** Every session-scoped request carries an optional `tabId` and
+  every event the sidecar emits is stamped with the tab it came from — taken from the daemon's own
+  `sessionId`, not from whichever tab is in front. With two turns streaming at once, "the active
+  tab" is the wrong answer about half the time, and being wrong is silent: one piece of work's
+  answer appears in another's transcript with nothing to show it happened. A request that names no
+  tab still means "the one in front", which is what it meant when there was only one.
+  (`sidecar/src/tabs.ts` does the routing; `src/lib/tabs.ts` is its counterpart in the window.)
+- **The window's tabs really are parallel; the CLI's are not.** `NovaSessionDaemon` serialises turns
+  per session rather than globally, so two tabs genuinely run side by side. The terminal deliberately
+  does the opposite — a scrolling transcript has one bottom, and two agents printing into it would
+  interleave — so `nova`'s tabs pause when you leave them and `/detach` is its answer for parallel
+  work. Neither surface should be described in the other's terms.
 - **The approval dialog has no default button.** Focus lands on the dialog itself, so Enter — the
   key people press to dismiss things — cannot approve a command. Escape denies rather than merely
   closing, because a dialog that vanishes while the agent still waits is a hang with no visible
@@ -42,8 +58,16 @@ bun run test
 ```
 
 UI logic that is worth testing is kept as pure functions in `src/lib/` (transcript parsing, scroll
-following, approval key handling) so it can be exercised without a DOM — the same split the CLI
-uses for its menus.
+following, approval key handling, per-tab state and event routing) so it can be exercised without a
+DOM — the same split the CLI uses for its menus.
+
+Components are rendered and driven too, which needs a DOM. `bun test` supplies one via the
+`happydom.ts` preload in `bunfig.toml`, and each component test also carries a
+`@vitest-environment happy-dom` docblock so the repo-wide vitest run — which has no such preload —
+can run it rather than failing on `document is not defined`. `bunfig.toml` scopes `bun test` to
+`src/` on purpose: the registered DOM makes the Anthropic SDK refuse to construct a client, so
+`sidecar/`'s tests (which drive a real host against a stubbed provider, including two tabs running
+turns at once) run under vitest only.
 
 ## Prerequisites
 
@@ -151,6 +175,6 @@ Then add the private key to GitHub repo secrets as `TAURI_SIGNING_PRIVATE_KEY`
 
 ## Architecture
 
-- `src/` — React UI
+- `src/` — React UI (`lib/tabs.ts` holds the window's per-tab state and event routing)
 - `sidecar/` — JSONL stdio host around `NovaAgent`
 - `src-tauri/` — windowing, folder picker, settings store, sidecar process bridge, updater

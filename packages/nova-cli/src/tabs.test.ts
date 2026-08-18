@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTabCommand, renderTabStrip, WorkspaceController } from "./tabs";
+import { parseTabCommand, renderTabStrip, SEQUENTIAL_TABS_NOTE, WorkspaceController } from "./tabs";
 
 const controller = (titles: string[] = ["nova"]) => {
   const workspace = new WorkspaceController<{ name: string }>();
@@ -159,3 +159,35 @@ describe("parsing", () => {
     expect(parseTabCommand("/diff")).toBeNull();
   });
 });
+
+/**
+ * The sequential limit, stated where people meet it.
+ *
+ * This is a wording test, which is unusual — but the wording is the feature here. The controller
+ * has always been sequential and has always said so in its own comments; what was missing was
+ * anywhere a *user* would encounter it, and the desktop window's tabs being genuinely parallel makes
+ * an ambiguous sentence in the terminal into a wrong one.
+ */
+describe("saying that only the front tab runs", () => {
+  it("names the alternative rather than only stating the limit", () => {
+    // "Tabs are sequential" leaves someone holding a problem. Naming /detach hands them the answer.
+    expect(SEQUENTIAL_TABS_NOTE).toMatch(/only the tab in front runs/);
+    expect(SEQUENTIAL_TABS_NOTE).toContain("/detach");
+  });
+
+  it("stays one line, since it is printed into a transcript beside real output", () => {
+    expect(SEQUENTIAL_TABS_NOTE).not.toContain("\n");
+    expect(SEQUENTIAL_TABS_NOTE.length).toBeLessThanOrEqual(120);
+  });
+
+  it("is what the controller actually does: switching away leaves the other tab exactly as it was", () => {
+    const tabs = new WorkspaceController<{ turns: number }>();
+    const first = tabs.adopt("one", { turns: 0 });
+    const second = tabs.open("two", () => ({ turns: 0 }));
+    // A "turn" in the front tab; the background tab is untouched, which is the whole claim.
+    tabs.active.payload.turns += 1;
+    expect(second.payload.turns).toBe(1);
+    expect(first.payload.turns).toBe(0);
+  });
+});
+

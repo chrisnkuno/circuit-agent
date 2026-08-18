@@ -214,6 +214,21 @@ export function renderTabStrip(views: readonly TabView[], options: TabStripOptio
   return line.length <= width ? line : `${line.slice(0, Math.max(0, width - glyphs.ellipsis.length))}${glyphs.ellipsis}`;
 }
 
+/**
+ * The one sentence that keeps tabs from being misread, and where it is worth saying.
+ *
+ * "Several pieces of work at once" is true of what a tab *holds* and false of what a tab *runs*, and
+ * the gap between those two readings is where the disappointment lives: someone opens a second tab
+ * expecting the first to carry on working, comes back, and finds it exactly where they left it. The
+ * desktop window's tabs really are parallel — it has a transcript per tab and the daemon runs their
+ * turns side by side — which makes saying it in the terminal more important rather than less.
+ *
+ * Said at the two moments the question is actually being asked (opening a tab, listing them) rather
+ * than pinned to the strip, where a sentence repeated above every prompt stops being read by the
+ * third one.
+ */
+export const SEQUENTIAL_TABS_NOTE = "only the tab in front runs — /detach runs work in the background while you use another tab";
+
 export type TabSpec = {
   title?: string;
   provider?: string;

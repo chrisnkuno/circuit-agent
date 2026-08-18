@@ -77,9 +77,23 @@ describe("the documented list", () => {
       matchShortcut({ key: "2", altKey: true }),
       matchShortcut({ key: "3", altKey: true }),
       matchShortcut({ key: "4", altKey: true }),
+      matchShortcut({ key: "t", ctrlKey: true }),
+      matchShortcut({ key: "w", ctrlKey: true }),
+      matchShortcut({ key: "Tab", ctrlKey: true }),
+      matchShortcut({ key: "Tab", ctrlKey: true, shiftKey: true }),
+      matchShortcut({ key: "1", ctrlKey: true }),
     ]);
     for (const action of produced) expect(documented).toContain(action);
     expect(documented.size).toBe(produced.size);
+  });
+
+  it("covers the whole Ctrl+1…9 family with the one row that documents it", () => {
+    // The matcher produces nine distinct actions here and the list carries a single row for them,
+    // which is right — nine rows saying the same thing is a help panel nobody reads. What must hold
+    // is that every one of the nine is reachable and none of them is a surprise.
+    const produced = Array.from({ length: 9 }, (_, index) => matchShortcut({ key: String(index + 1), ctrlKey: true }));
+    expect(produced).toEqual(Array.from({ length: 9 }, (_, index) => `tab-select-${index + 1}`));
+    expect(SHORTCUTS.filter((binding) => binding.action.startsWith("tab-select"))).toHaveLength(1);
   });
 
   it("binds each action exactly once", () => {
@@ -103,3 +117,56 @@ describe("recognising a text field", () => {
     expect(isTypingTarget({})).toBe(false);
   });
 });
+
+/**
+ * Tabs took four chords that every tabbed application already owns, so the only interesting
+ * questions are about the boundaries: what happens while someone is typing, and what must *not*
+ * become a tab switch.
+ */
+describe("tab shortcuts", () => {
+  it("uses the chords every tabbed application already uses", () => {
+    expect(matchShortcut({ key: "t", ctrlKey: true })).toBe("tab-new");
+    expect(matchShortcut({ key: "w", ctrlKey: true })).toBe("tab-close");
+    expect(matchShortcut({ key: "Tab", ctrlKey: true })).toBe("tab-next");
+    expect(matchShortcut({ key: "Tab", ctrlKey: true, shiftKey: true })).toBe("tab-previous");
+    expect(matchShortcut({ key: "3", ctrlKey: true })).toBe("tab-select-3");
+  });
+
+  it("works on the Mac modifier too", () => {
+    expect(matchShortcut({ key: "t", metaKey: true })).toBe("tab-new");
+    expect(matchShortcut({ key: "1", metaKey: true })).toBe("tab-select-1");
+  });
+
+  it("still opens a tab for someone in the middle of typing", () => {
+    // Unlike the letter shortcuts, these are claimed while typing: Ctrl+T is not a character, and
+    // the person mid-sentence in one tab is exactly the person who wants to start another.
+    expect(matchShortcut({ key: "t", ctrlKey: true, typing: true })).toBe("tab-new");
+    expect(matchShortcut({ key: "Tab", ctrlKey: true, typing: true })).toBe("tab-next");
+  });
+
+  it("leaves a bare letter, digit or Tab alone, so prose and focus still work", () => {
+    expect(matchShortcut({ key: "t" })).toBeUndefined();
+    expect(matchShortcut({ key: "3" })).toBeUndefined();
+    // Bare Tab has to keep moving focus, which is the only way the window is navigable by keyboard.
+    expect(matchShortcut({ key: "Tab" })).toBeUndefined();
+  });
+
+  it("does not read a shifted number row as a tab switch", () => {
+    // Some layouts produce punctuation from Ctrl+Shift+number; selecting a tab from that would be
+    // a switch nobody asked for.
+    expect(matchShortcut({ key: "3", ctrlKey: true, shiftKey: true })).toBeUndefined();
+  });
+
+  it("does not collide with the mode shortcuts on Alt", () => {
+    expect(matchShortcut({ key: "1", altKey: true })).toBe("plan");
+    expect(matchShortcut({ key: "t", ctrlKey: true, altKey: true })).toBeUndefined();
+  });
+
+  it("lists the tab keys in the help panel, since a shortcut nobody can find is not a feature", () => {
+    const listed = SHORTCUTS.map((binding) => binding.action);
+    expect(listed).toContain("tab-new");
+    expect(listed).toContain("tab-close");
+    expect(listed).toContain("tab-next");
+  });
+});
+

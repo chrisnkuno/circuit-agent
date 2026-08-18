@@ -85,10 +85,12 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   },
   {
     id: "tabs",
-    title: "Tabs: several pieces of work at once",
-    summary: "Each tab has its own conversation, model, cost and machine.",
+    title: "Tabs: several pieces of work, one at a time",
+    summary: "Each tab keeps its own conversation, model, cost and machine — the tab in front is the one that runs.",
     body: [
       "A tab is a separate piece of work with its own conversation, its own running total, its own mode — and its own model and location. One tab can be on a large model against your checkout while another runs a cheaper or open model inside a throwaway remote sandbox.",
+      "Only the tab in front runs. Switching away does not leave a turn working in the background — it pauses that piece of work and hands the terminal to another one. That is a deliberate limit rather than a missing feature: a terminal transcript has one bottom, and two agents printing into it at once would interleave into something neither of them said. (Nova's desktop window is different — it has a transcript per tab, so its tabs really do run at the same time.)",
+      "When you want work running while you do something else, that is what /detach and /jobs are for: a detached job keeps going after you close the terminal, and /watch streams it into the session without taking the prompt.",
       "Tabs keep what they printed. Leave one and come back and the last lines reappear, so you can pick up where you were instead of facing a bare prompt.",
       "The strip above the prompt shows every tab with its model and a mark for where it runs. Closing a tab that started its own sandbox stops that sandbox — and only that one.",
     ],
@@ -98,6 +100,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       { input: "/tab new risky --sandbox e2b", effect: "a tab whose edits land in a remote sandbox, not on your disk" },
       { input: "/tab 2", effect: "switch to tab 2 and replay where you left off" },
       { input: "/tab close 2", effect: "close it, stopping its sandbox if it started one" },
+      { input: "/detach run the full test suite", effect: "work that runs while you use another tab" },
     ],
     covers: ["/tab"],
   },
@@ -208,6 +211,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     summary: "Jobs that outlive the prompt, and research that runs itself.",
     body: [
       "Work can be sent to the background and keeps running after you close the terminal. A watched job streams its output into the session without taking the prompt, so you can read it when you want to and carry on meanwhile.",
+      "This — not tabs — is how two things run at once in the terminal. A tab you switch away from is paused; a detached job keeps working.",
       "Wander runs a bounded research lab on a topic, gathers evidence first, and grades its own claims. It can run once or on a schedule.",
       "A job that needs approval says so and waits — attach to it to answer.",
     ],
