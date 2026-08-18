@@ -16,6 +16,7 @@ export type ShortcutAction =
   | "diff"
   | "settings"
   | "models"
+  | "files"
   | "plan"
   | "build"
   | "auto"
@@ -47,6 +48,7 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { action: "focus-composer", label: "Jump to the message box", keys: "Ctrl /" },
   { action: "models", label: "Switch model", keys: "Ctrl M" },
   { action: "diff", label: "See what changed", keys: "Ctrl D" },
+  { action: "files", label: "Browse and read the project's files", keys: "Ctrl P" },
   { action: "undo", label: "Undo the last turn", keys: "Ctrl Z" },
   { action: "settings", label: "Open settings", keys: "Ctrl ," },
   { action: "tab-new", label: "New tab — a second piece of work, running at the same time", keys: "Ctrl T" },
@@ -107,6 +109,9 @@ export function matchShortcut(event: ShortcutEvent): ShortcutAction | undefined 
     case "/": return "focus-composer";
     case "m": return "models";
     case "d": return "diff";
+    // The chord every editor uses for "open a file", so the explorer is where the hand already
+    // goes rather than somewhere new to learn.
+    case "p": return "files";
     case "z": return "undo";
     case ",": return "settings";
     default: return undefined;

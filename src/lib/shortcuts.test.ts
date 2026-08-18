@@ -71,6 +71,7 @@ describe("the documented list", () => {
       matchShortcut({ key: "/", ctrlKey: true }),
       matchShortcut({ key: "m", ctrlKey: true }),
       matchShortcut({ key: "d", ctrlKey: true }),
+      matchShortcut({ key: "p", ctrlKey: true }),
       matchShortcut({ key: "z", ctrlKey: true }),
       matchShortcut({ key: ",", ctrlKey: true }),
       matchShortcut({ key: "1", altKey: true }),
@@ -170,3 +171,18 @@ describe("tab shortcuts", () => {
   });
 });
 
+
+describe("reaching the project's files", () => {
+  it("opens the explorer on the chord editors already use", () => {
+    expect(matchShortcut({ key: "p", ctrlKey: true })).toBe("files");
+  });
+
+  it("leaves a typed p alone", () => {
+    // Every letter shortcut has to survive this: the composer is the main thing on screen.
+    expect(matchShortcut({ key: "p", typing: true })).toBeUndefined();
+  });
+
+  it("is listed, so it can be found without being told", () => {
+    expect(SHORTCUTS.some((binding) => binding.action === "files")).toBe(true);
+  });
+});
