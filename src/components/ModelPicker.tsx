@@ -46,6 +46,12 @@ export function ModelPicker(props: {
   }, [open]);
 
   function onKeyDown(event: React.KeyboardEvent) {
+    // The same handler is bound to the filter input and to the menu around it, so that arrow keys
+    // work whether focus sits in the field or on an option. Without this, a key pressed in the
+    // field runs it twice — once on the input, once on the way up — and Enter therefore switched
+    // model twice: two `model.set` calls, two session rebuilds, and the switch recorded twice in
+    // the transcript for one keypress.
+    event.stopPropagation();
     if (event.key === "Escape") { setOpen(false); return; }
     if (event.key === "ArrowDown") { event.preventDefault(); setCursor((c) => Math.min(visible.length - 1, c + 1)); return; }
     if (event.key === "ArrowUp") { event.preventDefault(); setCursor((c) => Math.max(0, c - 1)); return; }

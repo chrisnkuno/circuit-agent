@@ -29,6 +29,8 @@ export type TabStatus = "idle" | "running" | "failed";
 export type WindowTab = {
   /** The sidecar's tab id — the address every request and event uses. Stable across session rebuilds. */
   readonly tabId: string;
+  /** The local id this tab answered to before its first session opened, if it had one. */
+  readonly adoptedFrom?: string;
   /** The live session inside the tab; changes when the tab's agent is rebuilt. */
   sessionId?: string;
   title: string;
@@ -76,8 +78,17 @@ export function activeTab(state: TabsState): WindowTab | undefined {
   return state.tabs.find((tab) => tab.tabId === state.activeTabId);
 }
 
+/**
+ * The tab a request was addressed to — by its current id, or by the local id it had before it
+ * adopted the sidecar's.
+ *
+ * The second half matters because an open is asynchronous and adoption happens in the middle of it:
+ * the caller captured a local id before the request went out, the tab took the sidecar's id when
+ * the answer came back, and the caller's `finally` then addresses an id that no longer names
+ * anything. Matching the old id keeps that patch landing instead of silently doing nothing.
+ */
 export function findTab(state: TabsState, tabId: string): WindowTab | undefined {
-  return state.tabs.find((tab) => tab.tabId === tabId);
+  return state.tabs.find((tab) => tab.tabId === tabId || tab.adoptedFrom === tabId);
 }
 
 /** A tab as it exists before any session is open in it — the blank one the window starts with. */
@@ -146,7 +157,10 @@ export function adoptTabId(state: TabsState, localId: string, tabId: string): Ta
   if (localId === tabId) return state;
   return {
     activeTabId: state.activeTabId === localId ? tabId : state.activeTabId,
-    tabs: state.tabs.map((tab) => (tab.tabId === localId ? { ...tab, tabId } : tab)),
+    // `adoptedFrom` is kept rather than dropped so that work already in flight against the local id
+    // can still find this tab — see `findTab`. It is the id the tab used to answer to, not a second
+    // address the sidecar knows about: nothing is ever *sent* to it.
+    tabs: state.tabs.map((tab) => (tab.tabId === localId ? { ...tab, tabId, adoptedFrom: localId } : tab)),
   };
 }
 

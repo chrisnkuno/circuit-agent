@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   activateTab,
+  adoptTabId,
   addTab,
   applyTabEvents,
   blankTab,
   describeWork,
+  findTab,
   initialTabsState,
   neighbourTabId,
   removeTab,
@@ -217,5 +219,53 @@ describe("per-tab state", () => {
     const state = applyTabEvents(twoTabs(), [delta("tab_1", "only here")], clock);
     expect(state.tabs[1].chat.messages).toHaveLength(0);
     expect(state.tabs[1].chat).not.toBe(state.tabs[0].chat);
+  });
+});
+
+/**
+ * Adoption is the one moment a tab's address changes underneath work that is already in flight.
+ * An open captures the local id, awaits the sidecar, and only then learns the real one — so every
+ * patch the open still has to apply (clearing `busy` in its `finally`, most of all) is addressed to
+ * an id that has just stopped existing. When that patch is dropped the tab stays busy for good:
+ * Send, Open, Browse and the model picker are all disabled on `busy`, so the window looks alive and
+ * accepts nothing. It is worth several statements of the same property.
+ */
+describe("adopting the sidecar's tab id", () => {
+  const local = (): TabsState => addTab(initialTabsState(), blankTab("local"));
+
+  it("still finds the tab by the id it had before adopting", () => {
+    const state = adoptTabId(local(), "local", "tab_9");
+    expect(findTab(state, "tab_9")?.tabId).toBe("tab_9");
+    expect(findTab(state, "local")?.tabId).toBe("tab_9");
+  });
+
+  it("clears a flag set before adoption and cleared after it", () => {
+    // Precisely the shape of an open: busy on the local id, adopt, then clear on the local id.
+    let state = updateTab(local(), "local", { busy: true });
+    state = adoptTabId(state, "local", "tab_9");
+    const target = findTab(state, "local");
+    state = updateTab(state, target!.tabId, { busy: false });
+    expect(findTab(state, "tab_9")?.busy).toBe(false);
+  });
+
+  it("moves the front of the strip with the tab", () => {
+    const state = adoptTabId(activateTab(local(), "local"), "local", "tab_9");
+    expect(state.activeTabId).toBe("tab_9");
+  });
+
+  it("does not let one tab's old id name another tab", () => {
+    // Two blank tabs are opened in turn, so both were once called something local. An old id must
+    // resolve to the tab that actually wore it, never to whichever tab is nearest in the list.
+    let state = addTab(local(), blankTab("local-2"));
+    state = adoptTabId(state, "local", "tab_9");
+    state = adoptTabId(state, "local-2", "tab_10");
+    expect(findTab(state, "local")?.tabId).toBe("tab_9");
+    expect(findTab(state, "local-2")?.tabId).toBe("tab_10");
+  });
+
+  it("leaves the state alone when the id is already the sidecar's", () => {
+    const state = adoptTabId(local(), "tab_9", "tab_9");
+    expect(findTab(state, "tab_9")).toBeUndefined();
+    expect(state.tabs[0].adoptedFrom).toBeUndefined();
   });
 });
