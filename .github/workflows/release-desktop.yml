@@ -90,9 +90,12 @@ jobs:
         with:
           targets: ${{ matrix.triple }}
 
-      - name: Install desktop dependencies
-        working-directory: apps/nova-desktop
-        run: npm install
+      # Installed from the repository root with bun, not with npm inside the app: the desktop
+      # depends on `@circuit-nova/nova-core` as `workspace:*`, a protocol npm does not understand
+      # ("Unsupported URL Type") — so `npm install` here failed every platform of this workflow the
+      # moment the app started sharing code with the CLI.
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
 
       - name: Build and publish to GitHub Releases
         uses: tauri-apps/tauri-action@944946e3e4cac6603d1fe8f514171e9ecd3c78aa # v1
