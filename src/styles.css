@@ -1376,24 +1376,42 @@ button {
 
 /* ---- Keyboard help ----------------------------------------------------- */
 
+/* Built as a card like the panels above it, so the rail reads as a stack of sections rather than
+   two cards and a loose disclosure at the bottom. Collapsed by default: it teaches without taking
+   room from the panels people actually watch. */
 .keys-help {
-  border-top: 1px solid var(--line);
-  padding: 0.6rem 1rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
   font-size: 0.8rem;
+  overflow: hidden;
 }
 
 .keys-help summary {
   cursor: pointer;
   color: var(--muted);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   font-size: 0.72rem;
+  font-weight: 600;
+  padding: var(--s2) var(--s4);
+  background: var(--sunken-bg);
+}
+
+/* Only once open, so a collapsed card has no stray rule under its title. */
+.keys-help[open] summary {
+  border-bottom: 1px solid var(--line);
 }
 
 .keys-help dl {
-  margin: 0.6rem 0 0;
+  padding: var(--s3) var(--s4);
+}
+
+.keys-help dl {
+  margin: 0;
   display: grid;
-  gap: 0.3rem;
+  gap: var(--s1);
 }
 
 .keys-help dl > div {
