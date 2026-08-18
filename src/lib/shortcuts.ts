@@ -20,7 +20,13 @@ export type ShortcutAction =
   | "build"
   | "auto"
   | "defender"
-  | "focus-composer";
+  | "focus-composer"
+  | "tab-new"
+  | "tab-close"
+  | "tab-next"
+  | "tab-previous"
+  /** Carries the 1-based position with it — Ctrl+1 … Ctrl+9 pick a tab directly. */
+  | `tab-select-${number}`;
 
 export type ShortcutEvent = {
   key: string;
@@ -43,6 +49,11 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { action: "diff", label: "See what changed", keys: "Ctrl D" },
   { action: "undo", label: "Undo the last turn", keys: "Ctrl Z" },
   { action: "settings", label: "Open settings", keys: "Ctrl ," },
+  { action: "tab-new", label: "New tab — a second piece of work, running at the same time", keys: "Ctrl T" },
+  { action: "tab-close", label: "Close this tab", keys: "Ctrl W" },
+  { action: "tab-next", label: "Next tab", keys: "Ctrl ⇥" },
+  { action: "tab-previous", label: "Previous tab", keys: "Ctrl ⇧ ⇥" },
+  { action: "tab-select-1", label: "Jump to a tab by position", keys: "Ctrl 1…9" },
   { action: "plan", label: "Plan mode", keys: "Alt 1" },
   { action: "build", label: "Build mode", keys: "Alt 2" },
   { action: "auto", label: "Auto mode", keys: "Alt 3" },
@@ -66,6 +77,22 @@ export function matchShortcut(event: ShortcutEvent): ShortcutAction | undefined 
 
   if (key === "escape") return event.typing ? undefined : "stop";
   if (key === "enter" && mod) return "send";
+
+  /**
+   * Tabs, on the chords every tabbed application already uses.
+   *
+   * These are claimed even while typing, unlike the letter shortcuts below: Ctrl+T in a text field
+   * is not a character, and a person mid-sentence in one tab is exactly who wants to start another.
+   * Ctrl+Tab is checked before the modifier gate because Tab with a modifier is never text either.
+   */
+  if (mod && !event.altKey) {
+    if (key === "tab") return event.shiftKey ? "tab-previous" : "tab-next";
+    if (key === "t") return "tab-new";
+    if (key === "w") return "tab-close";
+    // Digits pick a tab by position. Shift is excluded so that punctuation typed with Ctrl held —
+    // which some layouts produce from the number row — cannot select a tab by accident.
+    if (!event.shiftKey && /^[1-9]$/.test(key)) return `tab-select-${Number(key)}` as ShortcutAction;
+  }
 
   if (event.altKey && !mod) {
     if (key === "1") return "plan";

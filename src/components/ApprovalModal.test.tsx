@@ -1,3 +1,11 @@
+/**
+ * @vitest-environment happy-dom
+ *
+ * `bun test` gets its DOM from the `happydom.ts` preload in `bunfig.toml`; the repo-wide `vitest`
+ * run has no such preload, so this file has to ask for one itself. Without it these tests fail with
+ * `document is not defined` under the root suite — a failure about the harness, not the component,
+ * and one that reads exactly like a real regression in CI.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ApprovalModal } from "./ApprovalModal";

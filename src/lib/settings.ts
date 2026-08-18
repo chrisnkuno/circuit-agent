@@ -31,11 +31,20 @@ export type NovaSettings = {
   modelOutputPerMillion?: number;
 };
 
+/**
+ * Which tab an event belongs to — see the sidecar's `TabTagged`, of which this is the mirror.
+ *
+ * Optional in the type and present in practice on everything a session produces. The window routes
+ * on `tabId`: with two turns streaming at once there is no other way to tell whose token this is,
+ * and "assume the tab in front" is wrong about half the time.
+ */
+export type TabTagged = { tabId?: string; sessionId?: string };
+
 export type IpcEvent =
-  | { type: "assistant_delta"; text: string }
-  | { type: "tool_call"; toolCallId: string; name: string; summary?: string }
-  | { type: "tool_result"; toolCallId: string; name: string; ok: boolean; preview?: string }
-  | {
+  | ({ type: "assistant_delta"; text: string } & TabTagged)
+  | ({ type: "tool_call"; toolCallId: string; name: string; summary?: string } & TabTagged)
+  | ({ type: "tool_result"; toolCallId: string; name: string; ok: boolean; preview?: string } & TabTagged)
+  | ({
       type: "approval_needed";
       requestId: string;
       toolCallId: string;
@@ -43,11 +52,11 @@ export type IpcEvent =
       summary: string;
       actionDigest: string;
       scopeKey: string;
-    }
-  | { type: "turn_status"; status: string; summary?: string }
-  | { type: "cost"; report: string; displayTotal?: string; budgetFraction?: number }
-  | { type: "checkpoint"; id: string; label?: string }
-  | { type: "error"; message: string }
+    } & TabTagged)
+  | ({ type: "turn_status"; status: string; summary?: string } & TabTagged)
+  | ({ type: "cost"; report: string; displayTotal?: string; budgetFraction?: number } & TabTagged)
+  | ({ type: "checkpoint"; id: string; label?: string } & TabTagged)
+  | ({ type: "error"; message: string } & TabTagged)
   | { type: "ready" };
 
 export function defaultSettings(): NovaSettings {

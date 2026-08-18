@@ -1510,3 +1510,119 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- Tab strip ------------------------------------------------------------
+   Parallel work has an awkward property: when it works, it is invisible. A tab
+   quietly running a turn looks exactly like an idle one, so the strip is built
+   to *report* — a status word per tab, and a summary of the window beside them.
+   Every state is a word as well as a colour: telling three running tabs apart by
+   hue alone excludes the readers most likely to be running three at once. */
+.tab-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  padding: 0 var(--s5);
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome-bg);
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  /* The active tab is lifted rather than merely tinted: with four tabs open, a
+     tint is a difference you have to look for and an edge is one you do not. */
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.tab:hover { background: var(--sunken-bg); }
+
+.tab.active {
+  background: var(--panel-bg);
+  border-color: var(--line);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tab-select {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 15rem;
+  padding: 0.5rem 0.35rem 0.5rem 0.7rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab.active .tab-select { color: var(--text); }
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-badge {
+  flex: none;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+}
+
+.tab-badge.running { background: var(--accent-dim); color: var(--accent); }
+.tab-badge.unread { background: var(--sunken-bg); color: var(--muted); }
+.tab-badge.failed { background: var(--danger-dim); color: var(--danger); }
+
+/* The one badge that is a demand rather than a report: nothing moves in that tab
+   until it is answered, so it is the only one that pulses. */
+.tab-badge.waiting {
+  background: var(--warn-dim);
+  color: var(--warn);
+  animation: tab-waiting 1.6s ease-in-out infinite;
+}
+
+.tab.needs-approval { border-color: var(--warn-edge); }
+
+@keyframes tab-waiting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* Anyone who has asked for less motion gets a steady badge instead — the colour
+   and the word already carry the meaning; the pulse only draws the eye. */
+@media (prefers-reduced-motion: reduce) {
+  .tab-badge.waiting { animation: none; }
+}
+
+.tab-close,
+.tab-new {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tab-close:hover { color: var(--danger); background: var(--danger-dim); }
+.tab-new:hover { color: var(--accent); background: var(--accent-dim); }
+.tab-new:disabled { opacity: 0.4; cursor: default; }
+
+.tab-summary {
+  margin-left: auto;
+  align-self: center;
+  padding-left: var(--s4);
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}

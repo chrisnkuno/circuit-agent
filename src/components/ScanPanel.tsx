@@ -14,7 +14,7 @@ import { countBySeverity, sortFindings, summarize, type PlacedSecretFinding } fr
  * back onto the screen — into a window that may be screen-shared, and into a screenshot attached to
  * the bug report about it — would leak the thing it is warning you about.
  */
-export function ScanPanel(props: { open: boolean; onClose: () => void }) {
+export function ScanPanel(props: { open: boolean; onClose: () => void; tabId?: string }) {
   const [findings, setFindings] = useState<PlacedSecretFinding[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -24,12 +24,12 @@ export function ScanPanel(props: { open: boolean; onClose: () => void }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    scanSecrets()
+    scanSecrets(undefined, props.tabId)
       .then((result) => { if (!cancelled) setFindings(sortFindings(result.findings ?? [])); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [props.open]);
+  }, [props.open, props.tabId]);
 
   useEffect(() => {
     if (!props.open) return;

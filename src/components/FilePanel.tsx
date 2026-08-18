@@ -14,7 +14,7 @@ import { ancestorsOf, buildFileTree, describeFolder, searchFiles, type FileNode 
  * Folders expand in place; typing searches flat across the whole project, because a match three
  * folders deep is not made easier to find by nesting it three folders deep.
  */
-export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (path: string) => void }) {
+export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (path: string) => void; tabId?: string }) {
   const [paths, setPaths] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -26,12 +26,12 @@ export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (
     let cancelled = false;
     setLoading(true);
     setError(null);
-    listFiles()
+    listFiles(undefined, props.tabId)
       .then((result) => { if (!cancelled) setPaths(result.files ?? []); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [props.open]);
+  }, [props.open, props.tabId]);
 
   useEffect(() => {
     if (!props.open) return;

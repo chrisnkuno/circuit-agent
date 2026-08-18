@@ -21,16 +21,55 @@ export async function setSettings(settings: NovaSettings) {
   return await sidecarRequest({ type: "settings.set", settings });
 }
 
-export async function openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
-  return await sidecarRequest<{
-    sessionId: string;
-    root: string;
-    mode: NovaMode;
-    sandbox: boolean;
-    workspace: string;
-    model: string;
-    provider: string;
-  }>({ type: "session.open", root, mode, sandbox, upload });
+/**
+ * Opens a project — into `tabId` when one is named, or into a new tab.
+ *
+ * Naming a tab is how "open a different folder in *this* tab" is said; omitting it is how a new
+ * piece of work is started beside the others. Opening used to imply closing whatever was open,
+ * which is exactly the behaviour tabs exist to undo.
+ */
+export async function openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean, tabId?: string) {
+  return await sidecarRequest<OpenedSession>({ type: "session.open", root, mode, sandbox, upload, ...(tabId ? { tabId } : {}) });
+}
+
+export type OpenedSession = {
+  tabId: string;
+  sessionId: string;
+  root: string;
+  mode: NovaMode;
+  sandbox: boolean;
+  workspace: string;
+  model: string;
+  provider: string;
+  title: string;
+};
+
+/** One row per open tab, as the sidecar sees them — the truth the strip is drawn from. */
+export type TabRow = {
+  tabId: string;
+  sessionId: string;
+  title: string;
+  root: string;
+  mode: NovaMode;
+  sandbox: boolean;
+  model?: string;
+  provider?: ProviderId;
+  running: boolean;
+  active: boolean;
+};
+
+export async function listTabs() {
+  return await sidecarRequest<{ activeTabId: string | null; tabs: TabRow[] }>({ type: "tabs.list" });
+}
+
+/** Bookkeeping only: a tab that is not in front goes on working exactly as before. */
+export async function activateTab(tabId: string) {
+  return await sidecarRequest<{ activeTabId: string | null; tabs: TabRow[] }>({ type: "tabs.activate", tabId });
+}
+
+/** Ends one tab's session and releases what it held — its sandbox included — leaving the rest running. */
+export async function closeTab(tabId: string) {
+  return await sidecarRequest<{ closed: string; activeTabId: string | null; tabs: TabRow[] }>({ type: "tabs.close", tabId });
 }
 
 /**
@@ -39,15 +78,8 @@ export async function openSession(root: string, mode: NovaMode, sandbox: boolean
  * Returns the scratch directory the sidecar chose, so the UI can say where files would land rather
  * than leaving "no project" as an invisible state with real consequences.
  */
-export async function openScratchSession(mode: NovaMode) {
-  return await sidecarRequest<{
-    sessionId: string;
-    root: string;
-    provider?: string;
-    model?: string;
-    workspace: string;
-    scratch: true;
-  }>({ type: "session.scratch", mode });
+export async function openScratchSession(mode: NovaMode, tabId?: string) {
+  return await sidecarRequest<OpenedSession & { scratch: true }>({ type: "session.scratch", mode, ...(tabId ? { tabId } : {}) });
 }
 
 export async function listSessions(root: string) {
@@ -57,38 +89,40 @@ export async function listSessions(root: string) {
   });
 }
 
-export async function resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
-  return await sidecarRequest({ type: "session.resume", root, sessionId, mode, sandbox, upload });
+export async function resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean, tabId?: string) {
+  return await sidecarRequest<OpenedSession & { title?: string; resumed: true }>({ type: "session.resume", root, sessionId, mode, sandbox, upload, ...(tabId ? { tabId } : {}) });
 }
 
-export async function sendTurn(objective: string) {
-  return await sidecarRequest<{ status: string; summary: string; sessionId: string }>({
+export async function sendTurn(objective: string, tabId?: string) {
+  return await sidecarRequest<{ status: string; summary: string; tabId: string; sessionId: string }>({
     type: "turn.send",
     objective,
+    ...(tabId ? { tabId } : {}),
   });
 }
 
-export async function setMode(mode: NovaMode) {
-  return await sidecarRequest({ type: "mode.set", mode });
+export async function setMode(mode: NovaMode, tabId?: string) {
+  return await sidecarRequest<OpenedSession & { mode: NovaMode }>({ type: "mode.set", mode, ...(tabId ? { tabId } : {}) });
 }
 
-export async function setModel(model: string, provider?: ProviderId) {
-  return await sidecarRequest({ type: "model.set", model, provider });
+export async function setModel(model: string, provider?: ProviderId, tabId?: string) {
+  return await sidecarRequest({ type: "model.set", model, provider, ...(tabId ? { tabId } : {}) });
 }
 
 export async function respondApproval(requestId: string, decision: PermissionDecision) {
   return await sidecarRequest({ type: "approval.respond", requestId, decision });
 }
 
-export async function undoTurn() {
-  return await sidecarRequest({ type: "undo" });
+export async function undoTurn(tabId?: string) {
+  return await sidecarRequest({ type: "undo", ...(tabId ? { tabId } : {}) });
 }
 
-export async function cancelTurn() {
-  return await sidecarRequest({ type: "cancel" });
+/** Stops the turn in one tab. Work running in any other tab is left alone. */
+export async function cancelTurn(tabId?: string) {
+  return await sidecarRequest({ type: "cancel", ...(tabId ? { tabId } : {}) });
 }
 
-export async function getCost() {
+export async function getCost(tabId?: string) {
   return await sidecarRequest<{
     report: string;
     priced: boolean;
@@ -96,7 +130,7 @@ export async function getCost() {
     budgetFraction?: number;
     warning?: string;
     exhausted?: boolean;
-  }>({ type: "cost.get" });
+  }>({ type: "cost.get", ...(tabId ? { tabId } : {}) });
 }
 
 export async function verifyCredentials(settings: NovaSettings) {
@@ -106,29 +140,29 @@ export async function verifyCredentials(settings: NovaSettings) {
   });
 }
 
-export async function getDiff() {
-  return await sidecarRequest<{ diff: string }>({ type: "diff.get" });
+export async function getDiff(tabId?: string) {
+  return await sidecarRequest<{ diff: string }>({ type: "diff.get", ...(tabId ? { tabId } : {}) });
 }
 
-export async function getTodos() {
-  return await sidecarRequest<{ todos: Array<{ id: string; content: string; status: string }> }>({ type: "todos.get" });
+export async function getTodos(tabId?: string) {
+  return await sidecarRequest<{ todos: Array<{ id: string; content: string; status: string }> }>({ type: "todos.get", ...(tabId ? { tabId } : {}) });
 }
 
-export async function pullSandbox(dest?: string) {
-  return await sidecarRequest<{ dest: string }>({ type: "sandbox.pull", dest });
+export async function pullSandbox(dest?: string, tabId?: string) {
+  return await sidecarRequest<{ dest: string }>({ type: "sandbox.pull", dest, ...(tabId ? { tabId } : {}) });
 }
 
 /**
  * The deterministic secret scan. Read-only and model-free, so it needs no approval and costs
  * nothing — the same scan `scan_secrets` runs, reached directly.
  */
-export async function scanSecrets(include?: string) {
-  return await sidecarRequest<{ findings: PlacedSecretFinding[] }>({ type: "scan.secrets", ...(include ? { include } : {}) });
+export async function scanSecrets(include?: string, tabId?: string) {
+  return await sidecarRequest<{ findings: PlacedSecretFinding[] }>({ type: "scan.secrets", ...(include ? { include } : {}), ...(tabId ? { tabId } : {}) });
 }
 
 /** The project's files, root-relative — whatever backend the session is on. */
-export async function listFiles(pattern?: string) {
-  return await sidecarRequest<{ files: string[] }>({ type: "files.list", ...(pattern ? { pattern } : {}) });
+export async function listFiles(pattern?: string, tabId?: string) {
+  return await sidecarRequest<{ files: string[] }>({ type: "files.list", ...(pattern ? { pattern } : {}), ...(tabId ? { tabId } : {}) });
 }
 
 export async function onSidecarEvent(handler: (event: IpcEvent) => void): Promise<UnlistenFn> {

@@ -2,3 +2,10 @@
 # A DOM for every test file. Pure-logic tests are unaffected by its presence; component tests
 # cannot run without it.
 preload = ["./happydom.ts"]
+
+# Scoped to the UI, because the preload above is not free elsewhere: registering a DOM puts `window`
+# and `document` on the global object, and the Anthropic SDK refuses to construct a client when it
+# sees them ("it looks like you're running in a browser-like environment"). That makes the sidecar's
+# own tests — which drive a real host against a stubbed provider — unrunnable here. They run under
+# the repo's vitest suite, which is where every non-UI test in this project already lives.
+root = "src"
