@@ -40,11 +40,37 @@ export interface AgentTurnProvider {
 
 export type ToolEffect = "none" | "workspace" | "external";
 /**
- * `kind` separates executed behaviour (`tests`) from compile-time evidence (`check`). Optional so
- * a caller that cannot classify its own command still reports verification, treated as `check` —
- * the conservative reading, since claiming a build proved behaviour is the error worth avoiding.
+ * How strong a piece of verification evidence is, as a ladder.
+ *
+ * Each rung answers a question the one below it cannot, which is the whole reason there is more
+ * than one:
+ *
+ * - `check` — a build, typecheck or lint. Proves the code is *well-formed*. Says nothing about
+ *   whether it does the right thing.
+ * - `tests` — executed unit tests, including the invariant tests this codebase asks for. Proves
+ *   the *units* behave, over the properties that must hold for every valid input.
+ * - `smoke` — the assembled thing was started and exercised directly: the route answered, the CLI
+ *   ran, the entry point rendered. Cheap and shallow, but it proves the program *works at all*
+ *   when assembled, which no unit test establishes.
+ * - `behavior` — an integration or end-to-end suite. Everything smoke proves, asserted across a
+ *   real user path rather than a single probe.
+ *
+ * The top two exist because passing units are routinely assembled into something broken. A
+ * component whose every invariant holds is still useless if it was never mounted, if the route was
+ * never registered, or if the build output does not load in a browser — and unit tests cannot see
+ * any of that by construction, because they never assemble the program.
+ *
+ * Ordered deliberately, and compared through `EVIDENCE_RANK` rather than by string, so "did this
+ * run produce stronger evidence than that one" is one comparison rather than a chain of cases.
+ * Optional so a caller that cannot classify its own command still reports verification, read as
+ * `check` — the conservative reading, since claiming a build proved behaviour is the error worth
+ * avoiding.
  */
-export type VerificationEvidence = { passed: boolean; kind?: "tests" | "check"; scope: "targeted" | "full"; summary: string };
+export type VerificationKind = "check" | "tests" | "smoke" | "behavior";
+
+export const EVIDENCE_RANK: Record<VerificationKind, number> = { check: 1, tests: 2, smoke: 3, behavior: 4 };
+
+export type VerificationEvidence = { passed: boolean; kind?: VerificationKind; scope: "targeted" | "full"; summary: string };
 
 export type AgentToolDefinition = {
   name: string;
@@ -164,6 +190,21 @@ const VERIFICATION_NUDGE =
 const TEST_EVIDENCE_NUDGE =
   "That build/typecheck passing shows the code compiles, not that it behaves correctly. Add or run tests that execute the changed behaviour and assert its invariants — properties true for every valid input (round-trips, bounds, ordering, conservation, idempotence, error cases), not a single example. Run them and report the real result. If the change genuinely has no behaviour to assert (documentation, formatting, configuration), say so explicitly and stop.";
 
+/**
+ * Sent when units pass but the assembled program was never exercised.
+ *
+ * Passing units are routinely assembled into something broken, and no unit test can see it: a
+ * component whose every invariant holds is still useless if it was never mounted, if the route was
+ * never registered, or if the bundle does not load. This asks for one cheap end-to-end exercise of
+ * the thing a user actually meets.
+ *
+ * Asked at most once, and only when the run produced something assemblable — the same shape as the
+ * test-evidence nudge above. A library change with no entry point to start has nothing to smoke,
+ * and a model that says so must be able to finish.
+ */
+const BEHAVIOR_EVIDENCE_NUDGE =
+  "Your unit tests pass, which proves the pieces work in isolation — not that the assembled program does. Units routinely pass while the thing is broken: a component that was never mounted, a route never registered, a build whose output does not load. Exercise it once the way a user meets it and assert on the real output: render the entry point and assert the expected element or text is present, start the server and request the route, or run the CLI and check its output and exit code. Keep it to one fast command — seconds, not a browser suite. Report what it actually printed. If this change genuinely has nothing assemblable to exercise, say so explicitly and stop.";
+
 const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 
 function addUsage(total: ModelUsage, next: ModelUsage): ModelUsage {
@@ -263,11 +304,12 @@ export class BoundedAgentRuntime {
     let totalToolResultChars = 0;
     let workspaceNeedsVerification = false;
     let verificationNudges = 0;
-    // Strongest evidence seen for the workspace changes in this run, and whether the model has
-    // already been asked to escalate a compile-only result to executed tests. Asked at most once:
-    // a model that answers "this change has no behaviour to assert" must be able to finish.
-    let strongestEvidence: "none" | "check" | "tests" = "none";
+    // Strongest evidence seen for the workspace changes in this run, as a rung on `EVIDENCE_RANK`,
+    // and which escalations the model has already been asked for. Each is asked at most once: a
+    // model that answers "this change has nothing to assert" must be able to finish.
+    let strongestEvidence = 0;
     let askedForTestEvidence = false;
+    let askedForBehaviorEvidence = false;
     // Measured once per part, not once per iteration: `messages` only ever grows inside this loop,
     // so a message already measured cannot change. The tool definitions are constant for the run
     // and are folded in first, which is why `measured` starts at zero rather than tracking them.
@@ -320,10 +362,24 @@ export class BoundedAgentRuntime {
           messages.push({ role: "user", content: VERIFICATION_NUDGE });
           continue;
         }
-        // Compile-only evidence is accepted, but not before asking once for the behavioural kind.
-        if (strongestEvidence === "check" && !askedForTestEvidence) {
+        // One rung at a time up `EVIDENCE_RANK`, each asked at most once. Compile-only evidence is
+        // accepted in the end, but not before asking for executed tests; unit tests are accepted in
+        // the end, but not before asking for one exercise of the assembled program. Both stop at
+        // asking, because both answers ("nothing to assert", "nothing to assemble") are sometimes
+        // the truth, and a gate that cannot be satisfied honestly is a gate that gets worked around.
+        if (strongestEvidence === EVIDENCE_RANK.check && !askedForTestEvidence) {
           askedForTestEvidence = true;
-          messages.push({ role: "user", content: TEST_EVIDENCE_NUDGE });
+          // Both rungs asked for at once, and both marked as asked. Escalating one level per round
+          // trip would cost two extra model calls to say something that fits in one message, and a
+          // gate that is expensive to satisfy is a gate that makes every run slower whether or not
+          // it finds anything. The model can run its tests and its smoke check in the same turn.
+          askedForBehaviorEvidence = true;
+          messages.push({ role: "user", content: `${TEST_EVIDENCE_NUDGE}\n\n${BEHAVIOR_EVIDENCE_NUDGE}` });
+          continue;
+        }
+        if (strongestEvidence === EVIDENCE_RANK.tests && !askedForBehaviorEvidence) {
+          askedForBehaviorEvidence = true;
+          messages.push({ role: "user", content: BEHAVIOR_EVIDENCE_NUDGE });
           continue;
         }
         return workspaceNeedsVerification
@@ -369,9 +425,39 @@ export class BoundedAgentRuntime {
           return { call, tool, result: { content: error instanceof Error ? error.message : "Tool execution failed", isError: true } as AgentToolResult };
         }
       };
-      const canRunInParallel = prepared.length > 1 && prepared.every(({ tool }) => tool.parallelSafe && tool.effect === "none");
-      const results = canRunInParallel ? await Promise.all(prepared.map(runOne)) : [];
-      if (!canRunInParallel) for (const item of prepared) results.push(await runOne(item));
+      /**
+       * Runs the batch as consecutive groups rather than all-or-nothing.
+       *
+       * The rule used to be that *every* call had to be parallel-safe or the whole batch went
+       * serial, which made parallelism an all-or-nothing property of the slowest member: a turn of
+       * five file reads and one write executed the five reads one after another, for no reason
+       * other than the write's presence. Grouping by consecutive runs keeps the concurrency where
+       * it is safe and loses none of the ordering that makes it safe.
+       *
+       * Order is the whole correctness argument, so it is preserved exactly. A parallel-safe run is
+       * only ever formed from calls the model emitted *adjacently*, and an effectful call always
+       * executes alone and in its emitted position. That means nothing is ever reordered across a
+       * write: a read before a write still observes the pre-write state and a read after it still
+       * observes the post-write state, which is precisely what a caller that sequenced them
+       * deliberately is entitled to assume. Reordering independent reads *among themselves* is the
+       * only freedom taken, and they cannot observe each other.
+       *
+       * The gain is small locally — a file read is sub-millisecond — and large on a remote
+       * backend, where every call is a network round trip to an E2B or Docker sandbox.
+       */
+      const groups: (typeof prepared)[] = [];
+      for (const item of prepared) {
+        const concurrent = item.tool.parallelSafe && item.tool.effect === "none";
+        const last = groups.at(-1);
+        const lastIsConcurrent = last !== undefined && last[0].tool.parallelSafe && last[0].tool.effect === "none";
+        if (concurrent && lastIsConcurrent) last.push(item);
+        else groups.push([item]);
+      }
+      const results: Array<{ call: AgentToolCall; tool: AgentTool; result: AgentToolResult }> = [];
+      for (const group of groups) {
+        if (group.length === 1) results.push(await runOne(group[0]));
+        else results.push(...await Promise.all(group.map(runOne)));
+      }
 
       for (const { call, tool, result } of results) {
         toolCallsExecuted += 1;
@@ -384,8 +470,9 @@ export class BoundedAgentRuntime {
         if (!result.isError && result.verification?.passed) {
           workspaceNeedsVerification = false;
           // Unclassified evidence reads as `check`: the weaker claim is the safe one to infer.
-          if ((result.verification.kind ?? "check") === "tests") strongestEvidence = "tests";
-          else if (strongestEvidence === "none") strongestEvidence = "check";
+          // Kept as a maximum so a later weak check cannot demote what a stronger run established —
+          // running the linter after the e2e suite is not a reason to ask for the e2e suite again.
+          strongestEvidence = Math.max(strongestEvidence, EVIDENCE_RANK[result.verification.kind ?? "check"]);
         }
         await this.dependencies.control.persistEvent({ type: "tool_result", toolCallId: call.id, toolName: call.name, isError: result.isError ?? false, effect, content, ...(result.data ? { data: result.data } : {}) });
       }

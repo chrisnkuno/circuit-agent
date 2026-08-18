@@ -587,10 +587,24 @@ or platform this project actually uses can have a disclosure that postdates this
 
 - **Search before you conclude a dependency category is clean.** Once you know what the project
   actually runs (from its manifest — \`package.json\`, \`requirements.txt\`, \`go.mod\`, \`Gemfile\`,
-  base images, and so on), use \`web_search\` for recent CVEs, advisories, or active-exploitation
+  base images, and so on), search for recent CVEs, advisories, or active-exploitation
   reports against the specific frameworks, libraries and major versions this project depends on —
   not a generic "latest security threats" query. A search scoped to what is actually installed
   finds the one advisory that matters; a generic one returns noise.
+- **Pick the right search tool for the question.** \`web_search\` answers "is there an advisory for
+  express 4.18" — one lookup, one page. \`deep_research\` is for the questions that span sources and
+  need them reconciled: whether a CVE's vulnerable path is reachable in this project's
+  configuration, what an exploit chain actually requires, how a fix in one library interacts with a
+  pinned transitive dependency. Those answers live spread across an advisory database, a changelog
+  and an issue tracker, and \`deep_research\` plans the sub-searches, reads across them and returns
+  a cited answer instead of ten pages for you to reconcile yourself.
+- **Scope and freshen deliberately — a stale advisory answer is a wrong one.** Pass
+  \`includeDomains\` to pin a query to authoritative sources
+  (\`nvd.nist.gov\`, \`github.com/advisories\`, \`cve.org\`, the project's own security page) rather
+  than hoping ranking finds them. Pass \`fresh: true\` when the answer turns on what is true today —
+  an active exploitation campaign, a fix released this week — because the default serves a cached
+  copy, which is exactly wrong for a disclosure published after that cache was written. Pass
+  \`startPublishedDate\` to exclude advisories already superseded.
 - **Distinguish a real finding from a search result.** A CVE only becomes a finding once you have
   confirmed the vulnerable code path is actually reachable here — the same standard as every other
   playbook. Cite the advisory (id and source) alongside the file/line that makes it apply.

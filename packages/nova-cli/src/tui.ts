@@ -479,6 +479,9 @@ export function activityLabel(phase: ActivityPhase, operation: string | undefine
     case "edit_file": return "Editing workspace";
     case "run_command": return "Running command";
     case "web_search": return "Searching the web";
+    // Named apart from web_search because it is a visibly longer wait — up to a minute — and a
+    // spinner that says "Searching the web" for that long reads as a hang rather than as work.
+    case "deep_research": return "Researching in depth";
     case "todo_write": return "Updating plan";
     default: return "Running operation";
   }
@@ -780,14 +783,33 @@ export function box(
   return [top, ...body, bottom].join("\n");
 }
 
-/** Takes as many characters as fit in a column budget, counting wide characters as two. */
+/**
+ * Takes as many characters as fit in a column budget, counting wide characters as two and colour
+ * codes as nothing.
+ *
+ * The colour clause is the fix for a bug the callers of this function all shared. It used to walk the
+ * string a character at a time, and a lone `\x1b` is not a *sequence* the ANSI pattern can match, so
+ * `visibleWidth` measured it one column wide: every escape character in a painted cell spent a column
+ * of the budget nobody can see. `table()` a few hundred lines up documents that its cells arrive
+ * pre-painted, and a painted cell that needed clipping therefore lost roughly as many visible
+ * characters as it carried bytes of colour code.
+ *
+ * Sequences now copy through free, which is the only reading of "as many characters as fit" that is
+ * true of a string with colour in it.
+ */
 export function sliceToWidth(text: string, width: number): string {
   let taken = "";
   let used = 0;
-  for (const character of text) {
-    const next = visibleWidth(character);
+  // Code-point tokens, not code units: `u` makes `[\s\S]` match an astral character whole rather than
+  // splitting a surrogate pair into two halves that render as replacement characters.
+  for (const token of text.match(/\x1b\[[0-9;]*m|[\s\S]/gu) ?? []) {
+    if (token.startsWith("\x1b")) {
+      taken += token;
+      continue;
+    }
+    const next = visibleWidth(token);
     if (used + next > width) break;
-    taken += character;
+    taken += token;
     used += next;
   }
   return taken;
@@ -985,9 +1007,56 @@ export function wrappedRemainder(line: string, startColumns: number, width: numb
  * only guaranteed while the line is typed forward — hence `dropBorder`, which opens the box rather
  * than letting the border sit under a line of text.
  */
+/**
+ * Paints suggestion rows that already exist, without moving the cursor as far as readline knows.
+ *
+ * `DECSC`/`DECRC` (`\x1b7`/`\x1b8`) save and restore the absolute cursor position around the whole
+ * write, which is what makes this safe to call mid-keystroke: readline's model of where the cursor
+ * is never stops being true, because by the time control returns the cursor is exactly where it was.
+ * The same technique the ghost-text completion already uses, one row further up.
+ *
+ * Every motion is *relative*. The cursor is on the input row by construction, so `up (rows + 1)`
+ * finds the top of the list — past the input row and the top border — without anything here needing
+ * to know which absolute screen row the bar has reached. That is the difference from
+ * `PinnedScreen.renderSuggestions`, which addresses rows absolutely and therefore only works when a
+ * held region has pinned the bar to a known row.
+ *
+ * Valid only when the row count is unchanged: rows are overwritten here, never created.
+ */
+export function dropupPaintInPlace(lines: readonly string[]): string {
+  if (lines.length === 0) return "";
+  const parts = ["\x1b7\x1b[?25l", `\x1b[${lines.length + 1}A`];
+  for (const line of lines) parts.push(`\r\x1b[2K${line}\x1b[1B`);
+  parts.push("\x1b8\x1b[?25h");
+  return parts.join("");
+}
+
+/**
+ * Moves to the top of the whole bar block and erases everything from there down.
+ *
+ * `ED 0` rather than a clear-per-row loop: one sequence, and no arithmetic about how far the closing
+ * border or a wrapped line reached. It is also exactly what readline uses for the same job, so the
+ * block is being torn down the same way its own occupant tears down a line. The caller reprints
+ * immediately afterwards, which is what lets the block *grow*: printing more rows than were erased
+ * scrolls the terminal, and scrolled-off transcript enters real scrollback rather than being
+ * overwritten in place.
+ */
+export function dropupEraseBlock(currentRows: number): string {
+  return `\x1b[?25l\x1b[${currentRows + 1}A\r\x1b[0J`;
+}
+
 export class PromptBox {
   private drawn = false;
   private borderCleared = false;
+  /**
+   * The suggestion rows currently printed above the box's top border.
+   *
+   * Held here rather than in a separate object because the rows are part of the same printed block:
+   * they are erased by the same `erase()` and their count shifts every row below them. Two owners of
+   * this block is the mistake that produced the earlier blank-space bug — the box moved, and the
+   * list kept painting where the box used to be. One owner is the rule.
+   */
+  private suggestions: string[] = [];
 
   constructor(
     private readonly stream: OutputStream = terminalStream,
@@ -1014,6 +1083,23 @@ export class PromptBox {
    * hand to readline's `question()`.
    */
   draw(mode: string, workspace: string, status?: string): string {
+    const { prefix } = this.paintBlock(mode, workspace, status);
+    this.drawn = true;
+    this.borderCleared = false;
+    return prefix;
+  }
+
+  /**
+   * Prints the whole block — suggestion rows, top border, input row, closing border — from the
+   * cursor's current row, and leaves the cursor at column one of the input row.
+   *
+   * Shared by `draw()` and by a relayout, because they differ only in what came before them: the
+   * first prints into fresh rows at the end of the transcript, the second prints into rows a
+   * relayout has just erased. Both need the block to be one contiguous print so that a block which
+   * has outgrown the screen scrolls exactly once, and so the transcript it pushes up goes into real
+   * scrollback rather than being overwritten in place.
+   */
+  private paintBlock(mode: string, workspace: string, status?: string): { prefix: string } {
     const { top, prefix, bottom } = renderPromptBox({
       mode,
       workspace,
@@ -1023,13 +1109,78 @@ export class PromptBox {
       ...(this.options.glyphs === undefined ? {} : { glyphs: this.options.glyphs }),
       ...(this.options.borderStyle === undefined ? {} : { borderStyle: this.options.borderStyle }),
     });
+    // The list first, so it ends up above the border it belongs to.
+    for (const line of this.suggestions) this.stream.write(`${line}\n`);
     this.stream.write(`${top}\n`);
     this.stream.write(`\n${bottom}`);
     // Back onto the input row at column one; `question()` writes the prefix from there.
     this.stream.write("\x1b[1A\r");
-    this.drawn = true;
+    return { prefix };
+  }
+
+  /** How many rows the suggestion list is currently occupying. Zero when there is no list. */
+  get suggestionRows(): number {
+    return this.suggestions.length;
+  }
+
+  /**
+   * Updates the suggestion list, and says whether the bar had to move to do it.
+   *
+   * Two paths, and the split is the whole reason this is fast enough to run on every keystroke:
+   *
+   * - **Same row count** — the rows already exist, so they are overwritten in place with the cursor
+   *   saved and restored around the write. Readline's model of the cursor never changes, nothing
+   *   below the list is touched, and no part of the terminal scrolls. This is the common case: a
+   *   list narrowing from `/mo` to `/mod` usually keeps its height.
+   * - **Different row count** — rows have to be created or destroyed above the bar, which no
+   *   terminal can do without moving the bar itself. The block is erased and reprinted, and the
+   *   caller is told (`moved: true`) that readline must now redraw its line, because the erase took
+   *   the input row with it.
+   *
+   * Returning the flag rather than redrawing here keeps this class free of any readline dependency —
+   * it writes to a stream and nothing else, which is what makes it testable against a fake one.
+   */
+  setSuggestions(lines: readonly string[], bar: { mode: string; workspace: string; status?: string }): { moved: boolean } {
+    if (!this.drawn) return { moved: false };
+    const next = [...lines];
+    if (next.length === this.suggestions.length) {
+      // Identical content is not repainted. Typing past the point where the match set stops
+      // changing — the `der` of `/wander` — otherwise reissues the same rows on every keystroke,
+      // which is invisible on a fast local terminal and a visible stutter over ssh or tmux.
+      if (next.every((line, index) => line === this.suggestions[index])) return { moved: false };
+      this.suggestions = next;
+      if (next.length > 0) this.stream.write(dropupPaintInPlace(next));
+      return { moved: false };
+    }
+    // Erase from the top of the *current* block, then reprint with the new row count.
+    this.stream.write(dropupEraseBlock(this.suggestions.length));
+    this.suggestions = next;
+    this.paintBlock(bar.mode, bar.workspace, bar.status);
+    this.stream.write("\x1b[?25h");
     this.borderCleared = false;
-    return prefix;
+    return { moved: true };
+  }
+
+  /**
+   * Redraws the closing border, which readline destroys whenever it refreshes its line.
+   *
+   * Readline's refresh moves to the start of the input line and issues `ED 0`, erasing everything
+   * from there to the bottom of the screen — so the border below the input row is collateral on
+   * every history recall, every completion and every relayout. Save/restore around the write is what
+   * lets this run afterwards without disturbing where readline believes the cursor is.
+   */
+  restoreBottomBorder(mode: string, workspace: string, status?: string): void {
+    if (!this.drawn || this.borderCleared) return;
+    const { bottom } = renderPromptBox({
+      mode,
+      workspace,
+      depth: this.options.depth,
+      width: this.width,
+      ...(status === undefined ? {} : { status }),
+      ...(this.options.glyphs === undefined ? {} : { glyphs: this.options.glyphs }),
+      ...(this.options.borderStyle === undefined ? {} : { borderStyle: this.options.borderStyle }),
+    });
+    this.stream.write(`\x1b7\x1b[?25l\x1b[1B\r\x1b[2K${bottom}\x1b8\x1b[?25h`);
   }
 
   /**
@@ -1044,8 +1195,12 @@ export class PromptBox {
    */
   erase(submitted: string): void {
     if (!this.drawn) return;
-    const rows = Math.floor((PROMPT_PREFIX_COLUMNS + visibleWidth(submitted) - 1) / this.width) + 3;
+    // Plus the suggestion rows, which sit above the top border and were printed by the same block.
+    // Omitting them is what would leave the list stranded above the next transcript line — visible,
+    // stale, and describing a command that has already been run.
+    const rows = Math.floor((PROMPT_PREFIX_COLUMNS + visibleWidth(submitted) - 1) / this.width) + 3 + this.suggestions.length;
     for (let index = 0; index < rows; index += 1) this.stream.write("\x1b[1A\x1b[2K");
+    this.suggestions = [];
     this.drawn = false;
   }
 

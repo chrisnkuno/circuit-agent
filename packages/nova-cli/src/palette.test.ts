@@ -195,3 +195,66 @@ describe("the interaction end to end", () => {
     expect(await runCommandPalette(keys(type("di")), entries, () => {})).toBeUndefined();
   });
 });
+
+describe("finding a command you half-remember", () => {
+  it("matches letters in order when they are not adjacent", () => {
+    // Slash commands are short words with no separators, so there is nothing to abbreviate *by*:
+    // a user who half-remembers a name has only the letters and their order to go on.
+    expect(rankPaletteEntries(entries, "wnd").map((entry) => entry.command)).toEqual([]);
+    expect(rankPaletteEntries(entries, "md").map((entry) => entry.command)).toContain("/mode");
+    expect(rankPaletteEntries(entries, "df").map((entry) => entry.command)).toContain("/diff");
+  });
+
+  it("never lets a subsequence match outrank something typed exactly", () => {
+    // Subsequence matching is generous enough to match most of the catalog on a short query, so it
+    // has to sit beneath every literal match or it drowns the answers people meant.
+    const ranked = rankPaletteEntries(entries, "cost").map((entry) => entry.command);
+    expect(ranked[0]).toBe("/cost");
+    const byName = rankPaletteEntries(entries, "diff").map((entry) => entry.command);
+    expect(byName[0]).toBe("/diff");
+  });
+
+  it("still ranks a name match above a description match", () => {
+    // The original guarantee, kept: typing "diff" must not put /undo first because its description
+    // says "changes".
+    const ranked = rankPaletteEntries(entries, "mode").map((entry) => entry.command);
+    expect(ranked[0]).toBe("/mode");
+  });
+});
+
+describe("moving through the palette", () => {
+  const many: PaletteEntry[] = Array.from({ length: 20 }, (_unused, index) => ({ command: `/c${index}`, description: `command ${index}` }));
+
+  it("pages with an overlap, so the row you were reading survives the jump", () => {
+    const step = advancePalette({ query: "", selected: 0 }, many, press("pagedown"), { rows: 8 });
+    expect(step.state.selected).toBe(7);
+    const back = advancePalette(step.state, many, press("pageup"), { rows: 8 });
+    expect(back.state.selected).toBe(0);
+  });
+
+  it("jumps to the ends", () => {
+    expect(advancePalette({ query: "", selected: 5 }, many, press("end")).state.selected).toBe(19);
+    expect(advancePalette({ query: "", selected: 5 }, many, press("home")).state.selected).toBe(0);
+  });
+
+  it("accepts Ctrl+P and Ctrl+N, since readline's own are unavailable while this is open", () => {
+    expect(advancePalette({ query: "", selected: 3 }, many, press("n", { ctrl: true })).state.selected).toBe(4);
+    expect(advancePalette({ query: "", selected: 3 }, many, press("p", { ctrl: true })).state.selected).toBe(2);
+  });
+
+  it("clamps at both ends rather than wrapping", () => {
+    expect(advancePalette({ query: "", selected: 0 }, many, press("pageup"), { rows: 8 }).state.selected).toBe(0);
+    expect(advancePalette({ query: "", selected: 19 }, many, press("pagedown"), { rows: 8 }).state.selected).toBe(19);
+  });
+
+  it("erases a word of the query with Ctrl+W", () => {
+    expect(advancePalette({ query: "show mode", selected: 0 }, entries, press("w", { ctrl: true })).state.query).toBe("show");
+  });
+
+  it("keeps every navigation key inside the match list as it narrows", () => {
+    // End on a filtered list must land on the last *match*, not the last entry of the full catalog.
+    const step = advancePalette({ query: "c1", selected: 0 }, many, press("end"), { rows: 8 });
+    const matches = rankPaletteEntries(many, "c1");
+    expect(step.state.selected).toBe(matches.length - 1);
+  });
+});

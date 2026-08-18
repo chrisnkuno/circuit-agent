@@ -115,44 +115,6 @@ export function describePrice(prices: TokenPrices | undefined, display: Currency
   return `${formatMoney(input)}/${formatMoney(output)} per Mtok`;
 }
 
-export type RenderModelsOptions = {
-  current: { provider: ProviderId; model: string };
-  /** Renders one model's price; injected so this module owns no currency policy. */
-  price: (choice: ModelChoice) => string;
-  paint: { dim(text: string): string; cyan(text: string): string; green(text: string): string; yellow(text: string): string };
-};
-
-/**
- * The numbered menu.
- *
- * The number is the whole interface — `/model 3` — so it is printed first and padded to a common
- * width, which keeps the model names left-aligned and scannable when the list runs past ten.
- */
-export function renderModelList(catalog: ModelCatalog, options: RenderModelsOptions): string {
-  const { paint } = options;
-  const lines: string[] = [];
-  let lastProvider: ProviderId | null = null;
-
-  catalog.choices.forEach((choice, index) => {
-    if (choice.provider !== lastProvider) {
-      lines.push(`${lines.length > 0 ? "\n" : ""}  ${paint.cyan(choice.providerLabel)}`);
-      lastProvider = choice.provider;
-    }
-    const isCurrent = choice.provider === options.current.provider && choice.model === options.current.model;
-    // The marker sits where a reader's eye already is — beside the number they are about to type.
-    const marker = isCurrent ? paint.green("●") : " ";
-    const number = String(index + 1).padStart(2);
-    const tags = [choice.isProviderDefault ? "default" : "", isCurrent ? "current" : ""].filter(Boolean).join(", ");
-    lines.push(`  ${marker} ${paint.dim(number)}. ${choice.model.padEnd(22)} ${paint.dim(options.price(choice))}${tags ? paint.dim(`  (${tags})`) : ""}`);
-  });
-
-  for (const entry of catalog.unconfigured) {
-    lines.push(`\n  ${paint.dim(entry.label)} ${paint.yellow(`— nova settings, or set ${entry.missing.join(" and ")}`)}`);
-  }
-  if (catalog.choices.length > 0) lines.push(`\n  ${paint.dim("Choose with /model <number>, or /model <name> — /model opus is enough. Your choice is remembered.")}`);
-  return lines.join("\n");
-}
-
 export type ModelCommand =
   | { kind: "list" }
   | { kind: "pick"; index: number }

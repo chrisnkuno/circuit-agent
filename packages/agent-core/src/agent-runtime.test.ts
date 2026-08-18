@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool } from "./agent-runtime";
 
 const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
@@ -67,16 +67,19 @@ describe("bounded agent runtime", () => {
       turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "call-1", name: "write_file", arguments: { path: "a.ts" } }] }),
       turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "call-2", name: "run_tests", arguments: {} }] }),
       turn({ content: "Implemented and verified." }),
+      // Unit tests alone now draw one ask for an exercise of the assembled program; answering it
+      // is what ends the run.
+      turn({ content: "This is a pure function with no entry point to assemble." }),
     ], tools);
     const result = await harnessValue.runtime.execute(baseRequest);
-    expect(result).toMatchObject({ status: "completed", iterations: 3, toolCallsExecuted: 2, actualModelRwf: 2 });
+    expect(result).toMatchObject({ status: "completed", iterations: 4, toolCallsExecuted: 2 });
     expect(calls).toEqual(["write", "test"]);
     // Each tool is announced before it runs and reported after, so a front end can show the work
     // in progress rather than only its outcome.
     expect(harnessValue.events.map((event) => event.type)).toEqual([
       "model_turn", "tool_call", "tool_result",
       "model_turn", "tool_call", "tool_result",
-      "model_turn", "runtime_stop",
+      "model_turn", "model_turn", "runtime_stop",
     ]);
   });
 
@@ -91,11 +94,12 @@ describe("bounded agent runtime", () => {
       turn({ content: "Done" }), // stops without verifying — should be nudged, not accepted
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "test-1", name: "run_tests", arguments: {} }] }),
       turn({ content: "Implemented and verified." }),
+      turn({ content: "Nothing assemblable here." }),
     ], tools);
     const result = await value.runtime.execute(baseRequest);
     expect(result).toMatchObject({ status: "completed", toolCallsExecuted: 2 });
     expect(calls).toEqual(["write", "test"]);
-    expect(value.requests.at(-1)?.messages.some((message) => message.role === "user" && message.content.includes("verifies it"))).toBe(true);
+    expect(value.requests.some((request) => request.messages.some((message) => message.role === "user" && message.content.includes("verifies it")))).toBe(true);
   });
 
   it("asks for executed tests when the only evidence is that the code compiles", async () => {
@@ -110,12 +114,15 @@ describe("bounded agent runtime", () => {
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "typecheck", arguments: {} }] }),
       turn({ content: "It compiles, so it's done." }), // compile-only — must be pushed for tests
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "t1", name: "run_tests", arguments: {} }] }),
-      turn({ content: "Tested against its invariants." }),
+      turn({ content: "Tested against its invariants; there is no assembled program to exercise." }),
     ], tools);
     const result = await value.runtime.execute(baseRequest);
     expect(result.status).toBe("completed");
     expect(calls).toEqual(["write", "check", "test"]);
-    expect(value.requests.at(-1)?.messages.some((message) => message.role === "user" && message.content.includes("invariants"))).toBe(true);
+    // Both rungs were asked for in one message, so clearing compile-only evidence costs one round
+    // trip rather than two.
+    expect(value.executed()).toBe(5);
+    expect(value.requests.some((request) => request.messages.some((message) => message.role === "user" && message.content.includes("invariants")))).toBe(true);
   });
 
   it("accepts compile-only evidence once the model explains there is no behaviour to assert", async () => {
@@ -153,19 +160,119 @@ describe("bounded agent runtime", () => {
     expect(value.requests.at(-1)?.messages.some((message) => message.role === "user" && message.content.includes("compiles"))).toBe(true);
   });
 
-  it("does not ask for tests when tests already ran", async () => {
-    const tools: AgentTool[] = [
-      { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { return { content: "written" }; } },
-      { name: "run_tests", description: "Tests", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "8 passed", verification: { passed: true, kind: "tests", scope: "targeted", summary: "vitest" } }; } },
-    ];
+  const writeTool: AgentTool = { name: "write_file", description: "Write", inputSchema: {}, capabilityId: "workspace.files", effect: "workspace", requiresApproval: false, parallelSafe: false, async execute() { return { content: "written" }; } };
+  const verifier = (name: string, kind: "check" | "tests" | "smoke" | "behavior"): AgentTool => ({
+    name, description: name, inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false,
+    async execute() { return { content: "ok", verification: { passed: true, kind, scope: "targeted", summary: name } }; },
+  });
+
+  it("does not ask for tests again once tests ran, but does ask once for the assembled program", async () => {
+    // Units passing is not the same claim as the program working: a component whose invariants all
+    // hold is still useless if it was never mounted. The ask escalates one rung, it does not repeat.
     const value = harness([
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "t1", name: "run_tests", arguments: {} }] }),
       turn({ content: "Implemented and tested." }),
-    ], tools);
+      turn({ content: "It is a pure library; there is nothing to assemble." }),
+    ], [writeTool, verifier("run_tests", "tests")]);
     const result = await value.runtime.execute(baseRequest);
-    expect(result).toMatchObject({ status: "completed", summary: "Implemented and tested." });
-    expect(value.executed()).toBe(3); // no extra round trip once real tests have run
+    expect(result).toMatchObject({ status: "completed" });
+    const asks = value.requests.at(-1)!.messages.filter((message) => message.role === "user" && message.content.includes("assembled"));
+    expect(asks).toHaveLength(1);
+    // And never the compile-level ask, which tests already cleared.
+    expect(value.requests.at(-1)!.messages.some((message) => message.content.includes("shows the code compiles"))).toBe(false);
+  });
+
+  /**
+   * The doctrine has to be cheaper to follow than to ignore, or it just adds latency to every run.
+   * A turn that produced functional evidence itself is finished the moment it says so.
+   */
+  it.each(["smoke", "behavior"] as const)("ends immediately when %s evidence is already present", async (kind) => {
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "v1", name: "verify", arguments: {} }] }),
+      turn({ content: "Implemented, tested, and exercised end to end." }),
+    ], [writeTool, verifier("verify", kind)]);
+    const result = await value.runtime.execute(baseRequest);
+    expect(result).toMatchObject({ status: "completed", summary: "Implemented, tested, and exercised end to end." });
+    expect(value.executed()).toBe(3); // no nudge, no extra round trip
+  });
+
+  /**
+   * Tool batches run as consecutive groups, not all-or-nothing.
+   *
+   * The old rule required *every* call in a batch to be parallel-safe, so one write forced five
+   * independent reads to run one after another. Grouping keeps the concurrency where it is safe
+   * without ever reordering across an effectful call.
+   */
+  describe("executing a batch of tool calls", () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    const slow = (name: string, effect: "none" | "workspace"): AgentTool => ({
+      name, description: name, inputSchema: {}, capabilityId: "workspace.files", effect,
+      requiresApproval: false, parallelSafe: effect === "none",
+      async execute() {
+        started.push(name);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        finished.push(name);
+        return { content: name };
+      },
+    });
+    const batch = (names: string[]) => turn({
+      finishReason: "tool_calls",
+      toolCalls: names.map((name, index) => ({ id: `c${index}`, name, arguments: {} })),
+    });
+    // A workspace-effect tool trips the verification gate, which spends turns of its own. These
+    // tests are about execution order, so the gate is simply answered and got out of the way.
+    const settle = [turn({ content: "done" }), turn({ content: "nothing to verify" }), turn({ content: "nothing to assemble" })];
+    beforeEach(() => { started.length = 0; finished.length = 0; });
+
+    it("runs adjacent read-only calls concurrently even when a write shares the batch", async () => {
+      const value = harness([batch(["r1", "r2", "r3", "w1"]), ...settle],
+        [slow("r1", "none"), slow("r2", "none"), slow("r3", "none"), slow("w1", "workspace")]);
+      await value.runtime.execute({ ...baseRequest, maxIterations: 6 });
+      // All three reads are in flight before any of them finishes; the write waits its turn.
+      expect(started.slice(0, 3)).toEqual(["r1", "r2", "r3"]);
+      expect(finished.indexOf("w1")).toBe(3);
+    });
+
+    it("never reorders a read across a write, so each still observes the state it was sequenced for", async () => {
+      const value = harness([batch(["r1", "w1", "r2"]), ...settle],
+        [slow("r1", "none"), slow("w1", "workspace"), slow("r2", "none")]);
+      await value.runtime.execute({ ...baseRequest, maxIterations: 6 });
+      // Strictly serial: the write separates the two reads into different groups, and a read that
+      // was emitted after a write must not be hoisted in front of it.
+      expect(finished).toEqual(["r1", "w1", "r2"]);
+    });
+
+    it("keeps effectful calls strictly serial and in their emitted order", async () => {
+      const value = harness([batch(["w1", "w2", "w3"]), ...settle],
+        [slow("w1", "workspace"), slow("w2", "workspace"), slow("w3", "workspace")]);
+      await value.runtime.execute({ ...baseRequest, maxIterations: 6 });
+      expect(finished).toEqual(["w1", "w2", "w3"]);
+    });
+
+    it("returns one result per call, in the order the model emitted them, however they ran", async () => {
+      const value = harness([batch(["r1", "r2", "w1", "r3"]), ...settle],
+        [slow("r1", "none"), slow("r2", "none"), slow("w1", "workspace"), slow("r3", "none")]);
+      const result = await value.runtime.execute({ ...baseRequest, maxIterations: 6 });
+      const results = result.messages.filter((message) => message.role === "tool");
+      expect(results.map((message) => (message as { name: string }).name)).toEqual(["r1", "r2", "w1", "r3"]);
+      expect(result.toolCallsExecuted).toBe(4);
+    });
+  });
+
+  it("does not demote evidence when a weaker check runs after a stronger one", async () => {
+    // Running the linter after the e2e suite is not a reason to ask for the e2e suite again.
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "e1", name: "e2e", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "l1", name: "lint", arguments: {} }] }),
+      turn({ content: "Done." }),
+    ], [writeTool, verifier("e2e", "behavior"), verifier("lint", "check")]);
+    const result = await value.runtime.execute(baseRequest);
+    expect(result).toMatchObject({ status: "completed", summary: "Done." });
+    expect(value.executed()).toBe(4);
   });
 
   it("still reports needs_verification if the model never verifies after being nudged", async () => {

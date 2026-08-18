@@ -160,6 +160,14 @@ const GOLDEN_CONTRACT = [
   { name: "todo_write", effect: "none", capabilityId: "reasoning.plan", requiresApproval: false, parallelSafe: false, required: [], properties: ["items", "complete", "start"] },
   { name: "todo_read", effect: "none", capabilityId: "reasoning.plan", requiresApproval: false, parallelSafe: true, required: [], properties: [] },
   { name: "web_fetch", effect: "none", capabilityId: "web.research", requiresApproval: false, parallelSafe: true, required: ["url"], properties: ["url"] },
+  // `external` is the strongest effect in the vocabulary and the runtime refuses to construct an
+  // external tool that does not require approval — which is what makes a deploy physically unable
+  // to run without a human answering. Publishing to the internet under someone's account is not
+  // undone by a checkpoint, so this row existing with these exact values is the safety property.
+  { name: "deploy_app", effect: "external", capabilityId: "workspace.terminal", requiresApproval: true, parallelSafe: false, required: ["action"], properties: ["action", "target", "production", "directory"] },
+  // Writing to a file the user carries between sessions is a change to their environment, so it
+  // goes through the same approval gate as any other edit rather than being silently free.
+  { name: "remember", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["text", "scope"], properties: ["text", "scope", "kind"] },
 ] as const;
 
 describe("the tool contract is pinned", () => {

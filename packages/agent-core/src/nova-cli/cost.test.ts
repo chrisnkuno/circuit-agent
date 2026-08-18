@@ -225,6 +225,40 @@ describe("spending beyond the model", () => {
     expect(toUnits(ledger.recordExpense(search(10)).cost!)).toBeCloseTo(0.017, 6);
   });
 
+  /**
+   * The catalog rate is a published list price applied to a page count Nova counted; `reportedUsd`
+   * is what the provider says it will invoice. Where they disagree the provider is right, and they
+   * disagree routinely — a deep search is billed at a rate the single "exa/search" record has no
+   * way to express, so pricing it from the catalog understates it.
+   */
+  it("prefers the provider's own reported cost over the catalog estimate", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    const catalogOnly = ledger.recordExpense(search(10));
+    const reported = ledger.recordExpense({ ...search(10), reportedUsd: 0.042 });
+    expect(toUnits(catalogOnly.cost!)).toBeCloseTo(0.017, 6);
+    expect(toUnits(reported.cost!)).toBeCloseTo(0.042, 6);
+    // And it counts toward the session total at the reported figure, not the estimated one.
+    expect(toUnits(ledger.expenseTotal!)).toBeCloseTo(0.059, 6);
+  });
+
+  it("prices a reported expense even for a meter the catalog has never heard of", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    const priced = ledger.recordExpense({ provider: "exa", meter: "websets", quantities: { request: 1 }, label: "webset", reportedUsd: 0.25 });
+    expect(toUnits(priced.cost!)).toBeCloseTo(0.25, 6);
+  });
+
+  it("falls back to the catalog when the reported figure is missing or nonsense", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    for (const bad of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      expect(toUnits(ledger.recordExpense({ ...search(10), reportedUsd: bad as number }).cost!)).toBeCloseTo(0.017, 6);
+    }
+  });
+
+  it("records a reported cost of exactly zero as free, rather than falling back to an estimate", () => {
+    const ledger = new CostLedger({ prices: opus, display: "USD", catalog });
+    expect(toUnits(ledger.recordExpense({ ...search(10), reportedUsd: 0 }).cost!)).toBe(0);
+  });
+
   it("adds non-model spending to the session total the budget is checked against", () => {
     const ledger = new CostLedger({ prices: opus, display: "USD", catalog, budget: fromUnits(1, "USD") });
     ledger.record({ usage: usage(100_000, 2_000), iterations: 3, toolCalls: 4, elapsedMs: 12_000 }); // $0.55

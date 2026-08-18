@@ -7,6 +7,7 @@ import {
   KeyBindingRegistry,
   parseChord,
   resolveBindings,
+  RELOCATED_EDITING,
   RESERVED_CHORDS,
 } from "./keybindings";
 
@@ -40,21 +41,47 @@ describe("chords", () => {
 });
 
 describe("resolving bindings", () => {
-  it("binds the defaults and leaves line editing alone", () => {
-    const { bindings, conflicts } = resolveBindings();
+  it("binds the defaults, and every editing key it took has somewhere else to live", () => {
+    const { bindings, conflicts, displaced } = resolveBindings();
     expect(conflicts).toEqual([]);
     expect(bindings.map((binding) => binding.command)).toContain("/palette");
-    for (const binding of bindings) expect(RESERVED_CHORDS[chordId(binding.chord)]).toBeUndefined();
+    // The invariant that replaced "never touch a reserved chord": a default may take a line-editing
+    // key, but only one `RELOCATED_EDITING` names a replacement for. A binding that eats an editing
+    // action with nowhere for it to go is the failure this guards.
+    for (const binding of bindings) {
+      const id = chordId(binding.chord);
+      if (RESERVED_CHORDS[id]) expect(RELOCATED_EDITING[id]).toBeDefined();
+    }
+    // And whatever was taken is reported, so `/keys` can say where it went.
+    expect(displaced.map((entry) => entry.chord).sort()).toEqual(["Ctrl+A", "Ctrl+W"]);
+    expect(displaced.find((entry) => entry.chord === "Ctrl+A")).toMatchObject({ command: "/auto", instead: "Home" });
   });
 
-  it("refuses to repurpose a line-editing key", () => {
-    // Ctrl+K and Ctrl+T read as the obvious palette and new-tab defaults, and both are already
-    // readline editing actions. Shadowing them breaks typing in a way that looks like a bug in the
-    // terminal, so the registry declines and says which action it would have eaten.
-    const { bindings, conflicts } = resolveBindings({ "/palette": "ctrl+k", "/todos": "ctrl+w" });
+  it("refuses a line-editing key that has no replacement", () => {
+    // Ctrl+K and Ctrl+U are readline editing actions with nothing else that does their job — no
+    // named key deletes to the end or the start of a line. Shadowing them breaks typing in a way
+    // that looks like a bug in the terminal, so the registry declines and names what it would eat.
+    const { bindings, conflicts } = resolveBindings({ "/palette": "ctrl+k", "/todos": "ctrl+u" });
     expect(bindings.some((binding) => binding.command === "/palette")).toBe(false);
     expect(conflicts).toContainEqual({ command: "/palette", chord: "Ctrl+K", reason: "reserved for line editing (delete to end of line)" });
-    expect(conflicts).toContainEqual({ command: "/todos", chord: "Ctrl+W", reason: "reserved for line editing (delete the previous word)" });
+    expect(conflicts).toContainEqual({ command: "/todos", chord: "Ctrl+U", reason: "reserved for line editing (delete to start of line)" });
+  });
+
+  it("refuses the keys that are the way out, whatever the configuration says", () => {
+    const { conflicts } = resolveBindings({ "/diff": "ctrl+c", "/todos": "enter" });
+    expect(conflicts).toContainEqual({ command: "/diff", chord: "Ctrl+C", reason: "reserved for line editing (interrupt the current turn)" });
+    expect(conflicts).toContainEqual({ command: "/todos", chord: "Enter", reason: "reserved for line editing (submit)" });
+  });
+
+  it("refuses a chord the terminal cannot send as its own key, and says why", () => {
+    // Not policy: Ctrl+M is byte 0x0D, which is what Return sends. Binding it would bind Enter.
+    const { bindings, conflicts } = resolveBindings({ "/model": "ctrl+m" });
+    expect(bindings.some((binding) => binding.command === "/model")).toBe(false);
+    expect(conflicts).toContainEqual({
+      command: "/model",
+      chord: "Ctrl+M",
+      reason: "the same byte as Enter (0x0D) — terminals cannot tell them apart",
+    });
   });
 
   it("refuses two commands on one chord instead of picking a winner", () => {
@@ -106,15 +133,34 @@ describe("the registry", () => {
     const registry = new KeyBindingRegistry();
     expect(registry.match({ name: "g", ctrl: true })).toBe("/palette");
     expect(registry.match({ name: "f2" })).toBe("/mode");
-    // An unbound key must fall through to readline, or ordinary typing stops working.
+    // The Ctrl layer, which is the point of having one: the three commands people reach for most
+    // are one keypress away on the modifier terminals deliver most reliably.
+    expect(registry.match({ name: "a", ctrl: true })).toBe("/auto");
+    expect(registry.match({ name: "w", ctrl: true })).toBe("/wander");
+    expect(registry.match({ name: "s", ctrl: true })).toBe("/settings");
+    // An unbound key must fall through to readline, or ordinary typing stops working. A bare letter
+    // above all: this prompt is where free text is typed.
     expect(registry.match({ name: "a" })).toBeUndefined();
-    expect(registry.match({ name: "w", ctrl: true })).toBeUndefined();
+    expect(registry.match({ name: "w" })).toBeUndefined();
+    // Ctrl+M arrives as Enter, so it can never match — binding it would fire on every submitted
+    // message. `resolveBindings` refuses it; this is the other end of the same guarantee.
+    expect(registry.match({ name: "return", ctrl: false })).toBeUndefined();
   });
 
   it("points at the slash command when the terminal may not deliver the key", () => {
     const rendered = new KeyBindingRegistry({}, { TMUX: "1" }).render();
     expect(rendered).toContain("this terminal may not send it; use /mode");
     expect(rendered).toContain("Feature keys");
+  });
+
+  it("says where displaced line editing went, so a missing key is never a mystery", () => {
+    // The question someone arrives with is "how do I get to the start of the line now", so the row
+    // leads with the answer rather than with what was taken.
+    const rendered = new KeyBindingRegistry().render();
+    expect(rendered).toContain("Line editing that moved");
+    expect(rendered).toContain("Home");
+    expect(rendered).toContain("Ctrl+A runs /auto now");
+    expect(rendered).toContain("Alt+Backspace");
   });
 
   it("shows what it refused to bind, so a dead key is never silent", () => {
@@ -175,7 +221,7 @@ describe("mnemonic letter shortcuts", () => {
 
   it("gives shortcutLabels the same grouped chords render() shows, in the compact form /help inlines", () => {
     const labels = new KeyBindingRegistry().shortcutLabels();
-    expect(labels.get("/wander")).toBe("F4, Alt+W");
+    expect(labels.get("/wander")).toBe("Ctrl+W, F4, Alt+W");
     expect(labels.get("/mode")).toBe("F2");
   });
 

@@ -1,4 +1,4 @@
-import { addMoney, convertTo, formatMoney, priceUsage, zero, type Currency, type FxRate, type Money, type TokenPrices } from "../money";
+import { addMoney, convertTo, formatMoney, money, priceUsage, zero, type Currency, type FxRate, type Money, type TokenPrices } from "../money";
 import { priceUnits, selectPrice, type PriceRecord } from "../pricing";
 import type { ModelUsage } from "../providers/model";
 import type { NovaMode } from "./permissions";
@@ -41,6 +41,16 @@ export type Expense = {
   quantities: Readonly<Record<string, number>>;
   /** What it was for, in the transcript's own terms: "web search: rust async runtimes". */
   label: string;
+  /**
+   * What the provider itself said this call cost, in USD, when it reports one.
+   *
+   * Preferred over the catalog rate wherever it is present, because it is a different kind of fact:
+   * the catalog applies a published list price to a quantity Nova counted, while this is the number
+   * the provider will invoice. They diverge the moment a search returns fewer pages than asked for,
+   * or runs a deep variant at a rate the catalog has one entry for. Exa returns it as
+   * `costDollars.total` on every response.
+   */
+  reportedUsd?: number;
 };
 
 export type PricedExpense = Expense & {
@@ -127,7 +137,15 @@ export class CostLedger {
     const record = this.options.catalog
       ? selectPrice(this.options.catalog, { provider: entry.provider, model: entry.meter, asOf: this.options.asOf })
       : undefined;
-    const priced = { ...entry, cost: record ? priceUnits(record, entry.quantities) : undefined };
+    // The provider's own figure wins when it gave one — an invoice beats an estimate, and it needs
+    // no catalog entry to be usable, which is also how a newly-added meter gets priced correctly
+    // before anyone has written a rate for it.
+    const reported = Number.isFinite(entry.reportedUsd) && (entry.reportedUsd ?? -1) >= 0
+      // Exa reports dollars ($0.007); the ledger counts integer micros throughout, so this is the
+      // one place the conversion happens rather than every call site guessing at it.
+      ? money(entry.reportedUsd! * 1_000_000, "USD")
+      : undefined;
+    const priced = { ...entry, cost: reported ?? (record ? priceUnits(record, entry.quantities) : undefined) };
     this.expenses.push(priced);
     return priced;
   }

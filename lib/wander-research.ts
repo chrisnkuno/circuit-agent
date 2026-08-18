@@ -167,7 +167,10 @@ export async function gatherWanderEvidence(options: {
     query,
     numResults: WANDER_EXA_BUDGET.numResults,
     type: WANDER_EXA_BUDGET.type,
-    highlightMaxCharacters: WANDER_EXA_BUDGET.highlightMaxCharacters,
+    // One of the few places a highlight cap is right rather than a quality downgrade: the briefing
+    // rides through a Convex→Cloudflare relay that has to finish inside ~90s, so the budget is a
+    // hard constraint on this path rather than a preference.
+    contents: { highlights: { maxCharacters: WANDER_EXA_BUDGET.highlightMaxCharacters } },
     ...(PUBLICATION_HINT.test(topic) ? { category: "publication" as const } : {}),
   });
 

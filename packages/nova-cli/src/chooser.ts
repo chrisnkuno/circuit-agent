@@ -37,7 +37,42 @@ export type ChooserItem<T> = {
   pinned?: boolean;
 };
 
-export type ChooserState = { selected: number; query: string };
+export type ChooserState = {
+  selected: number;
+  query: string;
+  /**
+   * One line of feedback under the list — "added Anthropic key", "nothing to remove".
+   *
+   * Transient by nature and so not cleared on a timer here: a pure state machine has no clock, and a
+   * status that expired on its own would need one. It survives until the next keystroke replaces or
+   * clears it, which is the same lifetime a person reading it actually has.
+   */
+  status?: string;
+  /** Which parts of the frame are drawn. Undefined means all of them, which is what every caller wants. */
+  chrome?: ChooserChrome;
+};
+
+/**
+ * Which furniture the list shows — Bubbles' `SetShowTitle`/`SetShowStatusBar`/`SetShowPagination`/
+ * `SetShowHelp`, as one record instead of four setters.
+ *
+ * It is a record because the reason to turn any of it off is the same reason: the list is sharing a
+ * screen with something else and needs its rows back. A caller in that position wants to say so once,
+ * not call four methods and keep them in step.
+ */
+export type ChooserChrome = {
+  title?: boolean;
+  status?: boolean;
+  pagination?: boolean;
+  help?: boolean;
+};
+
+const ALL_CHROME: Required<ChooserChrome> = { title: true, status: true, pagination: true, help: true };
+
+/** What the frame draws, with anything the caller left unsaid defaulting to shown. */
+export function chromeOf(chrome: ChooserChrome | undefined): Required<ChooserChrome> {
+  return { ...ALL_CHROME, ...chrome };
+}
 
 export const INITIAL_CHOOSER_STATE: ChooserState = { selected: 0, query: "" };
 
@@ -107,6 +142,9 @@ export type ChooserStep = {
  */
 export function advanceChooser<T>(state: ChooserState, items: readonly ChooserItem<T>[], input: { str?: string; key: KeypressEvent }, options: { filter?: boolean; page?: number; height?: number } = {}): ChooserStep {
   const name = input.key.name;
+  // A status line describes what the *last* keystroke did, so the next one retires it. Leaving it up
+  // is how "added Anthropic key" ends up sitting under a list the user has since navigated away from.
+  if (state.status !== undefined) return advanceChooser({ ...state, status: undefined }, items, input, options);
   const visible = filterItems(items, state.query);
   const last = Math.max(0, visible.length - 1);
   const page = options.page ?? 8;
@@ -114,7 +152,11 @@ export function advanceChooser<T>(state: ChooserState, items: readonly ChooserIt
 
   // Escape closes the *inner* thing first: a typed filter is undone before the menu is abandoned,
   // which is what every editor has trained. Ctrl-C always leaves outright.
-  if (name === "escape" && options.filter && state.query !== "") return { state: { selected: 0, query: "" } };
+  // `keep` is what stops a transition quietly resetting the frame: several branches below used to
+  // return a fresh `{ selected, query }` literal, which would now drop the caller's chrome and leave
+  // a list that had been asked to hide its help suddenly showing it again after one backspace.
+  const keep = state.chrome === undefined ? {} : { chrome: state.chrome };
+  if (name === "escape" && options.filter && state.query !== "") return { state: { selected: 0, query: "", ...keep } };
   if (name === "escape" || (input.key.ctrl && (name === "c" || name === "g"))) return { state, done: {} };
   if (name === "return" || name === "enter") {
     // Clamped, not trusted. A selection left over from a longer list resolves to `undefined` in the
@@ -152,13 +194,13 @@ export function advanceChooser<T>(state: ChooserState, items: readonly ChooserIt
   }
 
   if (options.filter) {
-    if (name === "backspace") return { state: { selected: 0, query: state.query.slice(0, -1) } };
-    if (input.key.ctrl && name === "u") return { state: { selected: 0, query: "" } };
+    if (name === "backspace") return { state: { selected: 0, query: state.query.slice(0, -1), ...keep } };
+    if (input.key.ctrl && name === "u") return { state: { selected: 0, query: "", ...keep } };
     const char = input.str;
     // Printable characters only. An unhandled escape sequence otherwise arrives as raw bytes and
     // silently poisons the query with characters nobody typed.
     if (char && char.length === 1 && char >= " " && !input.key.ctrl && !input.key.meta) {
-      return { state: { selected: 0, query: state.query + char } };
+      return { state: { selected: 0, query: state.query + char, ...keep } };
     }
   }
   return { state };
@@ -184,6 +226,14 @@ export type RenderChooserOptions = {
   /** Characters this terminal can draw; the cursor and the legend's arrows come from here. */
   glyphs?: GlyphSet;
   /**
+   * A spinner frame to show beside the title while the caller is fetching something.
+   *
+   * Passed in rather than animated here for the same reason the status message is not cleared here:
+   * this function is pure and has no clock. `Spinner` in `tui.ts` owns the timing, and the caller
+   * that started the work is the only one that knows when it has finished.
+   */
+  spinner?: string;
+  /**
    * The row the cursor is moving away from, for one transitional frame. Marked with a dim cursor
    * alongside the new selection's bright one — a terminal grid has no cell "between" row 3 and row
    * 4 to sweep a cursor through, so the glide `runChooser` drives is this instead: the outgoing row
@@ -207,7 +257,12 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
   // counting visible rows would call a query that matched nothing a success and leave the user
   // staring at a lone "Clear this setting" with no idea their search failed.
   const matched = visible.some((item) => !item.pinned);
-  if (options.title) lines.push(paint.cyan(clipTo(`  ${options.title}`, width)));
+  const chrome = chromeOf(state.chrome);
+  if (options.title && chrome.title) {
+    // The spinner sits with the title because that is where a reader is already looking for "what is
+    // this list", and a list still loading is answering exactly that question.
+    lines.push(paint.cyan(clipTo(`  ${options.spinner ? `${options.spinner} ` : ""}${options.title}`, width)));
+  }
   if (options.filter && state.query) lines.push(paint.dim(clipTo(`  filter: ${state.query}${matched ? "" : "   (no match)"}`, width)));
   else if (!matched) lines.push(paint.dim(clipTo("  (no match)", width)));
 
@@ -250,8 +305,17 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
 
   // Only worth naming once the window can't show the whole list at once — a menu that fits has
   // nothing a position would add over just seeing every row.
-  const position = visible.length > height ? `  ${paginator(state.selected, visible.length)}` : "";
-  lines.push(paint.dim(clipTo(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}${position}`, width)));
+  const position = visible.length > height && chrome.pagination ? `  ${paginator(state.selected, visible.length)}` : "";
+  if (chrome.help) {
+    lines.push(paint.dim(clipTo(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}${position}`, width)));
+  } else if (position) {
+    // A list with its help hidden still has somewhere to be in, and that is the one thing the rows
+    // themselves cannot say once they no longer all fit.
+    lines.push(paint.dim(clipTo(position, width)));
+  }
+  // Last, under everything, because it is about what just happened rather than what is on offer —
+  // and green, because every caller of it so far is reporting that something worked.
+  if (state.status && chrome.status) lines.push(paint.green(clipTo(`  ${state.status}`, width)));
   return lines.join("\n");
 }
 

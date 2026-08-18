@@ -122,12 +122,45 @@ describe("buildNovaSystemPrompt", () => {
     // produced. Naming the properties — and saying plainly that a build is not a test — is what
     // makes the difference between a suite that pins behaviour and one that pins a coincidence.
     const prompt = buildNovaSystemPrompt(context, "build", ["run_command"]);
-    expect(prompt).toContain("Test by invariant");
+    expect(prompt).toContain("INVARIANT");
     expect(prompt).toContain("round-trips");
     expect(prompt).toContain("idempotence");
     expect(prompt).toContain("passing typecheck or build is not a test");
     // A change to existing behaviour needs a test that distinguishes old from new.
     expect(prompt).toContain("fails for the old behaviour");
+  });
+
+  /**
+   * Invariants alone let an agent ship a component whose every property holds and which was never
+   * mounted. The prompt has to name all three levels, and has to say the third is not optional.
+   */
+  it("asks for behavioural and functional levels on top of the invariants", () => {
+    const prompt = buildNovaSystemPrompt(context, "build", ["run_command"]);
+    expect(prompt).toContain("BEHAVIOURAL");
+    expect(prompt).toContain("FUNCTIONAL");
+    // The concrete ways to get functional evidence, so this is a recipe rather than an exhortation.
+    expect(prompt).toContain("Render the entry point");
+    expect(prompt).toContain("exit code");
+    // Named failure modes, which is what makes level 3 land as necessary rather than ceremonial.
+    expect(prompt).toContain("never mounted");
+  });
+
+  /**
+   * A slow suite gets skipped, and a skipped suite proves nothing — so the speed constraint is part
+   * of the testing doctrine itself, not a separate piece of advice.
+   */
+  it("bounds the cost of the suite it just asked for", () => {
+    const prompt = buildNovaSystemPrompt(context, "build", ["run_command"]);
+    expect(prompt).toContain("seconds, not minutes");
+    expect(prompt).toContain("rather than spawning a browser");
+  });
+
+  it("tells the agent to batch its tool calls, which is the largest single cost in a turn", () => {
+    // Measured: 90% of model turns in real sessions emitted exactly one tool call, and todo_write
+    // alone accounted for 47 whole round trips.
+    const prompt = buildNovaSystemPrompt(context, "build", ["run_command", "todo_write"]);
+    expect(prompt).toContain("Put every tool call you can into the same turn");
+    expect(prompt).toContain("Never spend a whole turn on todo_write alone");
   });
 
   it("states the exact behavioural boundary for each mode", () => {

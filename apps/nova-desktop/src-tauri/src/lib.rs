@@ -17,6 +17,10 @@ use uuid::Uuid;
 
 const SETTINGS_STORE: &str = "nova-settings.json";
 const SETTINGS_KEY: &str = "settings";
+/// Where the window was last working, kept apart from settings on purpose: settings are the
+/// user's configuration and are worth backing up or copying between machines, while this is
+/// per-machine state about paths that may not exist anywhere else.
+const WORKSPACE_KEY: &str = "workspace";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -304,6 +308,42 @@ async fn sidecar_request(state: State<'_, Arc<AppState>>, request: Value) -> Res
   }
 }
 
+/// The desktop's own memory of where it was: the project last opened, the mode it was in, and the
+/// projects before that. Without it every launch started blank — no project, no session list, and
+/// no route back to a past conversation except re-finding the folder by hand.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceState {
+  #[serde(default)]
+  pub last_root: Option<String>,
+  #[serde(default)]
+  pub mode: Option<String>,
+  #[serde(default)]
+  pub sandbox: Option<bool>,
+  /// Most recent first. Bounded by the caller so this file cannot grow without limit.
+  #[serde(default)]
+  pub recent_roots: Vec<String>,
+}
+
+#[tauri::command]
+fn load_workspace(app: AppHandle) -> Result<Option<WorkspaceState>, String> {
+  let store = app.store(SETTINGS_STORE).map_err(|e| e.to_string())?;
+  let Some(value) = store.get(WORKSPACE_KEY) else {
+    return Ok(None);
+  };
+  // A malformed or outdated blob reads as "no memory" rather than as a failure: this is a
+  // convenience, and refusing to start the app over it would be a poor trade.
+  Ok(serde_json::from_value(value).ok())
+}
+
+#[tauri::command]
+fn save_workspace(app: AppHandle, workspace: WorkspaceState) -> Result<(), String> {
+  let store = app.store(SETTINGS_STORE).map_err(|e| e.to_string())?;
+  store.set(WORKSPACE_KEY, serde_json::to_value(workspace).map_err(|e| e.to_string())?);
+  store.save().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
 #[tauri::command]
 fn load_settings(app: AppHandle) -> Result<Option<NovaSettings>, String> {
   let store = app.store(SETTINGS_STORE).map_err(|e| e.to_string())?;
@@ -336,7 +376,9 @@ pub fn run() {
       sidecar_start,
       sidecar_request,
       load_settings,
-      save_settings
+      save_settings,
+      load_workspace,
+      save_workspace
     ])
     .run(tauri::generate_context!())
     .expect("error while running Nova");

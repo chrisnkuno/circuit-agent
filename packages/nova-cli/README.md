@@ -34,7 +34,7 @@ nova update                 Check and install the latest published CLI
 nova update --check         Check without changing the installed version
 ```
 
-In a session: `/mode` shows the current permission posture, `/mode plan|build|auto|defender` switches it, and `/plan` `/build` `/auto` `/defender` remain quick shortcuts. Defender mode turns Nova into a security reviewer — the full tool set to actually run a scanner (including a built-in `scan_secrets` that matches likely credentials by pattern and always masks what it finds) and propose a fix, gated exactly like build so nothing is ever auto-approved. It works from a bundled, OWASP-2025-aligned set of playbooks: access control, security misconfiguration, software supply chain & CI/CD integrity, injection, client-side & browser security, auth/session handling, API security, SSRF, secrets, dependency risk, cryptography misuse, IaC/container hardening, exceptional-condition handling, business logic & race conditions, fuzzing and invariant-based testing, logging/monitoring/deterrence, and LLM/AI application security. `/undo` reverts the last turn, `/cost` shows the breakdown, `/pull` copies sandbox work back to disk, `/settings` opens configuration, `/voice` records a prompt, and `/keys` shows keyboard controls.
+In a session: `/mode` shows the current permission posture, `/mode plan|build|auto|defender` switches it, and `/plan` `/build` `/auto` `/defender` remain quick shortcuts. Defender mode turns Nova into a security reviewer — the full tool set to actually run a scanner (including a built-in `scan_secrets` that matches likely credentials by pattern and always masks what it finds) and propose a fix, gated exactly like build so nothing is ever auto-approved. It works from a bundled, OWASP-2025-aligned set of playbooks: access control, security misconfiguration, software supply chain & CI/CD integrity, injection, client-side & browser security, auth/session handling, API security, SSRF, secrets, dependency risk, cryptography misuse, IaC/container hardening, exceptional-condition handling, business logic & race conditions, fuzzing and invariant-based testing, logging/monitoring/deterrence, and LLM/AI application security. `/undo` reverts the last turn, `/cost` shows the breakdown — totals, a table of every turn's tokens, tools, seconds and spend, and the shape of it as charts — `/pull` copies sandbox work back to disk, `/settings` opens configuration, `/voice` records a prompt, and `/keys` shows keyboard controls.
 
 ## Setup
 
@@ -98,7 +98,7 @@ Use `--yes` for an explicitly unattended update. Without it, Nova refuses to mut
 
 **Spending is bounded before work starts.** `--budget N` is expressed in the selected local currency. In an interactive session Nova confirms that cap before starting a sandbox or calling a model; in a one-shot command the explicit flag is the approval. If the required FX rate is unavailable, Nova refuses to pretend it can enforce a converted cap.
 
-**Switching models is a menu, not a lookup.** `/model` opens a picker: arrow to a model and press Enter, with each one's price beside it and the cursor starting on the one in use. Providers you have no key for are rows you can select, and selecting one opens settings — so a missing key is something you fix from where you noticed it. Typed forms skip the menu entirely: `/model opus` matches on any part of a model id and says which candidates it meant if the name is ambiguous. The transcript carries across the switch, and your choice is remembered for the next launch.
+**Switching models is a menu, not a lookup.** `/model` opens a picker: arrow to a model and press Enter, with each one's price beside it and the cursor starting on the one in use. Press `t` and the same models become a table — input and output price in columns of their own, `←`/`→` to aim at a column and `s` to order by it, so "which of these is cheapest" is a keystroke rather than a read-through. Each row keeps the number `/model <n>` takes, so sorting never renumbers anything; `Esc` returns to the menu, and Enter switches from either view. Providers you have no key for are rows you can select, and selecting one opens settings — so a missing key is something you fix from where you noticed it. Typed forms skip the menu entirely: `/model opus` matches on any part of a model id and says which candidates it meant if the name is ambiguous. The transcript carries across the switch, and your choice is remembered for the next launch.
 
 **Undo is real.** Each turn snapshots the workspace into a private git index. `/undo` reverts modified files *and* removes files the agent created, without touching your staged changes.
 
@@ -132,11 +132,23 @@ Microphone recording uses `ffmpeg` because it provides one maintained capture pa
 
 Controls are available in English, Mandarin Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, and Urdu. Choose one in `nova settings`, set `NOVA_LANGUAGE`, or pass `--language`. Stable slash-command names remain unchanged for scripts and muscle memory; `/help` and `/keys` localize their descriptions.
 
-Prompt history is persisted per user, deduplicated, and filters likely credentials. Tab completes commands, `@path` completes project files, arrow keys search history, Ctrl-A/Ctrl-E navigate, Ctrl-W/Ctrl-U delete, Ctrl-L redraws, and Ctrl-C interrupts the active turn.
+Prompt history is persisted per user, deduplicated, and filters likely credentials. Tab completes commands, `@path` completes project files, arrow keys search history, Home/End navigate, Alt-Backspace/Ctrl-U delete, Ctrl-L redraws, and Ctrl-C interrupts the active turn.
 
-### Mnemonic keys
+### Suggestions as you type
 
-The common commands are on Alt plus their first letter, so you rarely have to type one:
+Typing `/` opens a list above the input bar, narrowing with every letter and showing what each command does — plus the key that also runs it, so the list teaches its own shortcuts. Up and Down move through it and Enter takes a row; keep typing and it keeps narrowing; press Return and the command runs. It is never modal: every keystroke still reaches the line editor, so `/model haiku` types straight through the list that is offering `/model`. Greyed-out ghost text completes the rest of the name inline, and `→` accepts it.
+
+The list draws upward, into the rows directly above the bar. That is not a style choice — readline redraws its own line by erasing everything below it, so the rows above the bar are the only ones a list can occupy and survive a keystroke.
+
+### Keys
+
+The commands people reach for most are on Ctrl:
+
+| | | | |
+|---|---|---|---|
+| `Ctrl+A` auto mode | `Ctrl+W` wander | `Ctrl+S` settings | `Ctrl+G` palette |
+
+Every command with a shortcut also has an Alt mnemonic, which is the fuller set:
 
 | | | | |
 |---|---|---|---|
@@ -144,9 +156,23 @@ The common commands are on Alt plus their first letter, so you rarely have to ty
 | `Alt+D` diff | `Alt+U` undo | `Alt+C` cost | `Alt+O` tools |
 | `Alt+H` help | `Alt+T` new tab | `Alt+←` `Alt+→` tabs | `Alt+B` detach |
 
-`Ctrl+G` opens the command palette, and the function keys still work for the commands that had them (`F1` help, `F2` mode, `F3` model, `F4` wander, `F6` jobs, `F8` diff, `F9` todos) — two routes to the same command, so a terminal that swallows one does not cost you the feature.
+The function keys still work for the commands that had them (`F1` help, `F2` mode, `F3` model, `F4` wander, `F6` jobs, `F8` diff, `F9` todos) — several routes to the same command, so a terminal that swallows one does not cost you the feature. That redundancy is the reason there is a Ctrl layer at all: Alt is the modifier terminals are worst at delivering (tmux eats it by default, and macOS Terminal sends Option as a composition modifier unless you have found the "Use Option as Meta key" checkbox), so the most-used commands get a route that does not depend on it.
 
-They are on Alt rather than bare letters for a reason worth knowing: this prompt is where you type your request, so a bare `w` for wander would cost you every message beginning with "write". Alt keeps the mnemonic without taking the letter.
+Three of those Ctrl chords were readline line-editing keys, and taking them is not free. Each function moved to a key readline already handles natively, and `/keys` prints the move beside the chord that took it:
+
+| Was | Now | Still available as |
+|---|---|---|
+| `Ctrl+A` move to start of line | `/auto` | `Home` |
+| `Ctrl+W` delete the previous word | `/wander` | `Alt+Backspace` |
+| `Ctrl+S` XOFF flow control | `/settings` | — (raw mode disables flow control, so this key was inert) |
+
+A line-editing key can only be taken when its function has somewhere else to live, which is why `Ctrl+U` (delete to start of line) and `Ctrl+K` (delete to end) stay refused — nothing else does their job. `Ctrl+C`, `Ctrl+D`, Tab and Enter can never be rebound at all.
+
+There is no `Ctrl+M`. It is byte `0x0D`, which is exactly what Return sends, so no terminal can tell the two apart — binding it would fire the shortcut on every message you send. The same is true of `Ctrl+I` (Tab) and `Ctrl+J`. `/model` is on `Alt+M` and `F3`; asking for `ctrl+m` in your configuration reports this rather than failing silently.
+
+Bare letters are not shortcuts, for a reason worth knowing: this prompt is where you type your request, so a bare `w` for wander would cost you every message beginning with "write".
+
+`Ctrl+G` opens the command palette, which searches every command by name *or* by what it does — typing `revert` finds `/undo`, and letters that are not adjacent still match, so `wndr` finds `/wander`. Arrow keys, `Ctrl+P`/`Ctrl+N`, PageUp/PageDown and Home/End all move through it.
 
 `/keys` shows the live table, including anything your terminal is unlikely to deliver. To rebind, set `NOVA_KEYS` (or the key-bindings entry in `nova settings`) to a comma-separated list like `/diff=alt+x, /wander=off`. An override replaces that command's default keys rather than adding to them.
 

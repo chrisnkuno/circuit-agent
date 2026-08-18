@@ -172,6 +172,73 @@ export function toAnthropicMessages(messages: readonly AgentMessage[]): { system
   return { system, messages: converted };
 }
 
+const EPHEMERAL = { type: "ephemeral" } as const;
+
+/**
+ * Marks the two long, stable prefixes of a request as cacheable.
+ *
+ * Without this every iteration of an agent loop re-processes the entire prompt from scratch, and an
+ * agent loop is the worst possible shape for that: the conversation only ever grows, each turn
+ * resends everything before it, and by the tenth tool call the resent prefix dwarfs the new content
+ * many times over. `usageOf` already reads `cache_read_input_tokens`, so the accounting for this has
+ * been in place the whole time — nothing was ever writing the breakpoints that would populate it.
+ *
+ * Two breakpoints, at the two boundaries that actually hold still:
+ *
+ * - **After the tool definitions.** Tools and the system prompt are byte-identical for every
+ *   iteration of a run, and they sit at the very front of the request, so this one breakpoint covers
+ *   the whole fixed header. (Anthropic caches the prefix *up to* a breakpoint, and the documented
+ *   ordering is tools, then system, then messages — so a marker on the last tool covers the tools
+ *   and a marker on the system block covers tools plus system.)
+ * - **After the last complete exchange.** This is the rolling one: on the next iteration the marker
+ *   moves forward past the turn that just happened, and everything before it is a cache hit. It is
+ *   placed on the second-to-last message rather than the last so the newest content stays outside
+ *   the cached prefix — a breakpoint on genuinely new text caches something that will never be read
+ *   back, paying the write premium for nothing.
+ *
+ * Both are `ephemeral`, the only cache type the Messages API offers, and four is the documented
+ * maximum number of breakpoints; two leaves room for callers that add their own.
+ */
+function withCacheBreakpoints(
+  system: string,
+  messages: AnthropicMessage[],
+  tools: Array<Record<string, unknown>>,
+): { system: unknown; messages: AnthropicMessage[]; tools: Array<Record<string, unknown>> } {
+  const cachedTools = tools.length > 0
+    ? tools.map((tool, index) => (index === tools.length - 1 ? { ...tool, cache_control: EPHEMERAL } : tool))
+    : tools;
+  // The system prompt becomes a block array purely so it can carry a breakpoint; a bare string
+  // cannot. Empty stays empty — an empty cached block is rejected, not merely useless.
+  const cachedSystem = system ? [{ type: "text", text: system, cache_control: EPHEMERAL }] : undefined;
+
+  // Needs at least three messages for a rolling breakpoint to sit on stable ground: with fewer,
+  // everything present is new, and the fixed header above is already carrying the cache.
+  const cachedMessages = messages.length >= 3
+    ? messages.map((message, index) => (index === messages.length - 2 ? withBlockBreakpoint(message) : message))
+    : messages;
+
+  return { system: cachedSystem, messages: cachedMessages, tools: cachedTools };
+}
+
+/**
+ * Puts a breakpoint on a message's final content block.
+ *
+ * A string body has to become a one-element block array to carry one. A message whose blocks cannot
+ * take the marker is returned untouched rather than forced — a missing breakpoint costs a cache
+ * miss, while a malformed one costs the whole request.
+ */
+function withBlockBreakpoint(message: AnthropicMessage): AnthropicMessage {
+  if (typeof message.content === "string") {
+    return { role: message.role, content: [{ type: "text", text: message.content, cache_control: EPHEMERAL }] };
+  }
+  if (!Array.isArray(message.content) || message.content.length === 0) return message;
+  const blocks = message.content as Array<Record<string, unknown>>;
+  return {
+    role: message.role,
+    content: blocks.map((block, index) => (index === blocks.length - 1 ? { ...block, cache_control: EPHEMERAL } : block)),
+  };
+}
+
 export class AnthropicAgentTurnProvider implements AgentTurnProvider {
   private readonly call: MessagesCall;
 
@@ -201,14 +268,19 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
 
   async complete(request: AgentModelRequest): Promise<AgentModelTurn> {
     if (!request.safetyIdentifier.trim()) throw new Error("safetyIdentifier is required");
-    const { system, messages } = toAnthropicMessages(request.messages);
+    const converted = toAnthropicMessages(request.messages);
+    const { system, messages, tools } = withCacheBreakpoints(
+      converted.system,
+      converted.messages,
+      request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })),
+    );
 
     const raw = await this.call({
       model: this.options.model,
       max_tokens: request.maxOutputTokens,
       ...(system ? { system } : {}),
       messages,
-      tools: request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })),
+      tools,
       // Deliberately no `temperature`: the current Opus and Sonnet models reject sampling
       // parameters outright, and prompting is the supported way to steer them.
       metadata: { user_id: request.safetyIdentifier },

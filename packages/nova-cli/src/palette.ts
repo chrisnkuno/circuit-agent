@@ -38,6 +38,28 @@ export function paletteEntries(chords: Readonly<Record<string, string>> = {}): P
  * typing `diff` puts `/undo` (whose description says "revert") above `/diff`, and the palette stops
  * being trustworthy for the case it is used most.
  */
+/**
+ * Whether `needle`'s characters appear in `haystack` in order, though not necessarily together.
+ *
+ * The behaviour every command palette worth using has, and the reason typing `wnd` finds `/wander`.
+ * It earns its place here specifically because slash commands are short words with no separators —
+ * there is nothing to abbreviate *by*, so a user who half-remembers a name has only the letters and
+ * their order to go on.
+ *
+ * Deliberately the lowest tier below. Subsequence matching is generous to the point of matching
+ * almost everything on a short query (`/e` alone is a subsequence of most of the catalog), so it has
+ * to rank beneath every literal match or it drowns the answers people typed exactly.
+ */
+export function isSubsequence(needle: string, haystack: string): boolean {
+  if (needle === "") return true;
+  let index = 0;
+  for (const character of haystack) {
+    if (character === needle[index]) index += 1;
+    if (index === needle.length) return true;
+  }
+  return false;
+}
+
 export function rankPaletteEntries(entries: readonly PaletteEntry[], query: string): PaletteEntry[] {
   const needle = query.trim().toLowerCase().replace(/^\//, "");
   if (!needle) return [...entries];
@@ -46,11 +68,12 @@ export function rankPaletteEntries(entries: readonly PaletteEntry[], query: stri
     if (name.startsWith(needle)) return 0;
     if (name.includes(needle)) return 1;
     if (entry.description.toLowerCase().includes(needle)) return 2;
-    return 3;
+    if (isSubsequence(needle, name)) return 3;
+    return 4;
   };
   return entries
     .map((entry, index) => ({ entry, index, tier: tier(entry) }))
-    .filter((candidate) => candidate.tier < 3)
+    .filter((candidate) => candidate.tier < 4)
     // Stable within a tier: the catalog's own order is deliberate, and reshuffling equally-good
     // matches between keystrokes makes the highlighted row jump under the user's fingers.
     .sort((left, right) => left.tier - right.tier || left.index - right.index)
@@ -125,7 +148,13 @@ export type PaletteKey = { str?: string; key: KeypressEvent };
  * Split from the reading loop so the whole interaction is testable without a terminal: the loop
  * below only turns real keypresses into these calls and paints what comes back.
  */
-export function advancePalette(state: PaletteState, entries: readonly PaletteEntry[], input: PaletteKey): {
+export function advancePalette(
+  state: PaletteState,
+  entries: readonly PaletteEntry[],
+  input: PaletteKey,
+  /** Only `rows` is read, and only to size a page jump — the window height the user can actually see. */
+  options: Pick<PaletteOptions, "rows"> = {},
+): {
   state: PaletteState;
   /** Set once the interaction is over: the chosen command, or undefined when dismissed. */
   done?: { command?: string };
@@ -139,9 +168,25 @@ export function advancePalette(state: PaletteState, entries: readonly PaletteEnt
     const chosen = matches.length > 0 ? matches[Math.max(0, Math.min(state.selected, matches.length - 1))] : undefined;
     return { state, done: { ...(chosen ? { command: chosen.args ? `${chosen.command} ` : chosen.command } : {}) } };
   }
-  if (name === "up") return { state: { ...state, selected: Math.max(0, state.selected - 1) } };
-  if (name === "down") return { state: { ...state, selected: Math.min(Math.max(0, matches.length - 1), state.selected + 1) } };
+  const last = Math.max(0, matches.length - 1);
+  const clamp = (index: number): number => Math.max(0, Math.min(last, index));
+  // A page is one row short of the window so the row you were reading stays on screen across the
+  // jump — the same overlap `less` and every pager keep, and what makes paging feel continuous
+  // rather than teleporting.
+  const page = Math.max(1, (options.rows ?? 8) - 1);
+
+  // Ctrl+P/Ctrl+N alongside the arrows: this menu has borrowed the keyboard from readline, so the
+  // habit of moving through a list without leaving the home row would otherwise just stop working
+  // for the seconds the palette is open.
+  if (name === "up" || (input.key.ctrl && name === "p")) return { state: { ...state, selected: clamp(state.selected - 1) } };
+  if (name === "down" || (input.key.ctrl && name === "n")) return { state: { ...state, selected: clamp(state.selected + 1) } };
+  if (name === "pageup") return { state: { ...state, selected: clamp(state.selected - page) } };
+  if (name === "pagedown") return { state: { ...state, selected: clamp(state.selected + page) } };
+  if (name === "home") return { state: { ...state, selected: 0 } };
+  if (name === "end") return { state: { ...state, selected: last } };
   if (name === "backspace") return { state: { query: state.query.slice(0, -1), selected: 0 } };
+  // Word-wise erase, so correcting a mistyped query does not mean holding backspace down.
+  if (input.key.ctrl && name === "w") return { state: { query: state.query.replace(/\s*\S+\s*$/, ""), selected: 0 } };
   if (input.key.ctrl && name === "u") return { state: { query: "", selected: 0 } };
 
   // Only printable characters extend the query. Without this filter an unhandled escape sequence
@@ -190,7 +235,7 @@ export async function runCommandPalette(
   paint(renderPalette({ query: state.query, matches: rankPaletteEntries(entries, state.query), selected: state.selected }, liveOptions()));
 
   for await (const input of keys) {
-    const step = advancePalette(state, entries, input);
+    const step = advancePalette(state, entries, input, liveOptions());
     state = step.state;
     if (step.done) {
       if (step.done.command === undefined) options.onDismiss?.(state.query);

@@ -33,6 +33,23 @@ export async function openSession(root: string, mode: NovaMode, sandbox: boolean
   }>({ type: "session.open", root, mode, sandbox, upload });
 }
 
+/**
+ * Opens a session with no project folder, for chatting.
+ *
+ * Returns the scratch directory the sidecar chose, so the UI can say where files would land rather
+ * than leaving "no project" as an invisible state with real consequences.
+ */
+export async function openScratchSession(mode: NovaMode) {
+  return await sidecarRequest<{
+    sessionId: string;
+    root: string;
+    provider?: string;
+    model?: string;
+    workspace: string;
+    scratch: true;
+  }>({ type: "session.scratch", mode });
+}
+
 export async function listSessions(root: string) {
   return await sidecarRequest<Array<{ id: string; title: string; updatedAt: number }>>({
     type: "session.list",
@@ -142,6 +159,28 @@ export async function pickFolder(): Promise<string | null> {
 
 export async function loadPersistedSettings(): Promise<NovaSettings | null> {
   return await invoke<NovaSettings | null>("load_settings");
+}
+
+/**
+ * Where the window was last working: the project, the mode, and the projects before that.
+ *
+ * Kept apart from settings because they are different kinds of thing — settings are configuration
+ * worth copying between machines, this is per-machine state about paths that may not exist
+ * anywhere else.
+ */
+export type WorkspaceState = {
+  lastRoot?: string;
+  mode?: NovaMode;
+  sandbox?: boolean;
+  recentRoots?: string[];
+};
+
+export async function loadWorkspaceState(): Promise<WorkspaceState | null> {
+  return await invoke<WorkspaceState | null>("load_workspace");
+}
+
+export async function saveWorkspaceState(workspace: WorkspaceState): Promise<void> {
+  await invoke("save_workspace", { workspace });
 }
 
 export async function savePersistedSettings(settings: NovaSettings): Promise<void> {

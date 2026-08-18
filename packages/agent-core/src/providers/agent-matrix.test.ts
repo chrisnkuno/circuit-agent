@@ -196,11 +196,109 @@ describe("Anthropic adapter", () => {
     });
 
     const turn = await provider.complete(request);
-    expect(body).toMatchObject({ model: "claude-opus-5", max_tokens: 4_096, system: "sys" });
-    expect(body!.tools).toEqual([{ name: "read_file", description: "Read a file", input_schema: { type: "object" } }]);
+    expect(body).toMatchObject({ model: "claude-opus-5", max_tokens: 4_096 });
+    // The system prompt is a block array rather than a bare string so it can carry a cache
+    // breakpoint; the text itself is unchanged.
+    expect(body!.system).toEqual([{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }]);
+    expect(body!.tools).toEqual([{ name: "read_file", description: "Read a file", input_schema: { type: "object" }, cache_control: { type: "ephemeral" } }]);
     // Current Opus and Sonnet models reject sampling parameters outright.
     expect(body).not.toHaveProperty("temperature");
     expect(turn).toMatchObject({ finishReason: "stop", content: "Done." });
+  });
+
+  /**
+   * Prompt caching, which was absent entirely.
+   *
+   * An agent loop is the worst possible shape for an uncached prompt: the conversation only grows,
+   * every iteration resends everything before it, and the resent prefix quickly dwarfs the new
+   * content. `usageOf` has always read `cache_read_input_tokens` — nothing was ever writing the
+   * breakpoints that would populate it.
+   */
+  describe("prompt caching", () => {
+    const bodyFor = async (messages: Parameters<typeof toAnthropicMessages>[0], tools = request.tools) => {
+      let body: Record<string, unknown> = {};
+      const provider = new AnthropicAgentTurnProvider({ apiKey: "sk-ant", model: "claude-opus-5" }, async (value) => {
+        body = value;
+        return { id: "m", model: "claude-opus-5", stop_reason: "end_turn", content: [{ type: "text", text: "ok" }], usage };
+      });
+      await provider.complete({ ...request, messages: [...messages], tools });
+      return body;
+    };
+    const marked = (blocks: unknown) => (Array.isArray(blocks) ? blocks as Array<{ cache_control?: unknown }> : []).filter((block) => block.cache_control !== undefined).length;
+
+    it("marks the fixed header — the last tool covers tools, the system block covers the prompt", async () => {
+      const body = await bodyFor([{ role: "system", content: "sys" }, { role: "user", content: "hi" }], [
+        { name: "a", description: "a", inputSchema: { type: "object" } },
+        { name: "b", description: "b", inputSchema: { type: "object" } },
+      ]);
+      const tools = body.tools as Array<{ name: string; cache_control?: unknown }>;
+      // Only the last: Anthropic caches the prefix *up to* a breakpoint, so one marker at the end
+      // of the tool list covers every tool before it. A marker per tool would waste breakpoints.
+      expect(tools.map((tool) => tool.cache_control !== undefined)).toEqual([false, true]);
+      expect(marked(body.system)).toBe(1);
+    });
+
+    it("rolls a second breakpoint along the conversation as it grows", async () => {
+      const body = await bodyFor([
+        { role: "system", content: "sys" },
+        { role: "user", content: "one" },
+        { role: "assistant", content: "two" },
+        { role: "user", content: "three" },
+        { role: "assistant", content: "four" },
+      ]);
+      const messages = body.messages as Array<{ content: unknown }>;
+      // Second-to-last, not last: a breakpoint on the newest content caches something that will
+      // never be read back, paying the cache-write premium for nothing.
+      expect(messages.map((message) => marked(message.content))).toEqual([0, 0, 1, 0]);
+    });
+
+    it("leaves a short conversation alone, where there is no stable prefix to cache yet", async () => {
+      const body = await bodyFor([{ role: "system", content: "sys" }, { role: "user", content: "hi" }]);
+      expect((body.messages as Array<{ content: unknown }>).every((message) => typeof message.content === "string")).toBe(true);
+    });
+
+    it("never sends an empty cached system block, which the API rejects", async () => {
+      const body = await bodyFor([{ role: "user", content: "hi" }]);
+      expect(body).not.toHaveProperty("system");
+    });
+
+    it("puts the breakpoint on the last block of a structured message, leaving the rest intact", async () => {
+      const body = await bodyFor([
+        { role: "system", content: "sys" },
+        { role: "user", content: "go" },
+        { role: "assistant", content: "working", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "a" } }] },
+        { role: "tool", content: "contents", toolCallId: "c1", name: "read_file" },
+        { role: "assistant", content: "done" },
+      ]);
+      const messages = body.messages as Array<{ content: Array<Record<string, unknown>> | string }>;
+      // Four messages: user, assistant(text+tool_use), user(tool_result), assistant. The rolling
+      // breakpoint lands on the second-to-last — the tool_result turn.
+      const carrier = messages[2].content as Array<Record<string, unknown>>;
+      expect(carrier.map((block) => block.type)).toEqual(["tool_result"]);
+      expect(carrier[0].cache_control).toEqual({ type: "ephemeral" });
+      // The block is otherwise untouched: caching must not reshape the result itself.
+      expect(carrier[0]).toMatchObject({ tool_use_id: "c1", content: "contents" });
+      // And the assistant turn before it keeps both blocks, unmarked and unreshaped.
+      const assistant = messages[1].content as Array<Record<string, unknown>>;
+      expect(assistant.map((block) => block.type)).toEqual(["text", "tool_use"]);
+      expect(assistant.every((block) => block.cache_control === undefined)).toBe(true);
+      expect(assistant[1]).toMatchObject({ id: "c1", name: "read_file", input: { path: "a" } });
+    });
+
+    it("stays within Anthropic's four-breakpoint limit however long the conversation gets", async () => {
+      const messages: AgentMessage[] = [{ role: "system", content: "sys" }];
+      for (let index = 0; index < 40; index += 1) {
+        messages.push({ role: index % 2 === 0 ? "user" : "assistant", content: `turn ${index}` });
+      }
+      const body = await bodyFor(messages, [
+        { name: "a", description: "a", inputSchema: { type: "object" } },
+        { name: "b", description: "b", inputSchema: { type: "object" } },
+      ]);
+      const total = marked(body.tools) + marked(body.system)
+        + (body.messages as Array<{ content: unknown }>).reduce((sum, message) => sum + (Array.isArray(message.content) ? marked(message.content) : 0), 0);
+      expect(total).toBeLessThanOrEqual(4);
+      expect(total).toBe(3);
+    });
   });
 
   it("folds Anthropic's separate cache counters into the shared usage shape", async () => {

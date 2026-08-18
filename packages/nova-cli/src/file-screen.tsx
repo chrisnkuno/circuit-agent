@@ -37,7 +37,7 @@ export type FileScreenProps = {
   /** Root-relative, forward-slashed — the same shape `workspace.glob` returns. */
   paths: readonly string[];
   /** The path picked, or undefined if the reader left without choosing one. */
-  onExit: (picked: string | undefined) => void;
+  onExit: (picked: FileScreenChoice | undefined) => void;
   palette?: Palette;
   readFile: FileReader;
 };
@@ -64,9 +64,11 @@ export function FileScreen({ columns, rows, paths, onExit, palette = NO_COLOR_PA
   useInput((input: string, key: TermUIKey) => {
     const action = keyToFileAction({ name: key?.key, ctrl: key?.ctrl, shift: key?.shift }, input, state.searching);
     if (action.kind === "exit") { onExit(undefined); return; }
-    if (action.kind === "pick") {
+    if (action.kind === "pick" || action.kind === "edit") {
       const current = currentRow(state);
-      if (current?.node.kind === "file") { onExit(current.node.path); return; }
+      // Both keys land on a file the same way; only the intent differs, and the caller decides what
+      // to do with it. A directory has nothing to edit, so `e` falls through to expanding it.
+      if (current?.node.kind === "file") { onExit({ path: current.node.path, intent: action.kind === "edit" ? "edit" : "mention" }); return; }
       setState((value) => toggleDirectory(value));
       return;
     }
@@ -87,6 +89,15 @@ export function FileScreen({ columns, rows, paths, onExit, palette = NO_COLOR_PA
 }
 
 /**
+ * What the reader chose, and what they meant by it.
+ *
+ * Enter and `e` both select a file; they differ only in intent — one is "put this in my message",
+ * the other is "open it". Returning the intent rather than two different screens keeps one browser
+ * with one set of keys, and leaves the decision with the caller that knows what it can offer.
+ */
+export type FileScreenChoice = { path: string; intent: "mention" | "edit" };
+
+/**
  * Opens the picker and resolves with whichever file was chosen, or undefined if the reader left
  * without picking one. TermUI is imported dynamically, so a session that never opens this pays
  * nothing for it — the same arrangement the guide and the control panel use.
@@ -97,11 +108,11 @@ export async function runFileScreen(options: {
   paths: readonly string[];
   palette?: Palette;
   readFile: FileReader;
-}): Promise<string | undefined> {
+}): Promise<FileScreenChoice | undefined> {
   const { renderApp } = await import("@termuijs/jsx");
-  return new Promise<string | undefined>((resolve) => {
+  return new Promise<FileScreenChoice | undefined>((resolve) => {
     let settled = false;
-    const finish = (picked: string | undefined) => {
+    const finish = (picked: FileScreenChoice | undefined) => {
       if (settled) return;
       settled = true;
       resolve(picked);

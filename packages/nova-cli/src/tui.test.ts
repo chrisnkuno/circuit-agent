@@ -1122,6 +1122,21 @@ describe("padToWidth and joinHorizontal", () => {
     expect(visibleWidth(padToWidth("\x1b[31mab\x1b[0m", 5))).toBe(5);
   });
 
+  it("keeps a coloured cell's content when clipping it, rather than spending columns on escape codes", () => {
+    // The bug this closes: the walk under this asked `visibleWidth` about one character at a time,
+    // and a lone `\x1b` is not a sequence the ANSI pattern matches — so it measured one column wide.
+    // A painted cell paid a column for every escape character in it, and `table()`, which documents
+    // that its cells arrive pre-painted, clipped away real content to afford codes nobody can see.
+    const painted = padToWidth("\x1b[31mabcdefgh\x1b[0m", 4);
+    expect(plain(painted)).toBe("abcd");
+    expect(visibleWidth(painted)).toBe(4);
+  });
+
+  it("does not split an astral character in half while slicing", () => {
+    // A surrogate pair cut down the middle renders as replacement characters, not a narrower emoji.
+    expect(sliceToWidth("🌟🌟", 2)).toBe("🌟");
+  });
+
   it("joins two columns to a total that never varies with either side's content", () => {
     const narrow = joinHorizontal("a", "b", { leftWidth: 6, rightWidth: 8, separator: " | " });
     const wide = joinHorizontal("a".repeat(50), "b".repeat(50), { leftWidth: 6, rightWidth: 8, separator: " | " });

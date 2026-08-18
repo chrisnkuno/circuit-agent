@@ -80,7 +80,9 @@ export async function gatherWanderEvidence(topic: string, search: ExaSearchClien
   let hits: ExaSearchHit[] = [];
   let note: string | undefined;
   try {
-    const response = await search.search({ query: topic, numResults, type: "auto", highlightMaxCharacters: 1_000 });
+    // Highlights at their default quality: a lab briefing is read, not skimmed for one fact, and
+    // Exa documents the bare `true` as the better setting than any explicit character cap.
+    const response = await search.search({ query: topic, numResults, type: "auto" });
     hits = response.results;
   } catch (error) {
     note = `Literature search failed (${error instanceof Error ? error.message : "unknown error"}). Treat every claim below as unsupported.`;

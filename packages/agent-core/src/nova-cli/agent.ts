@@ -6,6 +6,7 @@ import type { ModelUsage } from "../providers/model";
 import type { ExaSearchClient } from "../providers/exa";
 import { CheckpointStore, type Checkpoint, type GitRunner } from "./checkpoints";
 import { capabilitiesForMode, PermissionLedger, type ApprovalPrompt, type NovaMode } from "./permissions";
+import { loadMemories, memoryPromptBlock, recallMemories } from "./memory";
 import { buildNovaSystemPrompt, collectProjectContext, type ProjectContext } from "./prompt";
 import { assertTurnTransition, EventJournal, runtimeEventForJournal, type TurnStatus } from "./protocol";
 import {
@@ -272,6 +273,9 @@ export class NovaAgent {
       externalToolProviders: externalTooling?.providers,
       hooks: externalTooling?.hooks,
       delegate: delegate.runner,
+      // The *local* root, never the workspace: a fact learned during a remote sandbox session must
+      // outlive that container, and `.nova/memory.md` inside a disposable sandbox does not.
+      memoryRoot: this.options.root,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
     return {
@@ -295,6 +299,9 @@ export class NovaAgent {
       externalToolProviders: externalTooling?.providers,
       hooks: externalTooling?.hooks,
       delegate: delegate.runner,
+      // The *local* root, never the workspace: a fact learned during a remote sandbox session must
+      // outlive that container, and `.nova/memory.md` inside a disposable sandbox does not.
+      memoryRoot: this.options.root,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
     const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
@@ -448,12 +455,22 @@ export class NovaAgent {
       const capabilities = capabilitiesForMode(this.options.mode);
       const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
       delegate.setTools(scoped.filter((tool) => tool.name !== "delegate_task"));
-      const systemPrompt = buildNovaSystemPrompt(
-        this.context,
-        this.options.mode,
-        scoped.map((tool) => tool.name),
-        this.workspace,
-      );
+      /**
+       * Durable memory, recalled against this turn's objective and prepended to the prompt.
+       *
+       * Done here rather than in each front end, which is the whole point of the move: the CLI had
+       * its own recall wiring and the desktop had none, so the same agent knew the user's
+       * conventions in a terminal and had never heard of them in a window. One agent, one memory.
+       *
+       * Recall is lexical and bounded — it selects a few kilobytes at most — so a memory file that
+       * grows for a year does not quietly become the largest thing in every request.
+       */
+      const memories = await loadMemories(this.options.root, process.env).catch(() => []);
+      const recalled = memories.length > 0 ? recallMemories(memories, objective).entries : [];
+      const systemPrompt = [
+        buildNovaSystemPrompt(this.context, this.options.mode, scoped.map((tool) => tool.name), this.workspace),
+        memoryPromptBlock(recalled),
+      ].filter(Boolean).join("\n\n");
 
       // Snapshot before the agent can touch anything, so `/undo` returns to the state the user saw
       // when they typed. Taken per turn rather than per tool call: a turn is the unit a person

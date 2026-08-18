@@ -1,5 +1,5 @@
 import type { AgentTool } from "../agent-runtime";
-import type { ExaSearchClient } from "../providers/exa";
+import type { ExaCategory, ExaSearchClient, ExaSearchHit } from "../providers/exa";
 import type { Expense } from "./cost";
 import type { NovaWorkspace } from "./backends";
 export { runShellCommand } from "./command";
@@ -12,6 +12,8 @@ import { COMBINED_SECRET_PATTERN, findSecretsInLine, SEVERITY_RANK, type SecretF
 import { assertSupportedSchema, validateToolArguments, type ToolInputSchema } from "./tool-schema";
 import type { ToolProvider } from "./tool-providers";
 import { collectExternalTools } from "./tool-providers";
+import { credentialRequest, deployOffer, deployPlan, detectWebApp, DEPLOY_PROVIDERS, type DeployTarget } from "./deploy";
+import { addMemory, type MemoryKind, type MemoryScope } from "./memory";
 
 /**
  * Nova CLI's tool set.
@@ -101,6 +103,14 @@ export type NovaToolOptions = {
   /** Pre/post tool-call interception. See hooks.ts. Applied to every tool, built-in and external alike. */
   hooks?: HookRegistry;
   /**
+   * Where project-scope memory is written.
+   *
+   * Separate from the workspace because memory is a *local* record even when the work is happening
+   * in a remote sandbox: a fact learned during an E2B session must outlive that container, and a
+   * `.nova/memory.md` inside a disposable sandbox is written to something that will be deleted.
+   */
+  memoryRoot?: string;
+  /**
    * Runs one self-contained sub-task through a bounded sub-agent, when the caller (`agent.ts`) has
    * wired one up. Absent this, `delegate_task` is not offered — same "only real capabilities get a
    * tool" rule `search` already follows.
@@ -120,6 +130,14 @@ function optionalInteger(value: unknown, name: string): number | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Number.isInteger(value) || (value as number) < 1) throw new Error(`${name} must be a positive integer`);
   return value as number;
+}
+
+/** An all-empty array reads as "no filter", not as a filter matching nothing. */
+function optionalStringArray(value: unknown, name: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) throw new Error(`${name} must be an array of strings`);
+  const cleaned = (value as string[]).map((entry) => entry.trim()).filter(Boolean);
+  return cleaned.length > 0 ? cleaned : undefined;
 }
 
 /**
@@ -421,12 +439,46 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
   // always fails teaches the model to stop trying, and wastes a turn discovering that each time.
   if (options.search) {
     const search = options.search;
+    /**
+     * Charged after the call, not before: contents are billed per page actually returned, which a
+     * request that asked for ten results and found three does not know in advance. When Exa reports
+     * its own `costDollars` that figure wins over the catalog rate — a list price applied to a
+     * guessed page count is an estimate, and the provider's number is the invoice.
+     */
+    const chargeSearch = (label: string, pages: number, costDollars: number | null) => {
+      options.onExpense?.({
+        provider: "exa",
+        meter: "search",
+        quantities: { request: 1, contents: pages },
+        ...(costDollars !== null ? { reportedUsd: costDollars } : {}),
+        label,
+      });
+    };
+
+    const renderHits = (hits: readonly ExaSearchHit[]): string =>
+      hits
+        .map((hit, index) => [
+          `[${index + 1}] ${hit.title}${hit.publishedDate ? ` (${hit.publishedDate.slice(0, 10)})` : ""}`,
+          hit.url,
+          ...(hit.text ? [hit.text.slice(0, 4_000)] : hit.highlights.slice(0, 3)),
+        ].join("\n"))
+        .join("\n\n");
+
     tools.push({
       name: "web_search",
-      description: "Search the web for documentation, APIs, error messages and current information beyond the project.",
+      description:
+        "Search the web for documentation, APIs, error messages and current information beyond the project. Returns extractive highlights from each page, which is usually enough to answer from directly.",
       inputSchema: {
         type: "object",
-        properties: { query: { type: "string" }, numResults: { type: "integer" } },
+        properties: {
+          query: { type: "string", description: "A natural-language description. Long, specific queries work better than keywords." },
+          numResults: { type: "integer", description: "1-25. Defaults to 5." },
+          includeDomains: { type: "array", items: { type: "string" }, description: "Restrict to these domains, e.g. [\"nvd.nist.gov\", \"github.com\"]." },
+          excludeDomains: { type: "array", items: { type: "string" } },
+          category: { type: "string", enum: ["company", "people", "publication", "news", "personal site", "financial report"] },
+          startPublishedDate: { type: "string", description: "ISO date. Use to exclude stale results when recency matters." },
+          fresh: { type: "boolean", description: "Bypass the content cache and crawl every result live. Slower; use when a cached copy would be a wrong answer." },
+        },
         required: ["query"],
         additionalProperties: false,
       },
@@ -438,23 +490,91 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const query = requiredString(args.query, "query");
         const response = await search.search({
           query,
-          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 5, 10),
+          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 5, 25),
           type: "auto",
-          highlightMaxCharacters: 1_000,
+          ...(optionalStringArray(args.includeDomains, "includeDomains") ? { includeDomains: optionalStringArray(args.includeDomains, "includeDomains")! } : {}),
+          ...(optionalStringArray(args.excludeDomains, "excludeDomains") ? { excludeDomains: optionalStringArray(args.excludeDomains, "excludeDomains")! } : {}),
+          ...(typeof args.category === "string" ? { category: args.category as ExaCategory } : {}),
+          ...(typeof args.startPublishedDate === "string" ? { startPublishedDate: args.startPublishedDate } : {}),
+          // `highlights` is left unset so the client sends the bare `true` Exa documents as its
+          // highest-quality setting; a maxCharacters cap here would quietly lower result quality.
+          ...(args.fresh === true ? { contents: { maxAgeHours: 0 } } : {}),
         });
-        // Both meters, and after the call rather than before it: contents are billed per page
-        // actually returned, which a request that finds three results does not know in advance.
-        options.onExpense?.({
-          provider: "exa",
-          meter: "search",
-          quantities: { request: 1, contents: response.results.length },
-          label: `web search: ${query.length > 48 ? `${query.slice(0, 47)}…` : query}`,
-        });
+        chargeSearch(`web search: ${query.length > 48 ? `${query.slice(0, 47)}…` : query}`, response.results.length, response.costDollars);
         if (response.results.length === 0) return { content: "No results." };
+        return { content: renderHits(response.results), data: { requestId: response.requestId, searchType: response.searchType, urls: response.results.map((hit) => hit.url) } };
+      },
+    });
+
+    /**
+     * Multi-step research, as one tool call.
+     *
+     * Distinct from `web_search` rather than a flag on it, because it is a different bargain and the
+     * model should be choosing it deliberately: Exa plans several sub-searches, reasons across what
+     * comes back and synthesizes a cited answer, which takes 4-40 seconds instead of about one. That
+     * is worth it for "what changed in this ecosystem and what does it mean for us" and wasteful for
+     * "what is the signature of this function".
+     *
+     * This is the tool DEFENDER mode wants. A vulnerability question is exactly the shape deep
+     * search is built for — it spans an advisory database, a changelog and a project's own issue
+     * tracker, and the answer has to be assembled from all three rather than found on one page. The
+     * grounding Exa returns is kept and rendered, because a security claim without its source is not
+     * usable evidence.
+     */
+    tools.push({
+      name: "deep_research",
+      description:
+        "Research a question that needs several searches and a synthesized, cited answer — ecosystem changes, security advisories affecting a dependency, comparing approaches across sources. Takes up to a minute; use web_search for anything a single page can answer.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The research question, stated in full." },
+          effort: { type: "string", enum: ["lite", "standard", "maximum"], description: "Reasoning depth. Defaults to standard." },
+          numResults: { type: "integer", description: "How many sources to gather. 1-25, defaults to 10." },
+          instructions: { type: "string", description: "How to research, e.g. \"prefer official advisories over blog posts\". Not what shape to return." },
+          includeDomains: { type: "array", items: { type: "string" } },
+          startPublishedDate: { type: "string", description: "ISO date; excludes anything older." },
+          fresh: { type: "boolean", description: "Crawl every source live rather than using cached copies." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.research,
+      effect: "none",
+      requiresApproval: false,
+      parallelSafe: true,
+      async execute(args) {
+        const query = requiredString(args.query, "query");
+        const effort = typeof args.effort === "string" ? args.effort : "standard";
+        const type = effort === "lite" ? "deep-lite" : effort === "maximum" ? "deep-reasoning" : "deep";
+        const response = await search.search({
+          query,
+          type,
+          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 10, 25),
+          ...(typeof args.instructions === "string" && args.instructions.trim() ? { systemPrompt: args.instructions.trim() } : {}),
+          ...(optionalStringArray(args.includeDomains, "includeDomains") ? { includeDomains: optionalStringArray(args.includeDomains, "includeDomains")! } : {}),
+          ...(typeof args.startPublishedDate === "string" ? { startPublishedDate: args.startPublishedDate } : {}),
+          ...(args.fresh === true ? { contents: { maxAgeHours: 0 } } : {}),
+          // Text, not a structured schema: the caller is a language model that will read prose and
+          // decide for itself. A JSON schema here would force every research question through one
+          // predetermined shape, and Exa returns citations in `grounding` either way.
+          outputSchema: { type: "text", description: "A direct, specific answer to the question, citing what it rests on." },
+        });
+        chargeSearch(`deep research: ${query.length > 40 ? `${query.slice(0, 39)}…` : query}`, response.results.length, response.costDollars);
+
+        const answer = typeof response.output?.content === "string" ? response.output.content.trim() : "";
+        // Sources are printed even when synthesis came back empty — a list of the right pages is a
+        // usable result, and reporting "no results" over a failed synthesis would throw them away.
+        const citations = (response.output?.grounding ?? []).flatMap((entry) => entry.citations.map((citation) => citation.url));
+        const sources = [...new Set([...citations, ...response.results.map((hit) => hit.url)])];
+        if (!answer && sources.length === 0) return { content: "No results." };
         return {
-          content: response.results
-            .map((hit, index) => [`[${index + 1}] ${hit.title}`, hit.url, ...(hit.highlights ?? []).slice(0, 2)].join("\n"))
-            .join("\n\n"),
+          content: [
+            answer || "(no synthesized answer returned)",
+            sources.length > 0 ? `\nSources:\n${sources.map((url, index) => `[${index + 1}] ${url}`).join("\n")}` : "",
+            response.results.length > 0 ? `\n${renderHits(response.results)}` : "",
+          ].filter(Boolean).join("\n"),
+          data: { requestId: response.requestId, searchType: response.searchType, sources, grounding: response.output?.grounding ?? [] },
         };
       },
     });
@@ -473,13 +593,206 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       async execute(args) {
         const url = requiredString(args.url, "url");
         if (!/^https?:\/\//i.test(url)) throw new Error("url must be http or https");
+        // Exa's extractor first when it is configured: it renders JavaScript pages and parses PDFs,
+        // neither of which a raw fetch plus tag-stripping can do at all — those come back as an
+        // empty shell or as binary noise, and the model cannot tell either from a page that simply
+        // said nothing. Falls through to the plain fetch on any failure, so the tool never becomes
+        // *less* capable than it was by being wired to a second provider.
+        if (options.search) {
+          try {
+            const extracted = await options.search.contents([url], { text: { maxCharacters: 40_000 } });
+            const failure = extracted.statuses.find((status) => status.status === "error");
+            const page = extracted.results[0];
+            if (page?.text) {
+              options.onExpense?.({
+                provider: "exa",
+                meter: "search",
+                quantities: { request: 0, contents: 1 },
+                ...(extracted.costDollars !== null ? { reportedUsd: extracted.costDollars } : {}),
+                label: `fetch: ${url.length > 56 ? `${url.slice(0, 55)}…` : url}`,
+              });
+              return { content: page.text, data: { url, title: page.title, via: "exa" } };
+            }
+            if (failure) throw new Error(failure.errorTag ?? "extraction failed");
+          } catch {
+            // Deliberately silent: the fallback below is a complete answer, and reporting a
+            // provider-selection detail as a tool error would read as the fetch itself failing.
+          }
+        }
         const response = await fetchImpl(url, { signal: AbortSignal.timeout(30_000) });
         if (!response.ok) return { content: `Fetch failed with status ${response.status}.`, isError: true };
         const text = await response.text();
-        return { content: stripMarkup(text).slice(0, 40_000) };
+        return { content: stripMarkup(text).slice(0, 40_000), data: { url, via: "fetch" } };
       },
     });
   }
+
+  /**
+   * Deploying, as a two-step tool: `check` answers questions, `deploy` publishes.
+   *
+   * One tool rather than two because they share the detection and the credential logic, and the
+   * split lives in a required `action` argument the model must state outright — which is also what
+   * makes the safe call unmistakably distinct from the irreversible one in an approval prompt.
+   *
+   * `effect: "external"` is the load-bearing declaration. The runtime enforces that an external
+   * tool must require approval (`BoundedAgentRuntime`'s constructor throws otherwise), so a deploy
+   * physically cannot run without a human answering — which is the guarantee this feature needs,
+   * because publishing to the internet under someone's account is not undoable by a checkpoint.
+   */
+  tools.push({
+    name: "deploy_app",
+    description:
+      "Check whether this project can be deployed, and deploy it to Vercel or Render once the user has agreed. Use action='check' freely — it only reads the manifest and reports what is possible, including whether an API token is configured. Use action='deploy' only after the user has explicitly asked for a deploy.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["check", "deploy"], description: "'check' inspects and reports; 'deploy' publishes." },
+        target: { type: "string", enum: ["vercel", "render"], description: "Required for deploy; omit on check to see both." },
+        production: { type: "boolean", description: "Deploy to production rather than a preview URL. Defaults to false." },
+        directory: { type: "string", description: "Project directory, relative to the root. Defaults to the root." },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    capabilityId: NOVA_CAPABILITIES.terminal,
+    effect: "external",
+    requiresApproval: true,
+    parallelSafe: false,
+    async execute(args) {
+      const action = requiredString(args.action, "action");
+      const directory = typeof args.directory === "string" && args.directory.trim() ? args.directory.trim() : ".";
+
+      // Read through the workspace, so this works identically against a remote sandbox.
+      const manifestPath = directory === "." ? "package.json" : `${directory}/package.json`;
+      let packageJson: Record<string, unknown> | undefined;
+      try {
+        packageJson = JSON.parse((await workspace.readFile(manifestPath, {})).content) as Record<string, unknown>;
+      } catch {
+        // No manifest, or unreadable: detection handles both, and a static site legitimately has none.
+      }
+      let files: string[] = [];
+      try {
+        files = await workspace.list(directory, 2);
+      } catch {
+        // An unlistable directory is reported by detection as "nothing found", not as a crash.
+      }
+      const detection = detectWebApp({ ...(packageJson ? { packageJson } : {}), files });
+
+      if (action === "check") {
+        if (!detection.isWebApp) {
+          return { content: `This does not look like a deployable web app (${detection.reason}).`, data: { ...detection } };
+        }
+        // Report credential state without ever reading a token value — presence only.
+        const credentials = detection.recommended.map((target) => {
+          const request = credentialRequest(target, process.env);
+          return `  ${DEPLOY_PROVIDERS[target].label}: ${request ? `no ${request.variable} configured — ${request.url}` : "token configured"}`;
+        });
+        return {
+          content: [
+            deployOffer(detection),
+            "",
+            "Credentials:",
+            ...credentials,
+            "",
+            "Nothing has been deployed. Ask the user before calling this again with action='deploy'.",
+          ].filter((line) => line !== undefined).join("\n"),
+          data: { ...detection, targets: detection.recommended },
+        };
+      }
+
+      if (action !== "deploy") throw new Error("action must be 'check' or 'deploy'");
+      const target = requiredString(args.target, "target") as DeployTarget;
+      if (!(target in DEPLOY_PROVIDERS)) throw new Error(`target must be one of: ${Object.keys(DEPLOY_PROVIDERS).join(", ")}`);
+      if (!detection.isWebApp) {
+        return { content: `Refusing to deploy: this does not look like a web app (${detection.reason}). Say what should be deployed and I will look again.`, isError: true };
+      }
+
+      // A missing token stops the run and asks, rather than invoking a CLI that will drop into an
+      // interactive login the agent cannot answer and the user cannot see.
+      const request = credentialRequest(target, process.env);
+      if (request) {
+        return { content: request.message, isError: true, data: { needsCredential: request.variable, url: request.url, target } };
+      }
+
+      const plan = deployPlan(target, detection, { production: args.production === true, directory });
+      const outputs: string[] = [];
+      for (const command of plan.commands) {
+        const result = await workspace.runCommand(command, Math.max(commandTimeoutMs, 300_000));
+        const body = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || "(no output)";
+        outputs.push(`$ ${command}\nexit ${result.exitCode}\n${body}`);
+        if (result.exitCode !== 0) {
+          return { content: [...outputs, ...plan.notes].join("\n\n"), isError: true, data: { target, exitCode: result.exitCode } };
+        }
+      }
+      return {
+        content: [...outputs, ...plan.notes].join("\n\n"),
+        data: { target, production: args.production === true },
+        // A live URL responding is the strongest evidence a deploy can produce — it is the
+        // assembled program exercised the way a user meets it, on the machine it will actually run
+        // on. Reported as smoke rather than behavior: the deploy succeeded, which is not the same
+        // as every page working.
+        verification: { passed: true, kind: "smoke" as const, scope: "full" as const, summary: `deployed to ${DEPLOY_PROVIDERS[target].label}` },
+      };
+    },
+  });
+
+  /**
+   * Writing something down so the next session already knows it.
+   *
+   * Until now the agent could *read* memory but never write it — the defender playbook told it to
+   * "persist durable conclusions to .nova/memory.md" with no tool to do so, which left it either
+   * ignoring the instruction or blind-writing the file through `write_file` and destroying the
+   * structure the parser and the `/memory` command depend on.
+   *
+   * Deliberately narrow, because an agent that remembers whatever it likes becomes an agent whose
+   * context nobody can account for:
+   *
+   * - **Durable facts only.** The description says what qualifies and what does not. Anything true
+   *   only of the current turn belongs in the answer, not in a file the user carries forever.
+   * - **Scoped explicitly.** `project` goes in the repository and can be committed for a team;
+   *   `user` follows the person across every project. Conflating them is how "I prefer tabs" ends
+   *   up in someone else's checkout, so the model has to say which it means.
+   * - **Visible and editable.** It appends a bullet to the same markdown file a human writes by
+   *   hand and can open, diff or delete. Nothing is stored anywhere the user cannot see it.
+   * - **Effect `workspace`, so it is approval-gated.** Writing to a file the user carries between
+   *   sessions is a change to their environment, and it goes through the same gate as any edit.
+   */
+  tools.push({
+    name: "remember",
+    description:
+      "Save one durable fact so future sessions start knowing it — a convention this project follows, a decision and its reason, a preference the user stated, or a lesson learned the hard way. Use it when you learn something that will still be true next week. Do not use it for anything specific to the current task, for information already obvious from the code, or to store notes to yourself mid-task (use todo_write for that).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "One self-contained sentence. It will be read months from now with no other context." },
+        scope: { type: "string", enum: ["project", "user"], description: "'project' for facts about this repository; 'user' for facts about the person that travel with them." },
+        kind: { type: "string", enum: ["preference", "convention", "decision", "lesson", "fact"], description: "Preferences and conventions are recalled most eagerly. Defaults to fact." },
+      },
+      required: ["text", "scope"],
+      additionalProperties: false,
+    },
+    capabilityId: NOVA_CAPABILITIES.write,
+    effect: "workspace",
+    requiresApproval: true,
+    parallelSafe: false,
+    async execute(args) {
+      const text = requiredString(args.text, "text");
+      const scope = requiredString(args.scope, "scope") as MemoryScope;
+      if (scope !== "project" && scope !== "user") throw new Error("scope must be 'project' or 'user'");
+      const kind = typeof args.kind === "string" ? args.kind as MemoryKind : "fact";
+      const root = options.memoryRoot ?? workspace.label;
+      const result = await addMemory(scope, text, root, process.env, { kind });
+      // A duplicate is reported rather than written twice, and reported as success: the fact *is*
+      // remembered, which is what the caller wanted, and an error here would invite it to retry.
+      return {
+        content: result.changed
+          ? `Remembered (${scope}/${kind}): ${text}
+Written to ${result.file} — the user can edit or delete it there.`
+          : `Already remembered; ${result.file} is unchanged.`,
+        data: { scope, kind, text, file: result.file, changed: result.changed },
+      };
+    },
+  });
 
   if (options.delegate) {
     const delegate = options.delegate;
@@ -604,14 +917,38 @@ function renderTodos(items: TodoItem[]): string {
  * the command also exits non-zero and gets ignored, which `run_command` cannot do silently — its
  * exit code is always shown.
  */
-export type VerificationKind = "tests" | "check";
+export type { VerificationKind } from "../agent-runtime";
+import type { VerificationKind } from "../agent-runtime";
 
 /** Runners whose names embed a word boundary the bare word "test" cannot match (e.g. `vitest`). */
 const TEST_COMMAND = /\b(tests?|pytest|jest|vitest|mocha|jasmine|karma|ava|rspec|minitest|phpunit|pest|junit|gotestsum|nose2|unittest|testthat|ctest|gradlew?\s+test|xctest)\b/i;
 const CHECK_COMMAND = /\b(typecheck|tsc|lint|eslint|pylint|ruff|flake8|mypy|pyright|check|build|compile|py_compile|vet|clippy|rubocop|audit|fmt|format)\b/i;
 
+/**
+ * Suites that assemble the program rather than exercising a unit of it.
+ *
+ * Matched *before* `TEST_COMMAND`, because every one of these also contains the word "test" or a
+ * runner name — `playwright test`, `vitest run e2e/` — and classifying them as plain unit tests
+ * would throw away the stronger claim they actually support.
+ */
+const BEHAVIOR_COMMAND = /\b(e2e|end-to-end|playwright|cypress|puppeteer|selenium|webdriver|testcafe|nightwatch|integration|behave|cucumber|supertest|testcontainers)\b/i;
+
+/**
+ * Exercising the assembled thing directly, without a suite around it.
+ *
+ * This is the cheap end of the ladder and deliberately so: `curl` against a route the run just
+ * registered, or the project's own CLI invoked with `--help`, is seconds of evidence that the
+ * program starts and answers — which no unit test establishes. `smoke` covers a project script
+ * named for it, the common HTTP probes, and a health endpoint by name.
+ */
+const SMOKE_COMMAND = /\b(smoke|healthcheck|health[-_ ]?check|curl|wget|httpie|\bhttp\s+(?:get|post)\b|playwright\s+screenshot)\b/i;
+
 /** The strongest kind of evidence a command provides, or null when it verifies nothing. */
 export function classifyVerification(command: string): VerificationKind | null {
+  // Strongest first: a command that matches several patterns is credited with the strongest claim
+  // it actually supports, and `npm run e2e` matching both "e2e" and "test" is the normal case.
+  if (BEHAVIOR_COMMAND.test(command)) return "behavior";
+  if (SMOKE_COMMAND.test(command)) return "smoke";
   if (TEST_COMMAND.test(command)) return "tests";
   if (CHECK_COMMAND.test(command)) return "check";
   return null;

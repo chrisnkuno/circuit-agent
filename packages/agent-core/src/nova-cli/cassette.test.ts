@@ -156,12 +156,15 @@ describe("a whole agent turn, recorded and replayed", () => {
       { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c2", name: "edit_file", arguments: { path: "app.ts", oldText: "3000", newText: "8080" } }] },
       { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c3", name: "run_command", arguments: { command: "npm test" } }] },
       { finishReason: "stop", content: "Port is now 8080." },
+      // Unit tests alone draw one ask for an exercise of the assembled program; a config change
+      // has nothing to assemble, and saying so is what ends the run.
+      { finishReason: "stop", content: "Port is now 8080. This is a constant with nothing to assemble." },
     ]);
     const recorder = new RecordingTurnProvider(live);
     const recorded = await agentWith(recorder).send("change the port to 8080");
     expect(recorded.status).toBe("completed");
     const tape = parseCassette(serializeCassette(recorder.cassette()));
-    expect(tape.entries).toHaveLength(4);
+    expect(tape.entries).toHaveLength(5);
 
     // A fresh workspace, so the replayed run really re-does the work rather than observing it.
     await fs.writeFile(path.join(root, "app.ts"), "export const port = 3000;\n");
@@ -186,6 +189,9 @@ describe("a whole agent turn, recorded and replayed", () => {
       { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c2", name: "edit_file", arguments: { path: "app.ts", oldText: "3000", newText: "8080" } }] },
       { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c3", name: "run_command", arguments: { command: "npm test" } }] },
       { finishReason: "stop", content: "Port is now 8080." },
+      // Unit tests alone draw one ask for an exercise of the assembled program; a config change
+      // has nothing to assemble, and saying so is what ends the run.
+      { finishReason: "stop", content: "Port is now 8080. This is a constant with nothing to assemble." },
     ]);
     const recorder = new RecordingTurnProvider(live);
     await agentWith(recorder).send("change the port to 8080");
@@ -210,7 +216,7 @@ describe("a whole agent turn, recorded and replayed", () => {
       "model_turn", "tool_call:read_file", "tool_result",
       "model_turn", "tool_call:edit_file", "tool_result",
       "model_turn", "tool_call:run_command", "tool_result",
-      "model_turn", "runtime_stop",
+      "model_turn", "model_turn", "runtime_stop",
     ]);
     expect(result.status).toBe("completed");
   });

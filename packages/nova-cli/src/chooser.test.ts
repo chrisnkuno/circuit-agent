@@ -392,3 +392,75 @@ describe("every menu obeys the same rules", () => {
     expect(advanceChooser({ selected: 0, query: "" }, rows, press("3", {}, "3"), { height: 4 }).state.selected).toBe(2);
   });
 });
+
+/**
+ * The furniture around the rows — a title, a status line, a position, a legend.
+ *
+ * Bubbles' list can hide each of these because a list rarely owns the whole screen; Nova's could not,
+ * so a caller sharing the screen had no way to get those rows back. The invariants worth holding are
+ * that hiding one part hides only that part, and that a transient status behaves like a message about
+ * the last keystroke rather than a permanent row.
+ */
+describe("the chooser's chrome", () => {
+  const items = Array.from({ length: 20 }, (_, index) => ({ value: index, label: `option ${index + 1}` }));
+  const frame = (state: Parameters<typeof renderChooser>[0], height = 5) =>
+    plain(renderChooser(state, items, { paint, title: "Pick one", width: 60, height }));
+
+  it("shows title, position and legend by default", () => {
+    const lines = frame({ selected: 0, query: "" });
+    expect(lines).toContain("Pick one");
+    expect(lines).toContain("1/20");
+    expect(lines).toContain("move");
+  });
+
+  it("hides only what it was asked to hide", () => {
+    expect(frame({ selected: 0, query: "", chrome: { title: false } })).not.toContain("Pick one");
+    expect(frame({ selected: 0, query: "", chrome: { title: false } })).toContain("option 1");
+    expect(frame({ selected: 0, query: "", chrome: { pagination: false } })).not.toContain("1/20");
+    expect(frame({ selected: 0, query: "", chrome: { help: false } })).not.toContain("move");
+  });
+
+  it("keeps the position visible when the legend is hidden, since the rows cannot say it", () => {
+    const lines = frame({ selected: 0, query: "", chrome: { help: false } });
+    expect(lines).toContain("1/20");
+  });
+
+  it("gives back a row per hidden part, which is the point of hiding them", () => {
+    const all = frame({ selected: 0, query: "" }).split("\n").length;
+    // Help alone still leaves the position row behind — that is the rule above, and it costs a line.
+    expect(frame({ selected: 0, query: "", chrome: { help: false } }).split("\n")).toHaveLength(all);
+    const bare = frame({ selected: 0, query: "", chrome: { title: false, help: false, pagination: false } }).split("\n").length;
+    expect(bare).toBe(all - 2);
+  });
+
+  it("draws a status line under everything, and only when there is one", () => {
+    const lines = frame({ selected: 0, query: "", status: "added Anthropic key" }).split("\n");
+    expect(lines.at(-1)).toContain("added Anthropic key");
+    expect(frame({ selected: 0, query: "" })).not.toContain("added");
+    // Suppressible with the rest of the furniture.
+    expect(frame({ selected: 0, query: "", status: "added Anthropic key", chrome: { status: false } })).not.toContain("added");
+  });
+
+  it("retires the status on the next keystroke, rather than leaving it under a list it no longer describes", () => {
+    const after = advanceChooser({ selected: 0, query: "", status: "added Anthropic key" }, items, press("down"));
+    expect(after.state.status).toBeUndefined();
+    expect(after.state.selected).toBe(1);
+  });
+
+  it("carries the chrome through every transition, including the ones that reset the query", () => {
+    // The bug this closes: the filtering branches returned a fresh `{ selected, query }` literal, so a
+    // list told to hide its help showed it again after one backspace.
+    const hidden = { title: false as const, help: false as const };
+    const state = { selected: 3, query: "opt", chrome: hidden };
+    for (const input of [press("backspace"), press("u", { ctrl: true }), press("escape"), press("x", {}, "x")]) {
+      const next = advanceChooser(state, items, input, { filter: true });
+      if (next.done) continue;
+      expect(next.state.chrome, `chrome lost on ${input.key.name}`).toEqual(hidden);
+    }
+  });
+
+  it("shows a spinner beside the title while a caller is still fetching", () => {
+    const lines = plain(renderChooser({ selected: 0, query: "" }, items, { paint, title: "Models", spinner: "✦", width: 60, height: 5 }));
+    expect(lines.split("\n")[0]).toContain("✦ Models");
+  });
+});

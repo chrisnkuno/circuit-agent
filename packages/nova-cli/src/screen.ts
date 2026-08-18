@@ -160,7 +160,7 @@ export class PinnedScreen {
    * Non-modal by construction, which is the whole design. The obvious way to build a dropdown is to
    * take the keyboard, read keys and paint frames — but every slash command is *typed*, so a menu
    * that opens on "/" then owns the keyboard swallows the rest of `/model haiku`, and history,
-   * Ctrl-A/E and @-completion all go dead while it is up. Painting into reserved rows instead means
+   * line editing and @-completion all go dead while it is up. Painting into reserved rows instead means
    * readline never stops being in charge of a single keystroke: the list is something the user
    * reads, not something they are trapped in.
    *

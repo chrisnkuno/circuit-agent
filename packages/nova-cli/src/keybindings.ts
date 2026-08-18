@@ -67,11 +67,9 @@ export function chordFromKeypress(key: KeypressEvent): Chord | undefined {
 /**
  * Chords `node:readline` already owns, and what it does with them.
  *
- * This list is why the registry refuses rather than warns. Every one of these is a line-editing
- * action people use without thinking, and a feature key layered on top does not shadow it cleanly —
- * it breaks editing in a way that looks like the terminal is broken. Notably `ctrl+k` (kill to end
- * of line) and `ctrl+t` (transpose characters) are both taken, which rules out the two chords that
- * read as the obvious defaults for a palette and a new tab.
+ * Kept whole because `/keys` prints it: someone who wants to know why a chord was refused, or what
+ * their fingers are actually doing at this prompt, needs the full list. What the *registry* refuses
+ * is a narrower question, answered by the two tables below.
  */
 export const RESERVED_CHORDS: Readonly<Record<string, string>> = {
   "ctrl+a": "move to start of line",
@@ -95,6 +93,66 @@ export const RESERVED_CHORDS: Readonly<Record<string, string>> = {
   enter: "submit",
   up: "previous history entry",
   down: "next history entry",
+};
+
+/**
+ * Chords nothing may ever take, whatever the configuration says.
+ *
+ * Narrower than `RESERVED_CHORDS` on purpose, and the distinction is the point: most line-editing
+ * keys are a *preference* — losing "move to start of line" costs a keystroke, because Home does the
+ * same job — while these four are how you stop, leave, complete and submit. A configuration that
+ * rebinds Ctrl+C has not customised the prompt, it has removed the way out of a runaway turn, and
+ * there is no second route to fall back on the way `/wander` still exists when Alt+W is swallowed.
+ *
+ * `ctrl+d` is here for a subtler reason than the others: it is end-of-input, so binding it makes a
+ * piped or scripted session unable to terminate its own stdin.
+ */
+export const HARD_RESERVED_CHORDS: Readonly<Record<string, string>> = {
+  "ctrl+c": "interrupt the current turn",
+  "ctrl+d": "end of input",
+  tab: "complete a command or file mention",
+  enter: "submit",
+};
+
+/**
+ * Line-editing chords a binding may claim, and where that function still lives afterwards.
+ *
+ * This table is what makes taking Ctrl+A for `/auto` an honest trade rather than a silent theft.
+ * Every entry names a *native readline* replacement — not a Nova feature, not something this file
+ * implements — so the relocation cannot rot: `home`, `end` and `meta+backspace` are handled inside
+ * `readline`'s own `_ttyWrite`, and keep working whether or not anything here is loaded.
+ *
+ * A chord that is genuinely irreplaceable does not belong here; it belongs in
+ * `HARD_RESERVED_CHORDS`. The test of which is simple — can the user still do the thing?
+ */
+export const RELOCATED_EDITING: Readonly<Record<string, { lost: string; instead: string }>> = {
+  "ctrl+a": { lost: "move to start of line", instead: "Home" },
+  "ctrl+e": { lost: "move to end of line", instead: "End" },
+  "ctrl+w": { lost: "delete the previous word", instead: "Alt+Backspace" },
+  "ctrl+b": { lost: "move back one character", instead: "Left" },
+  "ctrl+f": { lost: "move forward one character", instead: "Right" },
+  "ctrl+n": { lost: "next history entry", instead: "Down" },
+  "ctrl+p": { lost: "previous history entry", instead: "Up" },
+  "ctrl+h": { lost: "delete the previous character", instead: "Backspace" },
+};
+
+/**
+ * Why `ctrl+m` is not in any table here, and cannot be.
+ *
+ * Ctrl+M is not a chord this program declines to bind — it is byte `0x0D`, which is also what Return
+ * sends. `node:readline` reports both as `{ name: "return", ctrl: false }`, because by the time the
+ * bytes arrive there is nothing left to tell them apart. Binding it would therefore bind Enter, and
+ * the prompt would submit whenever the shortcut was pressed and fire the shortcut whenever a message
+ * was sent. The same is true of Ctrl+I (Tab, `0x09`) and Ctrl+J (`0x0A`).
+ *
+ * `parseChord` still accepts the spelling so a user's configuration is not rejected as a typo; the
+ * registry reports it with this reason instead, which is the difference between "your terminal is
+ * broken" and "that key does not exist as a separate key".
+ */
+export const INDISTINGUISHABLE_CHORDS: Readonly<Record<string, string>> = {
+  "ctrl+m": "the same byte as Enter (0x0D) — terminals cannot tell them apart",
+  "ctrl+i": "the same byte as Tab (0x09) — terminals cannot tell them apart",
+  "ctrl+j": "the same byte as line feed (0x0A) — terminals cannot tell them apart",
 };
 
 export type KeyBinding = {
@@ -124,17 +182,36 @@ export type KeyBinding = {
  * people have learned them, and a terminal that swallows Alt is a different terminal from one that
  * swallows F4 — two routes to the same command means a terminal has to break both to lose it.
  */
+/**
+ * The Ctrl layer, and what it cost.
+ *
+ * Alt is the range this file reached for first, and the reasoning above still holds — but Alt is
+ * also the range terminals are worst at delivering. tmux eats it by default, several Windows
+ * consoles rewrite it, and macOS Terminal sends Option as a text-composition modifier unless the
+ * user has found the "Use Option as Meta key" checkbox. `isLikelyDeliverable` already encodes that
+ * doubt. A shortcut layer whose whole surface is the least reliable modifier is a layer most people
+ * never successfully press.
+ *
+ * So the four most-reached-for commands get a Ctrl chord as their *primary* route, with the Alt one
+ * kept beside it. Three of those chords were line editing, and they are not free — `RELOCATED_EDITING`
+ * is where each displaced function went, `/keys` prints it, and every relocation target is a key
+ * `readline` already handles natively. Ctrl+S is the exception that costs nothing: it is terminal
+ * flow control (XOFF), which raw mode switches off, so it has been an inert key at this prompt all
+ * along.
+ */
 export const DEFAULT_BINDINGS: readonly { command: string; chords: readonly string[]; description: string }[] = [
   { command: "/palette", chords: ["ctrl+g"], description: "Open the command palette" },
   { command: "/help", chords: ["f1", "alt+h"], description: "Command list" },
   { command: "/mode", chords: ["f2"], description: "Show or switch the permission mode" },
+  // No Ctrl chord: Ctrl+M *is* Enter at the byte level. See `INDISTINGUISHABLE_CHORDS`.
   { command: "/model", chords: ["f3", "alt+m"], description: "Switch model mid-session" },
-  { command: "/wander", chords: ["f4", "alt+w"], description: "Run a bounded research exploration" },
+  { command: "/wander", chords: ["ctrl+w", "f4", "alt+w"], description: "Run a bounded research exploration" },
   { command: "/jobs", chords: ["f6"], description: "Background and detached work" },
   { command: "/files", chords: ["f7", "alt+f"], description: "Browse the project tree" },
   { command: "/diff", chords: ["f8", "alt+d"], description: "What changed since the last checkpoint" },
   { command: "/todos", chords: ["f9"], description: "The agent's current plan" },
-  { command: "/auto", chords: ["alt+a"], description: "Auto mode: ordinary edits apply" },
+  { command: "/auto", chords: ["ctrl+a", "alt+a"], description: "Auto mode: ordinary edits apply" },
+  { command: "/settings", chords: ["ctrl+s"], description: "Configure keys, models, language and voice" },
   { command: "/plan", chords: ["alt+p"], description: "Plan mode: read and reason, never write" },
   { command: "/undo", chords: ["alt+u"], description: "Revert the last turn" },
   { command: "/cost", chords: ["alt+c"], description: "Token and cost breakdown" },
@@ -178,10 +255,21 @@ export function parseBindingOverrides(spec: string | undefined): BindingOverride
 
 export type BindingConflict = { command: string; chord: string; reason: string };
 
+/** A line-editing key a binding took over, and where that editing function still lives. */
+export type DisplacedEditing = { chord: string; command: string; lost: string; instead: string };
+
 export type BindingResolution = {
   bindings: KeyBinding[];
   /** Bindings that were dropped, and why — surfaced rather than silently discarded. */
   conflicts: BindingConflict[];
+  /**
+   * Line editing that a binding displaced.
+   *
+   * Reported for the same reason conflicts are: the user has to be able to find out where Ctrl+A
+   * went. A shortcut that silently removes a key people use without thinking is indistinguishable
+   * from a bug, and the person experiencing it has no way to search for what happened.
+   */
+  displaced: DisplacedEditing[];
 };
 
 /**
@@ -202,6 +290,7 @@ export function resolveBindings(overrides: BindingOverrides = {}, options: { com
   const known = new Set(options.commands ?? [...COMMANDS.map((command) => command.name), "/palette"]);
   const bindings: KeyBinding[] = [];
   const conflicts: BindingConflict[] = [];
+  const displaced: DisplacedEditing[] = [];
   const taken = new Map<string, string>();
 
   const defaults = new Map(DEFAULT_BINDINGS.map((binding) => [binding.command, binding]));
@@ -233,9 +322,28 @@ export function resolveBindings(overrides: BindingOverrides = {}, options: { com
         continue;
       }
       const id = chordId(chord);
-      const reserved = RESERVED_CHORDS[id];
-      if (reserved) {
-        conflicts.push({ command, chord: formatChord(chord), reason: `reserved for line editing (${reserved})` });
+      // Not a policy refusal: the terminal genuinely does not send this as its own key, so binding
+      // it would bind Enter (or Tab) instead. Reported before the reserved check so the reason names
+      // the real cause rather than whatever Enter happens to be reserved for.
+      const indistinguishable = INDISTINGUISHABLE_CHORDS[id];
+      if (indistinguishable) {
+        conflicts.push({ command, chord: formatChord(chord), reason: indistinguishable });
+        continue;
+      }
+      const hard = HARD_RESERVED_CHORDS[id];
+      if (hard) {
+        conflicts.push({ command, chord: formatChord(chord), reason: `reserved for line editing (${hard})` });
+        continue;
+      }
+      // A line-editing key may be taken only when its function has somewhere else to live. That is
+      // the entire admission test, and it is why `RELOCATED_EDITING` is a table of *replacements*
+      // rather than a list of exceptions: Ctrl+A is bindable because Home does the same job, while
+      // Ctrl+U stays refused because nothing else deletes to the start of the line. Without this the
+      // rule degrades to "anything not explicitly sacred", which is how a shortcut layer quietly
+      // eats the editing keys nobody thought to enumerate.
+      const editing = RESERVED_CHORDS[id];
+      if (editing && !RELOCATED_EDITING[id]) {
+        conflicts.push({ command, chord: formatChord(chord), reason: `reserved for line editing (${editing})` });
         continue;
       }
       const owner = taken.get(id);
@@ -243,12 +351,16 @@ export function resolveBindings(overrides: BindingOverrides = {}, options: { com
         conflicts.push({ command, chord: formatChord(chord), reason: `already bound to ${owner}` });
         continue;
       }
+      // Allowed, but never silently: a chord that was line editing a moment ago is recorded with
+      // its replacement so `/keys` can say where the function went.
+      const relocation = RELOCATED_EDITING[id];
+      if (relocation) displaced.push({ chord: formatChord(chord), command, ...relocation });
       taken.set(id, command);
       bindings.push({ command, chord, description });
     }
   }
 
-  return { bindings, conflicts };
+  return { bindings, conflicts, displaced };
 }
 
 /**
@@ -271,10 +383,12 @@ export function isLikelyDeliverable(chord: Chord, environment: { TERM?: string; 
 export class KeyBindingRegistry {
   private readonly byChord = new Map<string, KeyBinding>();
   readonly conflicts: readonly BindingConflict[];
+  readonly displaced: readonly DisplacedEditing[];
 
   constructor(overrides: BindingOverrides = {}, private readonly environment: Record<string, string | undefined> = {}) {
     const resolved = resolveBindings(overrides);
     this.conflicts = resolved.conflicts;
+    this.displaced = resolved.displaced;
     for (const binding of resolved.bindings) this.byChord.set(chordId(binding.chord), binding);
   }
 
@@ -332,6 +446,14 @@ export class KeyBindingRegistry {
     // them here would put an English-only copy of the same list one line below the translated one.
     const width = Math.max(16, ...rows.map(([key]) => key.length));
     const lines = ["Feature keys", ...rows.map(([key, label]) => `  ${key.padEnd(width + 2)}${label}`)];
+    if (this.displaced.length > 0) {
+      // Phrased as "X does Y now" rather than "X was taken", because the question someone actually
+      // arrives with is "how do I get to the start of the line", not "what happened to Ctrl+A".
+      lines.push("", "Line editing that moved");
+      for (const moved of this.displaced) {
+        lines.push(`  ${moved.instead.padEnd(width + 2)}${moved.lost} — ${moved.chord} runs ${moved.command} now`);
+      }
+    }
     if (this.conflicts.length > 0) {
       lines.push("", "Not bound");
       for (const conflict of this.conflicts) lines.push(`  ${conflict.chord.padEnd(width + 2)}${conflict.command} — ${conflict.reason}`);

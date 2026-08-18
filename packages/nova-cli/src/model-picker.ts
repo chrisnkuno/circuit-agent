@@ -26,7 +26,16 @@ export type PickerRow =
 
 export type PickerResult =
   | { kind: "model"; choice: ModelChoice }
-  | { kind: "settings" };
+  | { kind: "settings" }
+  /**
+   * Show the same models as a table instead — a view, not a choice.
+   *
+   * Returned rather than handled here because the table already exists, fully driven, in `table.ts`.
+   * A second navigation implementation inside this file would be the same keys written twice, and the
+   * copy that drifts is always the one nobody is looking at. `/models` runs the two surfaces in turn
+   * and lets each one say when the other should take over.
+   */
+  | { kind: "table" };
 
 export type PickerState = { selected: number };
 
@@ -111,7 +120,7 @@ export function renderModelPicker(frame: { rows: readonly PickerRow[]; selected:
     const room = Math.max(0, columns - visibleWidth(`  ${active ? glyphs.prompt : " "} ${number} ${isCurrent ? glyphs.circleFull : " "} ${padded}  `));
     lines.push(`  ${cursor} ${paint.dim(number)} ${isCurrent ? paint.green(glyphs.circleFull) : " "} ${padded}  ${paint.dim(clipTo(tail, room))}`);
   }
-  lines.push(paint.dim(clipTo(`  ${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} Esc cancel`, columns)));
+  lines.push(paint.dim(clipTo(`  ${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} t table ${glyphs.middot} Esc cancel`, columns)));
   return lines.join("\n");
 }
 
@@ -140,6 +149,13 @@ export function advanceModelPicker(state: PickerState, rows: readonly PickerRow[
   if (name === "down" || (input.key.ctrl && name === "n")) return { state: { selected: Math.min(last, state.selected + 1) } };
   if (name === "home") return { state: { selected: 0 } };
   if (name === "end") return { state: { selected: last } };
+
+  // The one key that is neither movement nor choice: the same models, with their prices in columns
+  // you can order by. The list answers "what can I switch to"; the table answers "which of these is
+  // cheapest", which the list cannot without the reader comparing every row by eye.
+  if ((input.str === "t" || input.str === "T") && !input.key.ctrl && !input.key.meta) {
+    return { state, done: { result: { kind: "table" } } };
+  }
 
   // Typing a number still works, because the printed list taught people to do that and a menu that
   // silently ignores the habit it created is worse than one that never offered numbers at all.

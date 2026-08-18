@@ -62,6 +62,7 @@ export function describeToolCall(toolName: string, args: Record<string, unknown>
     case "run_command":
       return asString(args.command) ?? "";
     case "web_search":
+    case "deep_research":
       return `"${asString(args.query) ?? ""}"`;
     case "web_fetch":
       return asString(args.url) ?? "";

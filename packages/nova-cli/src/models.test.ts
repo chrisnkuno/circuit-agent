@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelCatalog, describePrice, matchModelQuery, modelsForProvider, parseModelCommand, renderModelList } from "./models";
+import { buildModelCatalog, describePrice, matchModelQuery, modelsForProvider, parseModelCommand } from "./models";
 
 const paint = { dim: (text: string) => text, cyan: (text: string) => text, green: (text: string) => text, yellow: (text: string) => text };
 const configured = { ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k", CIRCUITNOTION_API_KEY: "k" };
@@ -155,40 +155,19 @@ describe("pricing a model for display", () => {
   });
 });
 
-describe("the numbered list", () => {
-  const catalog = buildModelCatalog(configured, "2026-08-10");
-  const rendered = renderModelList(catalog, {
-    current: { provider: "anthropic", model: "claude-sonnet-5" },
-    price: (choice) => (choice.prices ? "$2/$10 per Mtok" : "unpriced"),
-    paint,
-  });
-
-  it("numbers every choice from one, contiguously, so /model N always resolves", () => {
-    // The number is the entire interface; a gap or a repeat makes some entry unreachable.
-    const numbers = [...rendered.matchAll(/^[^\d\n]*(\d+)\.\s/gm)].map((match) => Number(match[1]));
-    expect(numbers).toEqual(catalog.choices.map((_, index) => index + 1));
-  });
-
+/**
+ * The numbered list this module used to render lives in `tables.ts` now, as columns — see
+ * `buildModelTable`, which carries the number as a column so sorting cannot renumber the rows, and
+ * `tables.test.ts`, which holds the invariants that came with it: contiguous numbering, the current
+ * model marked once, and the unconfigured providers still explained.
+ *
+ * What stays here is the half that is this module's own: that the index `/model N` parses to is the
+ * index into the catalog it looks up.
+ */
+describe("choosing by number", () => {
   it("indexes align with the catalog, which is what /model N looks up", () => {
-    const command = parseModelCommand("/model 1");
-    expect(command).toEqual({ kind: "pick", index: 1 });
+    const catalog = buildModelCatalog(configured, "2026-08-10");
+    expect(parseModelCommand("/model 1")).toEqual({ kind: "pick", index: 1 });
     expect(catalog.choices[0].model).toBe("claude-sonnet-5");
-  });
-
-  it("marks the current model exactly once", () => {
-    expect(rendered.match(/current/g) ?? []).toHaveLength(1);
-    expect(rendered).toContain("claude-sonnet-5");
-  });
-
-  it("groups by provider and explains any it cannot offer", () => {
-    const partial = buildModelCatalog({ ANTHROPIC_API_KEY: "k" });
-    const text = renderModelList(partial, { current: { provider: "anthropic", model: "claude-sonnet-5" }, price: () => "", paint });
-    expect(text).toContain("Anthropic");
-    expect(text).toContain("set OPENAI_API_KEY");
-    expect(text).toContain("nova settings");
-  });
-
-  it("tells the reader how to choose", () => {
-    expect(rendered).toContain("/model <number>");
   });
 });

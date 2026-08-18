@@ -257,8 +257,13 @@ export const KEYBOARD_SHORTCUTS = [
   ["complete-command", "Tab", "Complete a slash command"],
   ["complete-path", "@ + path", "Complete a project file mention"],
   ["history", "Up / Down", "Search persistent prompt history"],
-  ["line-ends", "Ctrl-A / Ctrl-E", "Move to the start / end of the input"],
-  ["delete", "Ctrl-W / Ctrl-U", "Delete the previous word / whole input"],
+  // Home/End and Alt-Backspace rather than Ctrl-A and Ctrl-W: those two belong to the Ctrl layer
+  // now (/auto and /wander), and readline handles these natively, so the function never actually
+  // moved out of reach. `KeyBindingRegistry.render()` prints the same relocation beside the chord
+  // that took it; this row is the other half of it, for someone reading the editing keys rather
+  // than the feature keys. The translated descriptions are untouched because they are still true.
+  ["line-ends", "Home / End", "Move to the start / end of the input"],
+  ["delete", "Alt-Backspace / Ctrl-U", "Delete the previous word / whole input"],
   ["clear", "Ctrl-L", "Clear and redraw the terminal"],
   ["interrupt", "Ctrl-C", "Interrupt the current turn"],
   ["voice", "/voice", "Record a prompt from the microphone"],

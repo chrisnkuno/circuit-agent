@@ -23,6 +23,7 @@ const TAB = "\t";
 const ESCAPE = String.fromCharCode(27);
 const DOWN = `${ESCAPE}[B`;
 const END = `${ESCAPE}[F`;
+const RIGHT = `${ESCAPE}[C`;
 
 let stub: AnthropicStub; let cwd: string; let configDir: string;
 beforeAll(async () => {
@@ -101,6 +102,52 @@ describe("switching models under a real pty", () => {
     const seen = await p.waitFor(/switched to/, { timeoutMs: 15_000, since: moved });
     // The cursor starts on the model in use, so one Down lands on a genuinely different one.
     expect(seen.slice(moved)).not.toContain("switched to Anthropic claude-sonnet-5");
+    p.kill();
+  }, 60_000);
+
+  it("turns the picker into a sortable table on t, and Enter there switches model", async () => {
+    const p = await boot();
+    const mark = p.output().length;
+    p.write("/model\r");
+    await p.waitFor(/Esc cancel/, { timeoutMs: 15_000, since: mark });
+
+    // `t` swaps the menu for the same models in columns — the view a printed list cannot offer.
+    const toTable = p.output().length;
+    p.write("t");
+    const table = await p.waitFor(/pick column/, { timeoutMs: 15_000, since: toTable });
+    expect(table.slice(toTable)).toContain("$/M in");
+
+    // Five Rights aim at the input-price column (#, marker, model, provider, price), `s` orders by
+    // it, and the sort marker in the header is the proof it took — the rows moving is not something
+    // a pattern can assert, but the arrow beside the column name is.
+    const sorted = p.output().length;
+    p.write(`${RIGHT}${RIGHT}${RIGHT}${RIGHT}${RIGHT}s`);
+    await p.waitFor(/\$\/M in ↑/, { timeoutMs: 15_000, since: sorted });
+
+    const chosen = p.output().length;
+    p.write("\r");
+    // Cheapest first puts a different model than the session started on under the cursor, so Enter
+    // is a real switch and not a no-op the assertion could pass by accident.
+    const seen = await p.waitFor(/switched to/, { timeoutMs: 15_000, since: chosen });
+    expect(seen.slice(chosen)).not.toContain("already on");
+    p.kill();
+  }, 60_000);
+
+  it("comes back to the picker when the table is dismissed, rather than closing /models", async () => {
+    const p = await boot();
+    const mark = p.output().length;
+    p.write("/model\r");
+    await p.waitFor(/Esc cancel/, { timeoutMs: 15_000, since: mark });
+
+    const toTable = p.output().length;
+    p.write("t");
+    await p.waitFor(/pick column/, { timeoutMs: 15_000, since: toTable });
+
+    // Escape is a view toggle here, not a way out: the menu it came from is what it returns to.
+    const back = p.output().length;
+    p.write(ESCAPE);
+    const seen = await p.waitFor(/Esc cancel/, { timeoutMs: 15_000, since: back });
+    expect(seen.slice(back)).not.toContain("no change");
     p.kill();
   }, 60_000);
 

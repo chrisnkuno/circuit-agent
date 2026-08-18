@@ -15,18 +15,22 @@ import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadP
 import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { EXIT_CODES, HeadlessEmitter, exitCodeForStatus } from "./headless";
-import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, renderModelList, type ModelChoice } from "./models";
-import { buildPickerRows } from "./model-picker";
+import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, type ModelChoice } from "./models";
+import { buildPickerRows, type PickerResult } from "./model-picker";
+import { INITIAL_TABLE_STATE, renderTable } from "./table";
+import { buildCostTable, buildJobsTable, buildModelTable } from "./tables";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, PromptBox, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
+import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, PromptBox, PROMPT_PREFIX_COLUMNS, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
+import { dropupRowBudget, renderDropup, type DropupEntry } from "./dropup";
+import { visibleWidth } from "./markdown";
 import { PinnedScreen } from "./screen";
 import { barChart, heatStrip, lineChart } from "./charts";
 import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, inlineCompletion, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
-import { installShortcuts, openChooser, openModelPicker, openPalette, withBorrowedKeyboard } from "./shortcuts";
+import { installShortcuts, openChooser, openModelPicker, openPalette, openTable, replaceLine, withBorrowedKeyboard } from "./shortcuts";
 import { runChooser, type ChooserItem } from "./chooser";
 import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
 import { hostOf, providerBaseUrl } from "./endpoints";
@@ -154,6 +158,15 @@ const style = {
   red: role(() => palette.error, "\x1b[31m"),
   accent: role(() => palette.accent, "\x1b[33m"),
 };
+
+/**
+ * The four colours and one weight every menu, list and table renderer is handed.
+ *
+ * Named once here because three surfaces now want the same object and each was building its own
+ * literal — and a renderer given `bold` by one caller and not another paints its selected row
+ * differently on two screens for no reason a reader could discover.
+ */
+const surfacePaint = { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow, bold: style.bold };
 
 /** Where a piece of work actually runs: this machine, a throwaway remote sandbox, or a container. */
 export type SandboxBackend = "local" | "e2b" | "docker";
@@ -1803,6 +1816,44 @@ async function main(): Promise<number> {
   });
 
   /**
+   * Opens a file in the built-in editor and writes it back if it was saved.
+   *
+   * Reads and writes through the workspace rather than `node:fs`, so `/edit` works identically
+   * against a remote sandbox — the same rule every tool follows. The file is only written when the
+   * editor reports a save, so quitting really is a discard.
+   */
+  const editFile = async (target: string): Promise<void> => {
+    let existing = "";
+    try {
+      existing = (await workspace.readFile(target, {})).content;
+    } catch (error) {
+      // A missing path is a new file, which is the ordinary way `nano somefile` is used. Anything
+      // else — a directory, a permission error — is reported rather than silently starting blank.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/not found|ENOENT|no such file/i.test(message)) {
+        out.write(style.yellow(`  Cannot open ${target}: ${message}\n`));
+        return;
+      }
+    }
+    let saved: string | undefined;
+    const outcome = await withFullScreen(screenCapabilities(), terminalControls(), async () => {
+      const { runEditorScreen } = await import("./editor-screen");
+      saved = await runEditorScreen({
+        columns: process.stdout.columns ?? 80,
+        rows: process.stdout.rows ?? 24,
+        path: target,
+        content: existing,
+        palette,
+      });
+    });
+    if (!outcome.ok) { out.write(style.yellow(`  ${explainScreenRefusal(outcome)}\n`)); return; }
+    if (saved === undefined) { out.write(style.dim(`  ${target} left unchanged.\n`)); return; }
+    if (saved === existing) { out.write(style.dim(`  ${target} saved with no changes.\n`)); return; }
+    const result = await workspace.writeFile(target, saved);
+    out.write(style.green(`  Saved ${result.path} (${result.bytesWritten} bytes).\n`));
+  };
+
+  /**
    * Models the providers themselves report, over and above the ones this build was compiled with.
    *
    * Held for the session and filled on first use, so completion and the picker widen without any
@@ -2380,20 +2431,101 @@ async function main(): Promise<number> {
         description: entry.description,
       }));
       const host = { readline, input: process.stdin, output: process.stdout };
-      const surface = {
-        paint: (frame: string) => screen?.renderSuggestions(frame.split("\n")),
-        erase: () => screen?.clearSuggestions(),
-      };
-      const chosen = await withBorrowedKeyboard(host, undefined, (keys, paint) => runChooser(keys, items, paint, {
-        width: process.stdout.columns ?? 80,
-        height: items.length,
-        filter: false,
-        paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
-        glyphs,
-      }), surface);
-      if (chosen) rl.write(`${chosen}\n`);
+      const chosen = inlineBar()
+        ? await browseDropup(host, items.map((item) => item.value), suggestions)
+        : await withBorrowedKeyboard(host, undefined, (keys, paint) => runChooser(keys, items, paint, {
+          width: process.stdout.columns ?? 80,
+          height: items.length,
+          filter: false,
+          paint: { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow },
+          glyphs,
+        }), { paint: (frame: string) => screen?.renderSuggestions(frame.split("\n")), erase: () => screen?.clearSuggestions() });
+      if (!chosen) return;
+      // The accepted row is a *whole* line, not a completion of the partial one: it already carries
+      // its leading "/" and, for a model argument, the "/model " prefix that was typed. Writing it
+      // onto a line that still holds "/a" submits "/a/auto" — the reported "//auto" is just this
+      // with a one-character prefix. `replaceLine` is the same line-clearing a bound shortcut does
+      // before submitting, and it is shared rather than repeated so both agree about the cursor.
+      replaceLine(rl, chosen);
+      rl.write("\n");
     };
+
+    /**
+     * Arrow-key selection inside the dropup the user is already looking at.
+     *
+     * Deliberately not `runChooser`. The chooser renders best-match-first top-down, which is right
+     * for a menu that opens downward and wrong here: the dropup deliberately puts its best match on
+     * the *bottom* row, against the prompt. Handing the chooser these rows would flip the list the
+     * moment an arrow key was pressed, so the row under the user's eye when they reached for Up is
+     * not the row that ends up selected. Repainting through `showDropup` instead means browsing and
+     * reading are the same list, in the same order, with a cursor added.
+     *
+     * The direction mapping follows from that reversal and is not a bug: Up moves *up the screen*,
+     * which is away from the prompt and therefore toward later entries in rank order.
+     */
+    const browseDropup = async (
+      host: { readline: typeof readline; input: NodeJS.ReadStream; output: NodeJS.WriteStream },
+      values: readonly string[],
+      suggestions: readonly { command: string; args?: string; description: string }[],
+    ): Promise<string | undefined> => withBorrowedKeyboard(host, undefined, async (keyStream) => {
+      let selected = 0;
+      showDropup(suggestions, selected);
+      for await (const { key } of keyStream) {
+        const name = key.name;
+        if (name === "escape" || (key.ctrl && name === "c")) return undefined;
+        if (name === "return" || name === "enter" || name === "tab") return values[selected];
+        if (name === "up") selected = Math.min(values.length - 1, selected + 1);
+        else if (name === "down") selected = Math.max(0, selected - 1);
+        // Any other key ends browsing without eating the keystroke's meaning: the user has gone back
+        // to typing, and the list becomes something they are reading again rather than driving.
+        else return undefined;
+        showDropup(suggestions, selected);
+      }
+      return undefined;
+    }, { paint: () => undefined, erase: () => clearDropup() });
     let browsing = false;
+
+    /**
+     * Hands a set of rows to the prompt box and repairs whatever moving the bar disturbed.
+     *
+     * The repair sequence is the fiddly part, and its order is forced rather than chosen. When the
+     * row count changes the box erases its whole block — the input row included — so:
+     *
+     * 1. `readline.prompt(true)` redraws the prompt prefix and the typed line, restoring the row the
+     *    user is actually editing. It must come first, because readline's own refresh ends with an
+     *    `ED 0` that would wipe anything already drawn below the input row.
+     * 2. Only then is the closing border redrawn, into the row that `ED 0` just cleared.
+     *
+     * Doing these the other way round draws a border and immediately erases it, which reads as the
+     * bar losing its bottom edge at random — the exact symptom `dropBorder` was written for, arriving
+     * from a second direction.
+     */
+    const applyDropup = (lines: readonly string[]): void => {
+      const status = idleStatusLine();
+      const { moved } = promptBox.setSuggestions(lines, { mode, workspace: where, status });
+      if (!moved) return;
+      readline.prompt(true);
+      promptBox.restoreBottomBorder(mode, where, status);
+    };
+
+    const clearDropup = (): void => { if (promptBox.suggestionRows > 0) applyDropup([]); };
+
+    const showDropup = (suggestions: readonly { command: string; args?: string; description: string }[], selected?: number): void => {
+      const columns = process.stdout.columns ?? 80;
+      const entries: DropupEntry[] = suggestions.map((entry) => ({
+        command: entry.command,
+        ...(entry.args ? { args: entry.args } : {}),
+        description: entry.description,
+        ...(chordFor.get(entry.command) ? { chord: chordFor.get(entry.command)! } : {}),
+      }));
+      applyDropup(renderDropup(entries, {
+        width: columns,
+        maxRows: dropupRowBudget(process.stdout.rows ?? 24, entries.length),
+        ...(selected === undefined ? {} : { selected }),
+        glyphs,
+        paint: { dim: style.dim, cyan: style.cyan, green: style.green },
+      }));
+    };
 
     /**
      * The suggestion dropdown, repainted from whatever is on the line.
@@ -2403,19 +2535,53 @@ async function main(): Promise<number> {
      * defers to readline's own handler, which is registered first — reading `line` synchronously
      * would see the state from before the keystroke and leave the list one character stale.
      */
+    /**
+     * Whether the inline dropup can safely draw right now.
+     *
+     * The list is painted with cursor motions measured *from the input row*, so it is correct only
+     * while the cursor is actually on that row. A line long enough to wrap has pushed the cursor
+     * down onto the closing border, and every upward count would then land one row short and
+     * overwrite the bar instead of the list. Suggestions only ever appear for a single `/word`, so
+     * this refuses in a case that essentially cannot arise — on a terminal narrow enough to wrap a
+     * command name, the honest answer is no list rather than a corrupted bar.
+     */
+    const dropupSafe = (line: string): boolean =>
+      promptBox.isDrawn && PROMPT_PREFIX_COLUMNS + visibleWidth(line) < (process.stdout.columns ?? 80);
+
+    /** The chord label to show beside a suggested command, so the list teaches its own shortcuts. */
+    const chordFor = keys.shortcutLabels();
+
+    /**
+     * The suggestion list, repainted from whatever is on the line.
+     *
+     * Driven off keypresses rather than off a wrapper around input, because readline owns the line
+     * and this must not: the buffer is read after each key and never written to. `setImmediate`
+     * defers to readline's own handler, which is registered first — reading `line` synchronously
+     * would see the state from before the keystroke and leave the list one character stale.
+     *
+     * Two renderers, one per bar. A pinned footer has reserved rows and `PinnedScreen` addresses
+     * them absolutely, which is correct *because* the region holds the bar on a known row. The
+     * inline bar has no such row, so it uses the dropup, which measures upward from the cursor and
+     * therefore finds the bar wherever the transcript has left it. That relative measurement is the
+     * whole fix: the old code simply declined to draw anything inline, which is why the default
+     * session — nearly every session, since pinning costs scrollback — had ghost text and no list.
+     */
     const paintSuggestions = (_str: string | undefined, key: { name?: string } | undefined) => setImmediate(() => {
       if (turnActive || browsing) return;
-      // The dropdown needs rows of its own, and only a held region actually has any: without one
-      // it borrows them by scrolling the transcript, which is destructive, and it would be doing
-      // that to rows the inline bar is drawn on. Two owners of the bottom of the screen is the
-      // mistake that produced the blank-space bug; one owner is the rule. Under `--pin` the region
-      // is real and the dropdown keeps working. Elsewhere the inline bar shows ghost-text
-      // completion instead (see `paintGhost`), which costs no rows at all. Tab still completes,
-      // `/help` still lists,
-      // and Ctrl+G still opens the searchable palette.
-      if (inlineBar()) return;
       const line = (readline as { line?: string }).line ?? "";
       const suggestions = suggestionsFor(line, buildModelCatalog(environment, undefined, liveModels).choices.map((choice) => choice.model));
+
+      if (inlineBar()) {
+        if (suggestions.length === 0 || !dropupSafe(line)) { clearDropup(); return; }
+        if (key?.name === "up" || key?.name === "down") {
+          browsing = true;
+          browseSuggestions(line, suggestions).catch(() => undefined).finally(() => { browsing = false; });
+          return;
+        }
+        showDropup(suggestions);
+        return;
+      }
+
       if (suggestions.length === 0) { screen?.clearSuggestions(); return; }
       if (key?.name === "up" || key?.name === "down") {
         browsing = true;
@@ -2626,8 +2792,23 @@ async function main(): Promise<number> {
         for (const error of errors) out.write(style.yellow(`  ${error}\n`));
       }
       const catalog = buildModelCatalog(environment, undefined, liveModels);
-      const paint = { dim: style.dim, cyan: style.cyan, green: style.green, yellow: style.yellow };
+      const paint = surfacePaint;
       const price = (choice: ModelChoice) => describePrice(choice.prices, display, (money) => convertTo(money, display, rates));
+      /**
+       * One side of a model's price, as a bare figure for a column of its own.
+       *
+       * `price` above renders both sides as a phrase, which is right for a menu row and useless in a
+       * table: a column has to hold one number, and it has to hold it unpainted or the sort reads a
+       * colour code instead of a value.
+       */
+      const modelRate = (choice: ModelChoice, side: "input" | "output"): string => {
+        if (!choice.prices) return "";
+        const micros = side === "input" ? choice.prices.inputPerMillion : choice.prices.outputPerMillion;
+        const own = { currency: choice.prices.currency, micros };
+        // Falls back to the provider's own currency when no rate is configured, which is what
+        // `describePrice` does — a converted figure nobody can reconcile is worse than a foreign one.
+        return formatMoney(convertTo(own, display, rates) ?? own);
+      };
 
       let picked: ModelChoice | undefined;
       if (modelCommand.kind === "list") {
@@ -2638,18 +2819,54 @@ async function main(): Promise<number> {
           if (await openSettings() === "exit") break;
           continue;
         }
-        // A pipe or a non-TTY has no cursor to move, so it keeps the printed list it always had.
-        if (!interactive) {
-          out.write(`${renderModelList(catalog, { current: { provider: spec.id, model: resolvedModelId }, price, paint })}\n`);
-          continue;
-        }
-        const chosen = await openModelPicker({ readline, input: process.stdin, output: process.stdout }, {
-          rows: buildPickerRows(catalog),
+        const modelTable = () => buildModelTable(catalog, {
           current: { provider: spec.id, model: resolvedModelId },
-          price,
+          rate: modelRate,
           paint,
           glyphs,
         });
+        // A pipe or a non-TTY has no cursor to move, so it prints instead of opening a surface — as
+        // a table now rather than a sentence per row, because the columns are worth as much to
+        // something reading the output as to someone looking at it.
+        if (!interactive) {
+          const printed = modelTable();
+          out.write(`${renderTable(printed.columns, printed.rows, INITIAL_TABLE_STATE, {
+            paint: surfacePaint, width: contentWidth(), glyphs, legend: "", cursor: false,
+          })}\n`);
+          // The things the grid has no row for: a provider with no key, and how to choose.
+          for (const note of printed.notes ?? []) out.write(`  ${note}\n`);
+          continue;
+        }
+        // Two views of one list, each able to hand over to the other: the menu answers "what can I
+        // switch to", the table answers "which of these is cheapest". Escape from the table comes
+        // back here rather than closing `/models` outright, which is what a view toggle implies.
+        let chosen: PickerResult | undefined;
+        for (;;) {
+          chosen = await openModelPicker({ readline, input: process.stdin, output: process.stdout }, {
+            rows: buildPickerRows(catalog),
+            current: { provider: spec.id, model: resolvedModelId },
+            price,
+            paint,
+            glyphs,
+          });
+          if (chosen?.kind !== "table") break;
+          const browsed = modelTable();
+          const row = await openTable({ readline, input: process.stdin, output: process.stdout }, {
+            columns: browsed.columns,
+            rows: browsed.rows,
+            paint: surfacePaint,
+            glyphs,
+            title: "models · by any column you like",
+            height: 12,
+            // Opens on the model in use, like the menu it came from: a view toggle that also moved
+            // the cursor would make `t` feel like it had lost your place.
+            initialIndex: Math.max(0, catalog.choices.findIndex((choice) => choice.provider === spec.id && choice.model === resolvedModelId)),
+          });
+          // `runTable` hands back the row itself, and `sortRows` preserves references, so the model
+          // it stands for is found by identity — no un-sorting an index to get back to the datum.
+          const fromTable = row ? catalog.choices[browsed.rows.indexOf(row)] : undefined;
+          if (fromTable) { chosen = { kind: "model", choice: fromTable }; break; }
+        }
         if (!chosen) { out.write(style.dim("  no change\n")); continue; }
         if (chosen.kind === "settings") {
           if (await openSettings() === "exit") break;
@@ -2948,7 +3165,7 @@ async function main(): Promise<number> {
       // The flat list already loaded for `@path` completion — opening the picker costs nothing
       // beyond what a session already pays for that, and the two now agree on exactly which files
       // are reachable.
-      let picked: string | undefined;
+      let picked: { path: string; intent: "mention" | "edit" } | undefined;
       const outcome = await withFullScreen(screenCapabilities(), terminalControls(), async () => {
         const { runFileScreen } = await import("./file-screen");
         picked = await runFileScreen({
@@ -2963,10 +3180,18 @@ async function main(): Promise<number> {
         });
       });
       if (!outcome.ok) { out.write(style.yellow(`  ${explainScreenRefusal(outcome)}\n`)); continue; }
+      if (picked?.intent === "edit") { await editFile(picked.path); continue; }
       // Picking a file writes an `@path` mention into the line still being composed — the same
       // syntax typing `@` and tab-completing already produces, so the model sees one convention
       // for "this file", not two.
-      if (picked) rl.write(`@${picked} `);
+      if (picked) rl.write(`@${picked.path} `);
+      continue;
+    }
+
+    if (input === "/edit" || input.startsWith("/edit ")) {
+      const target = input.slice("/edit".length).trim();
+      if (!target) { out.write(style.yellow("  Usage: /edit <path>, or press e on a file in /files.\n")); continue; }
+      await editFile(target);
       continue;
     }
 
@@ -3286,10 +3511,14 @@ async function main(): Promise<number> {
               out.write(style.dim("  no background jobs — /jobs run <task>, /detach <task>, or /wander daily to start one\n"));
               break;
             }
-            const marker = { queued: glyphs.circleEmpty, running: style.cyan(glyphs.circleFull), paused: style.yellow(glyphs.paused), completed: style.green(glyphs.check), failed: style.red(glyphs.cross), cancelled: style.dim(glyphs.cancelled) } as const;
-            for (const job of jobs) {
-              out.write(`  ${marker[job.status]} ${job.id}  ${job.status.padEnd(9)} ${job.objective}${job.detail ? style.dim(`  — ${job.detail}`) : ""}\n`);
-            }
+            // A table rather than the padded line this printed before. The columns were always
+            // there — id, status, attempts, what it is waiting on — and `.padEnd(9)` only lined up
+            // the second of them, so a long objective pushed every following field somewhere new on
+            // each row and the one job that had failed was no easier to find than the rest.
+            const listed = buildJobsTable(jobs, { paint: surfacePaint, glyphs });
+            out.write(`${renderTable(listed.columns, listed.rows, INITIAL_TABLE_STATE, {
+              paint: surfacePaint, width: contentWidth(), glyphs, legend: "", cursor: false,
+            })}\n`);
             break;
           }
           case "run": {
@@ -3503,6 +3732,23 @@ async function main(): Promise<number> {
       const history = ledger.history;
       const fraction = ledger.budgetFraction;
       out.write(`${ledger.formatReport()}\n`);
+      /**
+       * The turns themselves, in columns, under the totals.
+       *
+       * The report above answers "what has this cost me" and cannot answer "which turn cost it",
+       * which is the question with something to do at the end of it: a turn carrying forty tool
+       * calls and no cached input is a prompt worth rewriting. The charts below show the shape of
+       * spend over time; this is the same session as figures you can read off.
+       */
+      if (history.length > 1) {
+        const spend = buildCostTable(history, {
+          money: (cost) => (cost ? formatMoney(convertTo(cost, display, rates) ?? cost) : ""),
+          paint: surfacePaint,
+        });
+        out.write(`${renderTable(spend.columns, spend.rows, INITIAL_TABLE_STATE, {
+          paint: surfacePaint, width: contentWidth(), glyphs, legend: "", cursor: false,
+        })}\n`);
+      }
       // The shape of spend across turns, not just the total — a flat line and a spike to the same
       // total are two very different sessions to have had. A sparkline said that in one row and
       // compressed a long session into illegibility; a bar per turn stays readable and can carry

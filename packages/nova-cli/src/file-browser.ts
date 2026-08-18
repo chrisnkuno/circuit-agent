@@ -96,6 +96,8 @@ export type FileBrowserAction =
   | { kind: "commit" }
   | { kind: "exit" }
   | { kind: "pick" }
+  /** Open the highlighted file in the built-in editor. See editor.ts. */
+  | { kind: "edit" }
   | { kind: "none" };
 
 /**
@@ -121,6 +123,9 @@ export function keyToFileAction(key: { name?: string; ctrl?: boolean; shift?: bo
   if (isEscape || name === "q") return { kind: "exit" };
   if (character === "/") return { kind: "search" };
   if (isEnter) return { kind: "pick" };
+  // `e` for edit. Deliberately not Enter: picking a file and editing it are different intents, and
+  // the browser is used for both choosing a file to mention and opening one to change.
+  if (character === "e") return { kind: "edit" };
   if (name === "up" || name === "k") return { kind: "move", step: -1 };
   if (name === "down" || name === "j") return { kind: "move", step: 1 };
   if (name === "right" || name === "l") return { kind: "expand" };

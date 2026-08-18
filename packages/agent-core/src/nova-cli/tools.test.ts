@@ -194,6 +194,193 @@ describe("nova tool set", () => {
     expect(result.content).toContain("https://example.com/fetch");
     expect(result.content).toContain("global since 18");
   });
+
+  it("passes scoping and freshness through to the client, which is what makes it useful to DEFENDER", async () => {
+    let seen: Record<string, unknown> = {};
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: { search: async (request: Record<string, unknown>) => { seen = request; return { requestId: "r", results: [] }; } } as never,
+    });
+    await toolNamed(tools, "web_search").execute(
+      { query: "express advisory", includeDomains: ["nvd.nist.gov", "  "], startPublishedDate: "2026-01-01", fresh: true, numResults: 12 },
+      context,
+    );
+    expect(seen.includeDomains).toEqual(["nvd.nist.gov"]);
+    expect(seen.startPublishedDate).toBe("2026-01-01");
+    expect(seen.contents).toEqual({ maxAgeHours: 0 });
+    expect(seen.numResults).toBe(12);
+    // Left unset so the client sends Exa's highest-quality bare `highlights: true`.
+    expect(seen).not.toHaveProperty("highlights");
+  });
+
+  it("bills what the provider reported rather than what the catalog would have estimated", async () => {
+    const charged: Array<Record<string, unknown>> = [];
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      onExpense: (expense) => charged.push(expense as unknown as Record<string, unknown>),
+      search: {
+        search: async () => ({ requestId: "r", results: [{ title: "T", url: "https://a.test", publishedDate: null, author: null, highlights: [] }], costDollars: 0.019 }),
+      } as never,
+    });
+    await toolNamed(tools, "web_search").execute({ query: "x" }, context);
+    expect(charged[0].reportedUsd).toBe(0.019);
+    expect(charged[0].quantities).toEqual({ request: 1, contents: 1 });
+  });
+});
+
+describe("deep_research", () => {
+  const deepClient = (response: Record<string, unknown>, capture?: (request: Record<string, unknown>) => void) => ({
+    search: async (request: Record<string, unknown>) => { capture?.(request); return response; },
+  }) as never;
+
+  it("is offered alongside web_search, and only when search is configured", async () => {
+    const without = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    expect(without.some((tool) => tool.name === "deep_research")).toBe(false);
+
+    const withSearch = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: deepClient({ requestId: "r", results: [] }),
+    });
+    const tool = toolNamed(withSearch, "deep_research");
+    expect(tool.effect).toBe("none");
+    expect(tool.requiresApproval).toBe(false);
+  });
+
+  it("maps effort onto Exa's deep search types", async () => {
+    for (const [effort, type] of [["lite", "deep-lite"], ["standard", "deep"], ["maximum", "deep-reasoning"], [undefined, "deep"]] as const) {
+      let seen: Record<string, unknown> = {};
+      const tools = await createNovaTools({
+        workspace: new LocalWorkspace(root),
+        todos: new TodoList(),
+        search: deepClient({ requestId: "r", results: [] }, (request) => { seen = request; }),
+      });
+      await toolNamed(tools, "deep_research").execute({ query: "x", ...(effort ? { effort } : {}) }, context);
+      expect(seen.type, effort ?? "default").toBe(type);
+      // A text schema, not a structured one: the caller is a model that reads prose and decides
+      // for itself, and citations come back in `grounding` regardless.
+      expect((seen.outputSchema as { type?: string })?.type).toBe("text");
+    }
+  });
+
+  it("routes instructions to systemPrompt, which steers behaviour rather than shape", async () => {
+    let seen: Record<string, unknown> = {};
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: deepClient({ requestId: "r", results: [] }, (request) => { seen = request; }),
+    });
+    await toolNamed(tools, "deep_research").execute({ query: "x", instructions: "  prefer official advisories  " }, context);
+    expect(seen.systemPrompt).toBe("prefer official advisories");
+  });
+
+  it("reports the synthesized answer with its sources, deduplicated across grounding and results", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: deepClient({
+        requestId: "r",
+        searchType: "deep",
+        results: [{ title: "NVD entry", url: "https://nvd.nist.gov/x", publishedDate: "2026-02-01T00:00:00Z", author: null, highlights: ["affected"] }],
+        output: {
+          content: "Affected below 4.19.2.",
+          grounding: [{ field: "content", citations: [{ url: "https://nvd.nist.gov/x", title: "NVD" }], confidence: "high" }],
+        },
+      }),
+    });
+    const result = await toolNamed(tools, "deep_research").execute({ query: "express cve" }, context);
+    expect(result.content).toContain("Affected below 4.19.2.");
+    // The same URL is cited and returned as a result; it must appear once, not twice.
+    expect(result.content.match(/nvd\.nist\.gov\/x/g)?.length).toBeGreaterThanOrEqual(1);
+    expect((result.data?.sources as string[])).toEqual(["https://nvd.nist.gov/x"]);
+  });
+
+  /**
+   * Synthesis is the part most likely to come back empty on a hard question. Returning "no results"
+   * then would throw away a list of the right pages — which is a usable answer on its own.
+   */
+  it("still reports its sources when synthesis came back empty", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: deepClient({
+        requestId: "r",
+        results: [{ title: "A page", url: "https://a.test/x", publishedDate: null, author: null, highlights: [] }],
+        output: { content: null, grounding: [] },
+      }),
+    });
+    const result = await toolNamed(tools, "deep_research").execute({ query: "x" }, context);
+    expect(result.content).toContain("https://a.test/x");
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("says so plainly when there is nothing at all", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: deepClient({ requestId: "r", results: [], output: { content: "", grounding: [] } }),
+    });
+    expect((await toolNamed(tools, "deep_research").execute({ query: "x" }, context)).content).toBe("No results.");
+  });
+});
+
+describe("web_fetch", () => {
+  const page = "<html><body><p>Hello</p></body></html>";
+
+  it("uses Exa's extractor when configured, since it renders JS pages and PDFs a raw fetch cannot", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      fetchImpl: (async () => new Response(page, { status: 200 })) as unknown as typeof fetch,
+      search: {
+        search: async () => ({ requestId: "r", results: [] }),
+        contents: async () => ({ requestId: "r", results: [{ title: "T", url: "https://a.test", highlights: [], publishedDate: null, author: null, text: "extracted body" }], statuses: [{ url: "https://a.test", status: "success", errorTag: null }], costDollars: 0.001 }),
+      } as never,
+    });
+    const result = await toolNamed(tools, "web_fetch").execute({ url: "https://a.test" }, context);
+    expect(result.content).toBe("extracted body");
+    expect(result.data?.via).toBe("exa");
+  });
+
+  it("falls back to a plain fetch when extraction fails, so it is never worse than before", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      fetchImpl: (async () => new Response(page, { status: 200 })) as unknown as typeof fetch,
+      search: {
+        search: async () => ({ requestId: "r", results: [] }),
+        contents: async () => { throw new Error("extractor down"); },
+      } as never,
+    });
+    const result = await toolNamed(tools, "web_fetch").execute({ url: "https://a.test" }, context);
+    expect(result.content).toContain("Hello");
+    expect(result.data?.via).toBe("fetch");
+  });
+
+  it("falls back rather than reporting success when Exa returns a per-url error inside its 200", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      fetchImpl: (async () => new Response(page, { status: 200 })) as unknown as typeof fetch,
+      search: {
+        search: async () => ({ requestId: "r", results: [] }),
+        contents: async () => ({ requestId: "r", results: [], statuses: [{ url: "https://a.test", status: "error", errorTag: "CRAWL_NOT_FOUND" }], costDollars: null }),
+      } as never,
+    });
+    const result = await toolNamed(tools, "web_fetch").execute({ url: "https://a.test" }, context);
+    expect(result.data?.via).toBe("fetch");
+  });
+
+  it("still refuses a non-http url", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      fetchImpl: (async () => new Response(page, { status: 200 })) as unknown as typeof fetch,
+    });
+    await expect(toolNamed(tools, "web_fetch").execute({ url: "file:///etc/passwd" }, context)).rejects.toThrow("http or https");
+  });
 });
 
 describe("delegate_task", () => {
@@ -334,6 +521,31 @@ describe("verification detection", () => {
 
     expect(classifyVerification("git status")).toBeNull();
     expect(classifyVerification("echo hello")).toBeNull();
+  });
+
+  /**
+   * The two rungs above unit tests. Both answer a question units cannot: whether the pieces were
+   * assembled into something that runs at all.
+   */
+  it("recognises evidence that the assembled program was actually exercised", () => {
+    for (const command of ["npx playwright test", "npm run e2e", "yarn cypress run", "pytest tests/integration", "npm run test:integration", "behave features/"]) {
+      expect(classifyVerification(command), command).toBe("behavior");
+    }
+    for (const command of ["npm run smoke", "curl -sf http://localhost:5173/", "wget -qO- http://127.0.0.1:8000/health", "npm run healthcheck"]) {
+      expect(classifyVerification(command), command).toBe("smoke");
+    }
+  });
+
+  it("credits a command with the strongest claim it actually supports", () => {
+    // Every one of these also matches the unit-test pattern — "playwright test", "vitest run e2e/".
+    // Classifying them as plain unit tests would throw away the stronger claim and ask the agent
+    // for functional evidence it had just produced.
+    expect(classifyVerification("npx playwright test")).toBe("behavior");
+    expect(classifyVerification("bunx vitest run e2e/")).toBe("behavior");
+    expect(classifyVerification("npm run build && npm run e2e")).toBe("behavior");
+    // ...and a smoke probe outranks the build it followed, but not a real e2e suite.
+    expect(classifyVerification("npm run build && curl -sf localhost:3000")).toBe("smoke");
+    expect(classifyVerification("npm run e2e && curl -sf localhost:3000")).toBe("behavior");
   });
 
   it("reads a command that both builds and tests as the stronger of the two", () => {

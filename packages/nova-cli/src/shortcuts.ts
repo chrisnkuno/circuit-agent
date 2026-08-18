@@ -3,6 +3,7 @@ import { KeyBindingRegistry, type KeypressEvent } from "./keybindings";
 import { paletteEntries, runCommandPalette, type PaletteKey, type RunPaletteOptions } from "./palette";
 import { runModelPicker, type PickerResult, type RunModelPickerOptions } from "./model-picker";
 import { runChooser, type ChooserItem, type ChooserPaint, type RunChooserOptions } from "./chooser";
+import { runTable, type RunTableOptions, type TableRow } from "./table";
 import { rowsOccupied } from "./tui";
 import type { OutputStream } from "./output";
 
@@ -47,10 +48,34 @@ export type ShortcutHost = KeyboardHost & {
   canSuggest?: () => boolean;
 };
 
-/** Replaces whatever is on the line and submits, so a key works mid-typing without appending to it. */
-function submit(readline: Interface, command: string): void {
+/**
+ * Replaces whatever is on the line, so a chosen command works mid-typing without appending to it.
+ *
+ * Shared with the suggestion dropup, which has exactly the same problem from the other direction:
+ * its rows are whole lines ("/auto"), and writing one onto the "/a" that opened the list submits
+ * "/a/auto".
+ *
+ * The Ctrl+E is not redundant. Ctrl+U deletes from the cursor to the *start* of the line, so on its
+ * own it clears nothing at all when the cursor is already at column zero, and leaves the tail intact
+ * whenever the cursor is mid-line — the command was then prepended to surviving text and submitted
+ * as one nonsense line. Moving to the end first makes "replace the line" true from every cursor
+ * position, which is what a shortcut pressed mid-typing needs.
+ *
+ * This became load-bearing rather than merely correct when Ctrl+A joined the Ctrl layer: readline
+ * still sees that keypress and still moves the cursor to column zero before this runs, which is
+ * precisely the position Ctrl+U alone is a no-op from. Undoing readline's edit is cheaper and far
+ * more predictable than trying to stop it from happening — there is no way to cancel an event
+ * another listener has already handled, and every survivable interception scheme would have to
+ * reimplement the editing it suppressed.
+ */
+export function replaceLine(readline: Interface, text: string): void {
+  readline.write(null, { ctrl: true, name: "e" });
   readline.write(null, { ctrl: true, name: "u" });
-  readline.write(command);
+  readline.write(text);
+}
+
+function submit(readline: Interface, command: string): void {
+  replaceLine(readline, command);
   if (!command.endsWith(" ")) readline.write(null, { name: "return" });
 }
 
@@ -172,6 +197,22 @@ export async function openChooser<T>(
   return withBorrowedKeyboard(host, self, (keys, paint) => runChooser(keys, items, paint, sized));
 }
 
+/**
+ * A table over the same borrowed keyboard, returning the row the user chose.
+ *
+ * The height it hands the table is the terminal minus a few rows, same as every other surface here:
+ * a frame sized to the whole window scrolls its own top border off the screen, and the table cannot
+ * work that out for itself because a pure renderer has no business asking the process how tall it is.
+ */
+export async function openTable(host: KeyboardHost, options: RunTableOptions, self?: unknown): Promise<TableRow | undefined> {
+  const sized = {
+    width: host.output.columns ?? 80,
+    ...options,
+    getSize: options.getSize ?? (() => ({ width: host.output.columns ?? 80, height: Math.max(1, (host.output.rows ?? 24) - 2) })),
+  };
+  return withBorrowedKeyboard(host, self, (keys, paint) => runTable(keys, paint, sized));
+}
+
 /** The model chooser, over the same borrowed keyboard the palette uses. */
 export async function openModelPicker(host: KeyboardHost, options: RunModelPickerOptions, self?: unknown): Promise<PickerResult | undefined> {
   const sized = {
@@ -211,7 +252,7 @@ export function installShortcuts(host: ShortcutHost): () => void {
     // The suggestion dropdown is deliberately *not* driven from here. Opening a palette on "/"
     // means the palette owns the keyboard from the first character, so the rest of a typed
     // `/model haiku` lands in its query instead of the line — the command is then never run, and
-    // history, Ctrl-A/E and @-completion are dead for the whole time it is open. Suggestions are
+    // history, line editing and @-completion are dead for the whole time it is open. Suggestions are
     // painted non-modally by the screen instead (`PinnedScreen.renderSuggestions`), leaving
     // readline in charge of every keystroke.
 

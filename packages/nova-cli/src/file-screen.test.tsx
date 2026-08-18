@@ -1,7 +1,7 @@
 /** @jsxImportSource @termuijs/jsx */
 import { render } from "@termuijs/testing";
 import { describe, expect, it } from "vitest";
-import { FileScreen, type FileReader } from "./file-screen";
+import { FileScreen, type FileReader, type FileScreenChoice } from "./file-screen";
 
 /**
  * The file screen, actually drawn and actually typed into.
@@ -19,7 +19,7 @@ const reader: FileReader = async (path) => {
 };
 
 function open(options: { columns?: number; rows?: number; readFile?: FileReader } = {}) {
-  let picked: string | undefined;
+  let picked: FileScreenChoice | undefined;
   let exited = false;
   const view = render(
     <FileScreen
@@ -35,7 +35,8 @@ function open(options: { columns?: number; rows?: number; readFile?: FileReader 
     view,
     frame: () => String(view.lastFrame()),
     get exited() { return exited; },
-    get picked() { return picked; },
+    get picked() { return picked?.path; },
+    get intent() { return picked?.intent; },
   };
 }
 
