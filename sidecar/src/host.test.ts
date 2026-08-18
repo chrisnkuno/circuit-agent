@@ -209,3 +209,75 @@ describe("two tabs in one window", () => {
     await expect(request({ type: "turn.send", objective: "hello", tabId: "tab_404" })).rejects.toThrow(/No such tab/);
   }, 60_000);
 });
+
+/**
+ * Where a write actually lands.
+ *
+ * The window reports a write as a line in the transcript, and a line in a transcript is not a file.
+ * Between the two sit a workspace, a root and — in sandbox mode — a machine that is not this one,
+ * so "it said it wrote the file" and "the file exists, in the right place" are separate claims and
+ * only the second one is worth anything to the person who asked for the work.
+ */
+describe("files a turn creates", () => {
+  it("writes into the project that was opened, on this machine", async () => {
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await tempProject("write-local");
+    const opened = await request({ type: "session.open", root, mode: "auto" }) as { tabId: string };
+
+    stub.enqueue({ kind: "tool_call", toolName: "write_file", input: { path: "notes/hello.txt", content: "NOVA_WROTE_THIS" } });
+    stub.enqueue({ kind: "text", text: "Created notes/hello.txt." });
+    await request({ type: "turn.send", objective: "create notes/hello.txt", tabId: opened.tabId });
+
+    // Read from disk, not from the transcript: the transcript is the claim being checked.
+    expect(await fs.readFile(path.join(root, "notes", "hello.txt"), "utf8")).toBe("NOVA_WROTE_THIS");
+  }, 60_000);
+
+  it("puts each tab's files in its own project", async () => {
+    // Two tabs run at once here, so a workspace shared between them would put one piece of work's
+    // files in the other's repository — and the transcript would look correct in both.
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const first = await tempProject("write-a");
+    const second = await tempProject("write-b");
+    const a = await request({ type: "session.open", root: first, mode: "auto" }) as { tabId: string };
+    const b = await request({ type: "session.open", root: second, mode: "auto" }) as { tabId: string };
+
+    stub.enqueue({ kind: "tool_call", toolName: "write_file", input: { path: "a.txt", content: "A" } });
+    stub.enqueue({ kind: "text", text: "done" });
+    await request({ type: "turn.send", objective: "write a.txt", tabId: a.tabId });
+    stub.enqueue({ kind: "tool_call", toolName: "write_file", input: { path: "b.txt", content: "B" } });
+    stub.enqueue({ kind: "text", text: "done" });
+    await request({ type: "turn.send", objective: "write b.txt", tabId: b.tabId });
+
+    expect(await fs.readFile(path.join(first, "a.txt"), "utf8")).toBe("A");
+    expect(await fs.readFile(path.join(second, "b.txt"), "utf8")).toBe("B");
+    await expect(fs.access(path.join(first, "b.txt"))).rejects.toThrow();
+    await expect(fs.access(path.join(second, "a.txt"))).rejects.toThrow();
+  }, 90_000);
+
+  it("cannot be talked into writing outside the project it was given", async () => {
+    // The guard that matters most on a local session: an approved write is a real write, with this
+    // user's authority, so the workspace root has to be a boundary rather than a default.
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await tempProject("write-escape");
+    const opened = await request({ type: "session.open", root, mode: "auto" }) as { tabId: string };
+
+    stub.enqueue({ kind: "tool_call", toolName: "write_file", input: { path: "../escaped.txt", content: "OUT" } });
+    stub.enqueue({ kind: "text", text: "done" });
+    await request({ type: "turn.send", objective: "write outside", tabId: opened.tabId });
+
+    await expect(fs.access(path.join(path.dirname(root), "escaped.txt"))).rejects.toThrow();
+  }, 60_000);
+
+  it("refuses a sandbox session rather than quietly writing to this machine", async () => {
+    // Sandbox mode is chosen precisely so the work cannot touch the user's files. If the sandbox
+    // cannot be created, the only safe answer is to fail: a silent fall back to the local disk
+    // would do the one thing the toggle exists to prevent.
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: { ...settings(), e2bApiKey: "" } as never });
+    const root = await tempProject("sandbox-fallback");
+    await expect(request({ type: "session.open", root, mode: "auto", sandbox: true })).rejects.toThrow(/E2B_API_KEY/i);
+  }, 60_000);
+});
