@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   CostLedger,
@@ -24,6 +26,7 @@ import {
 import type { ModelPriceCatalog } from "@circuit-nova/nova-core/model-cost";
 import type { SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { createE2BProvider } from "@circuit-nova/nova-core/providers/factory";
+import { addMemory, forgetMemory, loadMemories, memoryFile, type MemoryKind, type MemoryScope } from "@circuit-nova/nova-core/nova-cli/memory";
 import { verifyCredentials } from "./verify.js";
 import type { IpcEvent, IpcRequest, NovaSettings, ProviderId } from "./protocol.js";
 import { DEFAULT_MODELS } from "./protocol.js";
@@ -81,6 +84,8 @@ export class NovaHost {
         return await verifyCredentials(request.settings);
       case "session.open":
         return await this.openSession(request.root, request.mode ?? "build", !!request.sandbox, !!request.upload);
+      case "session.scratch":
+        return await this.openScratchSession(request.mode ?? "build");
       case "session.list":
         return await listSessions(request.root);
       case "session.resume":
@@ -91,6 +96,12 @@ export class NovaHost {
           !!request.sandbox,
           !!request.upload,
         );
+      case "memory.list":
+        return await this.listMemories();
+      case "memory.add":
+        return await this.addMemoryEntry(request.scope, request.text, request.kind);
+      case "memory.forget":
+        return await this.forgetMemoryEntry(request.scope, request.index);
       case "turn.send":
         return await this.sendTurn(request.objective, request.id);
       case "mode.set":
@@ -239,8 +250,61 @@ export class NovaHost {
     };
   }
 
+  /**
+   * The root memory is filed against.
+   *
+   * Falls back to the scratch directory when no project is open, so a fact learned during a
+   * scratch chat still lands somewhere real rather than being silently dropped — and lands in the
+   * same place the next scratch chat will read it from.
+   */
+  private memoryRoot(): string {
+    return this.root ?? path.join(os.homedir(), ".nova", "scratch");
+  }
+
+  private async listMemories() {
+    const entries = await loadMemories(this.memoryRoot(), process.env);
+    return {
+      entries,
+      files: {
+        project: memoryFile("project", this.memoryRoot(), process.env),
+        user: memoryFile("user", this.memoryRoot(), process.env),
+      },
+    };
+  }
+
+  private async addMemoryEntry(scope: MemoryScope, text: string, kind?: string) {
+    const result = await addMemory(scope, text, this.memoryRoot(), process.env, { kind: (kind ?? "fact") as MemoryKind });
+    return { file: result.file, changed: result.changed, entries: await loadMemories(this.memoryRoot(), process.env) };
+  }
+
+  private async forgetMemoryEntry(scope: MemoryScope, index: number) {
+    const result = await forgetMemory(scope, index, this.memoryRoot(), process.env);
+    return { file: result.file, changed: result.changed, entries: await loadMemories(this.memoryRoot(), process.env) };
+  }
+
   private async openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean) {
     return await this.buildAgent(path.resolve(root), mode, sandbox, upload);
+  }
+
+  /**
+   * A session with nowhere in particular to work.
+   *
+   * Chatting is not the same act as working on a project, and requiring a project folder before the
+   * first question could be asked made the app refuse the thing people open it to do — "how do I
+   * write this migration" needs no repository. But `NovaAgent` genuinely needs a root: it keeps
+   * checkpoints, session transcripts and a workspace there, and a null root would mean teaching all
+   * three to handle a case that only exists to avoid asking a question.
+   *
+   * So the answer is a real directory rather than no directory — a scratch folder under `.nova`,
+   * created on demand. Every tool works normally, files land somewhere findable, and opening a
+   * project later is an ordinary session switch rather than a change of mode.
+   */
+  private async openScratchSession(mode: NovaMode) {
+    const scratch = path.join(os.homedir(), ".nova", "scratch");
+    await fs.mkdir(scratch, { recursive: true });
+    // Never sandboxed: a scratch session is a conversation, and paying for a remote sandbox to hold
+    // a directory nobody asked for is a cost with no matching benefit.
+    return { ...(await this.buildAgent(scratch, mode, false, false)), scratch: true };
   }
 
   private async resumeSession(root: string, sessionId: string, mode: NovaMode, sandbox: boolean, upload: boolean) {

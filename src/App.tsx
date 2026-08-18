@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import {
   ensureSidecar,
@@ -51,12 +51,28 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(true);
   const [settings, setSettings] = useState<NovaSettings>(defaultSettings());
   const [bootError, setBootError] = useState<string | null>(null);
-  const [events, setEvents] = useState<IpcEvent[]>([]);
+  /**
+   * Sidecar events waiting to be folded into the transcript.
+   *
+   * A ref holding a mutable queue, plus a counter to wake the consumer — deliberately not a state
+   * array that the consumer clears. That earlier shape had two defects, and both of them showed up
+   * as garbled output rather than as an error:
+   *
+   * - **Duplicated tokens.** React StrictMode double-invokes effects on mount, so the drain effect
+   *   ran twice against the same captured array and appended every delta twice ("HelloHello").
+   * - **Dropped tokens.** The drain cleared the whole buffer unconditionally, so any event that
+   *   arrived between the effect reading the array and the clear landing was silently discarded.
+   *
+   * `splice(0)` fixes both at once: it is an atomic take, so a second invocation finds an empty
+   * queue and does nothing, and it only ever removes what it actually returned.
+   */
+  const eventQueue = useRef<IpcEvent[]>([]);
+  const [eventTick, setEventTick] = useState(0);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
 
-  const clearEvents = useCallback(() => setEvents([]), []);
+  const takeEvents = useCallback(() => eventQueue.current.splice(0), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +123,8 @@ export default function App() {
       try {
         await ensureSidecar();
         unlisten = await onSidecarEvent((event) => {
-          setEvents((prev) => [...prev, event]);
+          eventQueue.current.push(event);
+          setEventTick((tick) => tick + 1);
         });
         // The engine dying is not a session event — there is no session left to report it to — so
         // it is surfaced the same way a failed boot is: the app stops claiming to be ready and
@@ -195,8 +212,8 @@ export default function App() {
       <ChatScreen
         settings={settings}
         onOpenSettings={() => setShowSettings(true)}
-        events={events}
-        clearEvents={clearEvents}
+        eventTick={eventTick}
+        takeEvents={takeEvents}
       />
     </div>
   );

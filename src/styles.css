@@ -36,6 +36,30 @@
   --page: radial-gradient(1200px 600px at 10% -10%, rgba(61, 214, 198, 0.14), transparent 55%),
     radial-gradient(900px 500px at 90% 0%, rgba(64, 120, 200, 0.18), transparent 50%),
     linear-gradient(180deg, #0e1620 0%, var(--bg0) 45%, #0a0f15 100%);
+  /*
+   * One spacing scale, on a 4px base.
+   *
+   * Every gap and padding in this file used to be picked independently — 0.85, 1.25, 0.65, 0.45,
+   * 0.3, 0.9, 1.1 — which is why the app read as slightly-off rather than as wrong: nothing lined
+   * up with anything else, and adjacent panels used different rhythms for the same kind of space.
+   * Steps make the relationships deliberate and make a change one edit instead of thirty.
+   */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  /*
+   * Line length for prose. Long measures are the single most common readability failure in a chat
+   * UI: on a wide window the transcript column grows without limit and the eye loses the line it
+   * was on. 74 characters is the usual comfortable maximum for body text.
+   */
+  --measure: 74ch;
   --font: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   font-family: var(--font);
@@ -158,8 +182,8 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 1.25rem;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(10px);
   background: var(--chrome-bg);
@@ -237,26 +261,38 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 280px;
+  /* Sidebars widened a little and the columns separated by a real gutter. Flush columns divided
+     only by a hairline read as one dense surface; a gap lets each column be its own thing. */
+  grid-template-columns: 264px minmax(0, 1fr) 300px;
+  gap: var(--s3);
+  padding: var(--s3);
   min-height: 0;
   height: 100%;
 }
 
+
+/*
+ * Panels are cards, not columns.
+ *
+ * They used to be full-height regions separated from the transcript by a single hairline, which
+ * made the whole window one undivided surface — the eye had nothing to group by, so the plan, the
+ * transcript and the session list all read as the same object at different densities.
+ */
 .panel {
   min-height: 0;
-  border-right: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   background: var(--panel-bg);
   display: flex;
   flex-direction: column;
-}
-
-.panel:last-child {
-  border-right: none;
-  border-left: 1px solid var(--line);
+  overflow: hidden;
+  /* A shadow just deep enough to lift the card off the page gradient. The full `--shadow` is for
+     modals, which should feel like they are in front of the window rather than part of it. */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .panel-header {
-  padding: 0.85rem 1rem;
+  padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--line);
   font-size: 0.78rem;
   letter-spacing: 0.08em;
@@ -265,7 +301,7 @@ button {
 }
 
 .panel-body {
-  padding: 0.75rem;
+  padding: var(--s3);
   overflow: auto;
   min-height: 0;
   flex: 1;
@@ -276,16 +312,24 @@ button {
   grid-template-rows: auto 1fr auto;
   min-height: 0;
   background: var(--chat-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 .mode-bar {
   display: flex;
-  gap: 0.4rem;
-  padding: 0.65rem 1rem;
+  gap: var(--s2) var(--s3);
+  padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--line);
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* The control and the actions hold the first row; the hint wraps beneath them when space runs out. */
+.mode-bar > .segmented { order: 1; }
+.mode-bar > .mode-actions { order: 2; margin-left: auto; }
 
 /* A segmented control, so the three modes read as one choice rather than three buttons. */
 .segmented {
@@ -319,10 +363,18 @@ button {
   font-weight: 600;
 }
 
+/*
+ * The hint explains what the selected mode will do, which is the one thing worth reading in this
+ * bar — but it sat between the segmented control and six action buttons and was crushed to
+ * "App…" at ordinary window widths. A flex basis lets it wrap onto its own line instead of being
+ * squeezed to nothing, and it is the only item here that may wrap.
+ */
 .mode-hint {
   color: var(--muted);
   font-size: 0.78rem;
-  flex: 1;
+  flex: 1 1 16rem;
+  min-width: 0;
+  order: 3;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -344,59 +396,98 @@ button {
 
 .transcript {
   overflow: auto;
-  padding: 1.25rem;
+  /* Generous horizontal padding, tighter vertically: the transcript scrolls, so vertical space is
+     cheap and horizontal space is what separates the text from the frame. */
+  padding: var(--s5) var(--s6);
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  /* Turns need more air between them than blocks within a turn, which is what makes an exchange
+     readable as a sequence of speakers rather than as one continuous document. */
+  gap: var(--s5);
 }
 
 .msg {
-  max-width: 52rem;
+  /* Capped by character count rather than by rem: the limit exists so a line of prose stays
+     readable, and that is a property of the text, not of the window. */
+  max-width: var(--measure);
+  line-height: 1.6;
+}
+
+/* `pre-wrap` belongs only where the text is literal. Assistant output is parsed into real markdown
+   blocks now, and preserving its whitespace put the parser's own line breaks back on screen — the
+   large vertical gaps between a heading, a paragraph and a list were exactly that. */
+.msg.system,
+.msg.tool,
+.msg.user {
   white-space: pre-wrap;
-  line-height: 1.5;
 }
 
 .msg.user {
   align-self: flex-end;
   background: var(--accent-dim);
   border: 1px solid var(--accent-edge);
-  border-radius: 1rem 1rem 0.25rem 1rem;
-  padding: 0.75rem 1rem;
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+  padding: var(--s3) var(--s4);
 }
 
 .msg.assistant {
-  align-self: stretch;
+  align-self: flex-start;
   color: var(--text);
 }
 
+/* Blocks inside one answer sit closer together than the answers themselves do. Without this the
+   `gap` between turns applied between a heading and its own paragraph, so an answer read as
+   several disconnected fragments rather than as one piece of writing. */
+.msg > * {
+  margin-block: 0;
+}
+
+.msg > * + * {
+  margin-block-start: var(--s3);
+}
+
+.msg > .msg-heading + * {
+  margin-block-start: var(--s2);
+}
+
+/* Tool lines are the machine talking, not the agent: monospace, quieter, and rendered as a rail so
+   a run of them reads as one activity log rather than as several separate remarks. */
 .msg.system,
 .msg.tool {
   align-self: stretch;
+  max-width: none;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
   border-left: 2px solid var(--line);
-  padding-left: 0.75rem;
+  padding-left: var(--s3);
+}
+
+/* Consecutive tool lines close up into a single block, since they are one continuous log. */
+.msg.tool + .msg.tool {
+  margin-block-start: calc(var(--s5) * -1 + var(--s1));
 }
 
 .composer {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 0.6rem;
-  padding: 0.9rem 1rem 1.1rem;
+  gap: var(--s3);
+  padding: var(--s4) var(--s6) var(--s5);
   border-top: 1px solid var(--line);
   background: var(--chrome-bg);
 }
 
 .composer textarea {
   width: 100%;
-  min-height: 72px;
-  max-height: 180px;
+  min-height: 84px;
+  max-height: 200px;
   resize: vertical;
-  border-radius: 0.7rem;
+  border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--bg1);
-  padding: 0.75rem 0.9rem;
+  padding: var(--s3) var(--s4);
+  line-height: 1.55;
   outline: none;
 }
 
@@ -580,6 +671,82 @@ button {
   margin-bottom: 0;
 }
 
+/* Markdown blocks. Sized relative to the message body rather than to the page, so a heading in an
+   answer reads as a heading *within that answer* and does not compete with the app's own chrome. */
+.msg-heading {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 1.02em;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.msg-heading:first-child {
+  margin-top: 0;
+}
+
+.msg-list {
+  margin: 0 0 0.6rem;
+  padding-left: 1.35rem;
+}
+
+.msg-list li {
+  margin-bottom: 0.2rem;
+}
+
+.msg-list li:last-child {
+  margin-bottom: 0;
+}
+
+.msg-quote {
+  margin: 0 0 0.6rem;
+  padding: 0.1rem 0 0.1rem 0.75rem;
+  border-left: 3px solid var(--border, rgba(127, 127, 127, 0.35));
+  opacity: 0.85;
+}
+
+.msg-rule {
+  margin: 0.9rem 0;
+  border: none;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+}
+
+/* Inline code is tinted rather than boxed: a border on every identifier in a sentence turns a
+   paragraph into a fence, which is the opposite of what inline code is for. */
+.inline-code {
+  padding: 0.1em 0.32em;
+  border-radius: 4px;
+  background: var(--code-bg, rgba(127, 127, 127, 0.16));
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.92em;
+}
+
+/* Tables scroll inside their own box. Without this a wide table widens the whole transcript and
+   the message column stops matching every other message. */
+.msg-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 0.6rem;
+}
+
+.msg-table {
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.msg-table th,
+.msg-table td {
+  padding: 0.28rem 0.6rem;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  text-align: left;
+}
+
+.msg-table th {
+  font-weight: 620;
+  background: rgba(127, 127, 127, 0.1);
+}
+
+/* The streaming caret follows whatever block is last, not only a paragraph — an answer that is
+   mid-way through a list or a heading was otherwise left with no caret at all. */
+.msg.streaming > :last-child::after,
 .msg.streaming .msg-text::after {
   content: "▌";
   color: var(--accent);
@@ -765,17 +932,19 @@ button {
 
 /* ---- Side panel ------------------------------------------------------- */
 
+/*
+ * The plan and the cost are two separate things, so they are two cards.
+ *
+ * They used to be equal halves of one bordered column, which meant the plan was given exactly as
+ * much room as a two-line cost summary however long it got — a nine-step plan scrolled inside its
+ * half while empty space sat below it. `auto` for the cost and `1fr` for the plan gives the space
+ * to the one that varies.
+ */
 .side-panel {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--s3);
   min-height: 0;
-  border-left: 1px solid var(--line);
-}
-
-.side-panel .panel {
-  border-right: none;
-  border-left: none;
-  border-bottom: 1px solid var(--line);
 }
 
 .side-panel .panel:last-child {
@@ -878,27 +1047,37 @@ button {
   color: var(--danger);
 }
 
+/*
+ * Three columns need roughly 1200px to all be useful. Below that the right panel goes first: the
+ * plan and the cost are glanceable summaries, while the session list is how you navigate — losing
+ * navigation before losing a summary is the wrong order.
+ */
 @media (max-width: 1180px) {
   .workspace {
-    grid-template-columns: 200px minmax(0, 1fr) 240px;
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+
+  .workspace > .side-panel {
+    display: none;
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 900px) {
   .workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--s2);
   }
 
-  .panel {
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-    max-height: 220px;
+  .workspace > .side-stack {
+    display: none;
   }
 
-  .side-panel {
-    border-left: none;
-    grid-template-rows: auto auto;
+  .transcript {
+    padding: var(--s4);
+  }
+
+  .composer {
+    padding: var(--s3) var(--s4) var(--s4);
   }
 
   .field-row {
@@ -1242,3 +1421,92 @@ button {
 .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-meta { margin-left: auto; padding-left: 12px; font-size: 11px; opacity: 0.55; white-space: nowrap; }
 .btn.tiny { padding: 2px 8px; font-size: 11px; }
+
+
+/* Recent projects, above the session list. The two belong together: a session is reached through
+   its project, so stacking them keeps "where was I" a single glance rather than two. */
+.side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-height: 0;
+}
+
+/* The session list takes whatever the recent list does not, and scrolls inside itself. */
+.side-stack > .panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.recent-projects {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  padding: var(--s3);
+  /* Never taller than about a third of the column: this is a shortcut list, and it must not push
+     the session list — which is how you actually navigate — off the bottom of the sidebar. */
+  max-height: 34%;
+  overflow: auto;
+}
+
+.recent-projects h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.recent-projects ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.recent-project {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.recent-project:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.recent-project.current {
+  background: rgba(127, 127, 127, 0.16);
+}
+
+.recent-project:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.recent-name {
+  font-size: 0.86rem;
+  font-weight: 560;
+}
+
+/* The full path is a disambiguator, not the label — clipped rather than wrapped so a deep path
+   cannot push the sidebar wider than the transcript. */
+.recent-path {
+  font-size: 0.72rem;
+  opacity: 0.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

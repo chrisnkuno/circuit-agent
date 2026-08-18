@@ -8,6 +8,7 @@ import { ModelPicker } from "../components/ModelPicker";
 import { DiffPanel } from "../components/DiffPanel";
 import { ScanPanel } from "../components/ScanPanel";
 import { FilePanel } from "../components/FilePanel";
+import { sendsOnKey } from "../lib/composer";
 import { shouldFollow } from "../lib/transcript";
 import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
 import {
@@ -16,6 +17,7 @@ import {
   getCost,
   getTodos,
   listSessions,
+  openScratchSession,
   openSession,
   pickFolder,
   pullSandbox,
@@ -26,6 +28,8 @@ import {
   setModel,
   setSettings,
   undoTurn,
+  loadWorkspaceState,
+  saveWorkspaceState,
 } from "../lib/ipc";
 import {
   appendUserMessage,
@@ -38,8 +42,10 @@ import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../
 export function ChatScreen(props: {
   settings: NovaSettings;
   onOpenSettings: () => void;
-  events: import("../lib/settings").IpcEvent[];
-  clearEvents: () => void;
+  /** Bumped whenever the sidecar delivers an event; the value itself carries no meaning. */
+  eventTick: number;
+  /** Atomically removes and returns everything queued. Safe to call twice — the second call is empty. */
+  takeEvents: () => import("../lib/settings").IpcEvent[];
 }) {
   const [root, setRoot] = useState<string | null>(null);
   const [pathDraft, setPathDraft] = useState("");
@@ -51,6 +57,8 @@ export function ChatScreen(props: {
   const [draft, setDraft] = useState("");
   const [chat, setChat] = useState<ChatState>(initialChatState);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  /** Projects opened before, most recent first, so past work is reachable without re-finding it. */
+  const [recentRoots, setRecentRoots] = useState<string[]>([]);
   const [warning, setWarning] = useState<string | undefined>();
   const [todos, setTodos] = useState<Array<{ id: string; content: string; status: string }>>([]);
   const [pinned, setPinned] = useState(false);
@@ -77,10 +85,12 @@ export function ChatScreen(props: {
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (props.events.length === 0) return;
-    setChat((current) => applyChatEvents(current, props.events));
-    props.clearEvents();
-  }, [props.events, props.clearEvents]);
+    // Take first, then fold. Taking is what makes this safe to run twice: StrictMode's second
+    // invocation on mount gets an empty array, so nothing is applied a second time.
+    const pending = props.takeEvents();
+    if (pending.length === 0) return;
+    setChat((current) => applyChatEvents(current, pending));
+  }, [props.eventTick, props.takeEvents]);
 
   // Follow new output only when the reader is already at the bottom. Scrolling up is an explicit
   // act; yanking them back on the next token makes reading during a turn impossible.
@@ -151,8 +161,62 @@ export function ChatScreen(props: {
     setSessions(listed);
   }
 
-  async function openProjectAt(folder: string) {
+  /**
+   * Remembers where the window was working, so the next launch is not blank.
+   *
+   * Called after a project opens and after a mode change rather than on every render: these are the
+   * two moments the answer actually changes, and writing on every keystroke would put a disk write
+   * behind the composer.
+   */
+  async function rememberWorkspace(nextRoot: string | null, nextMode: NovaMode = mode) {
+    const recents = nextRoot
+      // Most recent first, no duplicates, and bounded — this is a shortcut list, not a history file.
+      ? [nextRoot, ...recentRoots.filter((entry) => entry !== nextRoot)].slice(0, 8)
+      : recentRoots;
+    setRecentRoots(recents);
+    await saveWorkspaceState({
+      ...(nextRoot ? { lastRoot: nextRoot } : {}),
+      mode: nextMode,
+      sandbox,
+      recentRoots: recents,
+    }).catch(() => undefined);
+  }
+
+  /**
+   * Restores the last project on launch, and lists its past sessions.
+   *
+   * The app used to start with nothing open and no session list, and did not fetch sessions until
+   * a project was opened or a message sent — so every launch lost the thread of what you were
+   * doing, and past conversations were reachable only by re-finding the folder by hand.
+   *
+   * The session list is refreshed even when reopening fails: the folder may be on a disconnected
+   * drive, but the transcripts are Nova's own and are still worth showing.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadWorkspaceState().catch(() => null);
+      if (cancelled || !stored) return;
+      if (stored.recentRoots?.length) setRecentRoots(stored.recentRoots);
+      if (stored.mode) setModeState(stored.mode);
+      if (stored.sandbox !== undefined) setSandbox(stored.sandbox);
+      if (!stored.lastRoot) return;
+      setPathDraft(stored.lastRoot);
+      await refreshSessions(stored.lastRoot).catch(() => undefined);
+      if (!cancelled) await openProjectAt(stored.lastRoot, { silent: true, ...(stored.mode ? { mode: stored.mode } : {}) });
+    })();
+    return () => { cancelled = true; };
+    // Once, on mount: this is a restore, not a subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function openProjectAt(folder: string, options: { silent?: boolean; mode?: NovaMode } = {}) {
     const trimmed = folder.trim();
+    // The mode is passed rather than read from state when the caller has just set it: a state
+    // setter does not change the value this closure already captured, so restoring "auto" on launch
+    // and then opening the project here would open the session in the previous mode — the UI would
+    // read auto while the agent asked for approval on every write.
+    const openMode = options.mode ?? mode;
     if (!trimmed || openingRef.current) return;
     openingRef.current = true;
     setError(null);
@@ -160,7 +224,7 @@ export function ChatScreen(props: {
     try {
       await ensureSidecar();
       await setSettings(props.settings);
-      const opened = await openSession(trimmed, mode, sandbox, sandbox && upload);
+      const opened = await openSession(trimmed, openMode, sandbox, sandbox && upload);
       setRoot(trimmed);
       setPathDraft(trimmed);
       setSessionId(opened.sessionId);
@@ -171,10 +235,42 @@ export function ChatScreen(props: {
       // A newly opened session starts from an empty transcript, not the previous project's.
       setChat({ ...initialChatState(), messages: [{ id: "sys", role: "system", content: `Opened ${opened.workspace} · ${opened.provider}/${opened.model}` }] });
       await refreshSessions(trimmed);
+      await rememberWorkspace(trimmed, openMode);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // A restore failing is not the user's action failing: the folder may simply have moved since
+      // last launch, and shouting about it on every launch would be worse than starting quietly.
+      if (!options.silent) setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+      openingRef.current = false;
+    }
+  }
+
+  /**
+   * Opens a session with no project folder. Returns the root it landed in, or null if it failed.
+   *
+   * Deliberately not silent: the transcript says which directory it landed in, because a file
+   * written during a scratch chat is a real file and "where did that go" is the question that
+   * follows otherwise.
+   */
+  async function openScratchProject(): Promise<string | null> {
+    if (openingRef.current) return null;
+    openingRef.current = true;
+    setError(null);
+    try {
+      await ensureSidecar();
+      await setSettings(props.settings);
+      const opened = await openScratchSession(mode);
+      setRoot(opened.root);
+      setPathDraft(opened.root);
+      setSessionId(opened.sessionId);
+      if (opened.provider && opened.model) setActive({ provider: opened.provider as ProviderId, model: opened.model });
+      addSystemMessage(`No project open — using a scratch workspace at ${opened.root}. Open a folder any time to switch.`);
+      return opened.root;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return null;
+    } finally {
       openingRef.current = false;
     }
   }
@@ -200,6 +296,7 @@ export function ChatScreen(props: {
       await setMode(next);
       setModeState(next);
       addSystemMessage(`Mode → ${next}`);
+      void rememberWorkspace(root, next);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -209,10 +306,15 @@ export function ChatScreen(props: {
 
   async function handleSend() {
     if (!draft.trim() || busy) return;
-    if (!root) {
-      setError("Open a project folder first (Browse… or paste a path and press Open).");
-      return;
-    }
+    // No project open is no longer a refusal. Asking a question is not the same act as working on a
+    // repository — "how do I write this migration" needs no folder — and the app used to answer that
+    // with an error telling the reader to go and open something first. A scratch session is opened
+    // on demand instead, and says where it put itself so the directory is not a surprise later.
+    // The opener returns the root rather than relying on `root` having updated: a state setter does
+    // not change the value already captured by this closure, so reading `root` again below would
+    // still be null on the very turn that created the scratch session.
+    const activeRoot = root ?? await openScratchProject();
+    if (!activeRoot) return;
     const objective = draft.trim();
     setDraft("");
     setBusy(true);
@@ -225,7 +327,7 @@ export function ChatScreen(props: {
       setWarning(cost.warning);
       const todoState = await getTodos();
       setTodos(todoState.todos);
-      await refreshSessions(root);
+      await refreshSessions(activeRoot);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -328,12 +430,41 @@ export function ChatScreen(props: {
       </header>
 
       <div className="workspace">
-        <SessionList
-          sessions={sessions}
-          activeId={sessionId}
-          onResume={handleResume}
-          onRefresh={() => root && refreshSessions(root)}
-        />
+        <div className="side-stack">
+          {/* Projects opened before. Past conversations live under a project root, so without a way
+              back to the root there is no way back to the conversation — the session list alone
+              could only ever show whatever happened to be open. */}
+          {recentRoots.length > 0 ? (
+            <section className="recent-projects" aria-label="Recent projects">
+              <h2>Recent projects</h2>
+              <ul>
+                {recentRoots.map((entry) => (
+                  <li key={entry}>
+                    <button
+                      type="button"
+                      className={`recent-project${entry === root ? " current" : ""}`}
+                      title={entry}
+                      disabled={busy}
+                      onClick={() => void openProjectAt(entry)}
+                    >
+                      {/* The folder name leads because that is what a person recognises; the full
+                          path stays available as a tooltip for two projects with the same name. */}
+                      <span className="recent-name">{entry.split("/").filter(Boolean).at(-1) ?? entry}</span>
+                      <span className="recent-path">{entry}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          <SessionList
+            sessions={sessions}
+            activeId={sessionId}
+            onResume={handleResume}
+            onRefresh={() => root && refreshSessions(root)}
+          />
+        </div>
 
         <section className="chat-main">
           <ModeBar
@@ -399,21 +530,20 @@ export function ChatScreen(props: {
               ref={composerRef}
               value={draft}
               aria-label="Message to Nova"
-              placeholder={root ? "Ask Nova to work in this project…" : "Type here — open a project to send"}
+              placeholder={root ? "Ask Nova to work in this project…" : "Ask Nova anything — open a project to work in one"}
               disabled={busy}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  void handleSend();
-                }
+                if (!sendsOnKey({ key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, isComposing: e.nativeEvent.isComposing })) return;
+                e.preventDefault();
+                void handleSend();
               }}
             />
             <div className="composer-side">
               <button className="btn primary" type="button" disabled={busy || !draft.trim()} onClick={handleSend}>
                 {busy ? "Working…" : "Send"}
               </button>
-              <kbd className="composer-hint">Ctrl ↵</kbd>
+              <kbd className="composer-hint">↵ send · ⇧↵ newline</kbd>
             </div>
           </div>
         </section>

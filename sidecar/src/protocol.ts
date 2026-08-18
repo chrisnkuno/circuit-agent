@@ -38,9 +38,15 @@ export type IpcRequest =
   | { id: string; type: "providers.describe" }
   | { id: string; type: "providers.verify"; settings: NovaSettings }
   | { id: string; type: "session.open"; root: string; mode?: NovaMode; sandbox?: boolean; upload?: boolean }
+  /** A session with no project folder, for chatting. See `openScratchSession`. */
+  | { id: string; type: "session.scratch"; mode?: NovaMode }
   | { id: string; type: "session.list"; root: string }
   | { id: string; type: "session.resume"; root: string; sessionId: string; mode?: NovaMode; sandbox?: boolean; upload?: boolean }
   | { id: string; type: "turn.send"; objective: string }
+  /** Durable memory, shared with the CLI — the same files, not a desktop-only copy. */
+  | { id: string; type: "memory.list" }
+  | { id: string; type: "memory.add"; scope: "project" | "user"; text: string; kind?: string }
+  | { id: string; type: "memory.forget"; scope: "project" | "user"; index: number }
   | { id: string; type: "mode.set"; mode: NovaMode }
   | { id: string; type: "model.set"; provider?: ProviderId; model: string }
   | { id: string; type: "approval.respond"; requestId: string; decision: PermissionDecision }
