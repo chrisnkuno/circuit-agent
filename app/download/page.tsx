@@ -107,8 +107,8 @@ export default async function DownloadPage() {
               <CopyCommand command="npm install -g @circuit-nova/nova-cli" />
             </div>
             <p className="dl-note">
-              Then run <code>nova "build me an app"</code>. Install command is a placeholder until the
-              CLI package is published.
+              Then run <code>nova &quot;build me an app&quot;</code>. Needs Node 22.5 or newer on
+              Windows, macOS or Linux.
             </p>
           </section>
 
