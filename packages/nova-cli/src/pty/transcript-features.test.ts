@@ -123,9 +123,15 @@ describe("what the transcript shows, under a real pty", () => {
 
   it("draws with ASCII only when the terminal is declared unable to do better", async () => {
     const p = boot({ args: ["--ascii"] });
-    // The prompt is drawn coloured, so "auto" and its caret are separated by escape codes even
-    // though they sit next to each other on screen.
-    await p.waitFor(/auto(?:\x1b\[[0-9;]*m)*\s*>/, { timeoutMs: 30_000 });
+    // Waits for the input bar, which is the last thing drawn — assert any earlier and the banner
+    // may not have finished printing, so "no non-ASCII yet" would mean "not yet drawn".
+    //
+    // It waits on the *bar*, not on "auto >", because the prompt has not looked like that since the
+    // input line gained a box: the mode moved to the status line and the caret now sits inside a
+    // frame, as `| >`. The old pattern could therefore never match, and the test timed out for
+    // thirty seconds before failing — reported as a broken ASCII mode when ASCII mode was fine.
+    // Both cells are coloured separately, hence the escapes between them.
+    await p.waitFor(/\|(?:\x1b\[[0-9;]*m)*\s*(?:\x1b\[[0-9;]*m)*>/, { timeoutMs: 30_000 });
     const banner = p.output();
     // Nothing above the ASCII range reaches a terminal that asked for ASCII.
     const nonAscii = [...new Set([...banner].filter((character) => (character.codePointAt(0) ?? 0) > 127))];
