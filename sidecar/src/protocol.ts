@@ -87,6 +87,7 @@ export type IpcRequest =
   | ({ id: string; type: "todos.get" } & TabScoped)
   | ({ id: string; type: "scan.secrets"; include?: string } & TabScoped)
   | ({ id: string; type: "files.list"; pattern?: string } & TabScoped)
+  | ({ id: string; type: "files.read"; path: string; limit?: number } & TabScoped)
   | ({ id: string; type: "sandbox.pull"; dest?: string } & TabScoped)
   | { id: string; type: "dispose" };
 

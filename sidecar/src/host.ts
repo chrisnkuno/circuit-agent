@@ -209,6 +209,11 @@ export class NovaHost {
         // Through the workspace, so a sandboxed session lists the sandbox's files and not this
         // machine's. Read-only and free, like the scan.
         return { files: (await this.maybeSlot(request.tabId)?.client.listFiles(request.pattern)) ?? [] };
+      case "files.read":
+        // Read-only and free, like `files.list` above, and through the workspace for the same
+        // reason: a sandboxed session must show the file the agent is actually working on, which
+        // is the sandbox's copy and not this machine's.
+        return { file: await this.maybeSlot(request.tabId)?.client.readFile(request.path, request.limit ? { limit: request.limit } : {}) };
       case "scan.secrets":
         // Deterministic and read-only, so it runs without a model turn and without an approval —
         // the same guarantee the `scan_secrets` tool carries, reached directly.
