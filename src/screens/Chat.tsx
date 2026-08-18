@@ -10,6 +10,7 @@ import { ScanPanel } from "../components/ScanPanel";
 import { GuidePanel } from "../components/GuidePanel";
 import { FilePanel } from "../components/FilePanel";
 import { sendsOnKey } from "../lib/composer";
+import { STARTERS, projectName, shouldShowStarters } from "../lib/starters";
 import { shouldFollow } from "../lib/transcript";
 import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
 import {
@@ -67,6 +68,8 @@ import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../
  * adopts the sidecar's id once there is one to adopt.
  */
 const LOCAL_TAB_ID = "local";
+
+
 
 export function ChatScreen(props: {
   settings: NovaSettings;
@@ -739,6 +742,37 @@ export function ChatScreen(props: {
               {messages.map((message) => (
                 <Message key={message.id} role={message.role} content={message.content} streaming={message.id === "streaming"} />
               ))}
+              {/*
+                * A project open and nothing asked yet.
+                *
+                * The transcript at this point held one line — "Opened /path · provider/model" —
+                * above an empty screen the height of the window, which tells a first-time reader
+                * nothing about what to ask for. The suggestions are deliberately about the project
+                * in front of them rather than generic prompts, and they fill the composer instead
+                * of sending, so the first message is still theirs to edit.
+                */}
+              {root && shouldShowStarters({ root, messageCount: messages.length, busy }) ? (
+                <div className="empty-state starters">
+                  <h2>Ready in {projectName(root)}</h2>
+                  <p>Ask for a change, or for an explanation. Nova reads the project before it answers.</p>
+                  <div className="starter-list">
+                    {STARTERS.map((starter) => (
+                      <button
+                        key={starter}
+                        className="btn ghost starter"
+                        type="button"
+                        onClick={() => { setDraft(starter); composerRef.current?.focus(); }}
+                      >
+                        {starter}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="starter-foot">
+                    Every edit and command asks first in Build mode.{" "}
+                    <button className="btn ghost tiny" type="button" onClick={() => setShowGuide(true)}>Read the guide</button>
+                  </p>
+                </div>
+              ) : null}
               {error ? (
                 <div className="notice danger" role="alert">
                   <strong>Something went wrong</strong>

@@ -1818,3 +1818,32 @@ button {
   .guide-panes { grid-template-columns: 1fr; }
   .guide-list { max-height: 180px; }
 }
+
+/* Starters — see the empty transcript in screens/Chat.tsx. Full-width rows rather than chips: a
+   suggestion is a sentence, and a sentence wrapped inside a pill is harder to read than one on a
+   line of its own. */
+.empty-state.starters { padding: var(--s5) 0; max-width: 34rem; }
+.starter-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  width: 100%;
+  margin-top: var(--s2);
+}
+.starter {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  min-height: 2.25rem;
+  white-space: normal;
+  color: var(--text);
+}
+.starter-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  margin-top: var(--s3);
+}
