@@ -17,6 +17,7 @@ export type ShortcutAction =
   | "settings"
   | "models"
   | "files"
+  | "guide"
   | "plan"
   | "build"
   | "auto"
@@ -51,6 +52,7 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { action: "files", label: "Browse and read the project's files", keys: "Ctrl P" },
   { action: "undo", label: "Undo the last turn", keys: "Ctrl Z" },
   { action: "settings", label: "Open settings", keys: "Ctrl ," },
+  { action: "guide", label: "Open the guide", keys: "F1" },
   { action: "tab-new", label: "New tab — a second piece of work, running at the same time", keys: "Ctrl T" },
   { action: "tab-close", label: "Close this tab", keys: "Ctrl W" },
   { action: "tab-next", label: "Next tab", keys: "Ctrl ⇥" },
@@ -77,6 +79,9 @@ export function matchShortcut(event: ShortcutEvent): ShortcutAction | undefined 
   const mod = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
 
+  // F1 needs no modifier and is claimed even while typing: it is not a character on any layout,
+  // and "how does this work" is a question people have precisely while mid-sentence.
+  if (key === "f1") return "guide";
   if (key === "escape") return event.typing ? undefined : "stop";
   if (key === "enter" && mod) return "send";
 
