@@ -156,12 +156,16 @@ export default function App() {
   }, []);
 
   async function handleSave(next: NovaSettings) {
-    await savePersistedSettings(next);
+    // Ensure the sidecar is running before validation.
     if (!sidecarReady) {
       await ensureSidecar();
       setSidecarReady(true);
     }
+    // Push settings to the sidecar — this validates the API key.
+    // If the key is invalid the sidecar throws and we stay on the Settings screen.
     await pushSettings(next);
+    // Only persist after validation passes.
+    await savePersistedSettings(next);
     setSettings(next);
     setBootError(null);
     setShowSettings(false);
