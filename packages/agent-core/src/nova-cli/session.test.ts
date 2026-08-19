@@ -5,11 +5,16 @@ import path from "node:path";
 import type { AgentMessage } from "../agent-runtime";
 import { CheckpointStore, runGit, type GitRunner } from "./checkpoints";
 import {
+  atSafeBoundary,
   buildCompactedMessages,
+  COMPACTION_INSTRUCTION,
+  compactionUrgency,
   listSessions,
   loadSession,
   newSessionId,
   planCompaction,
+  STANDING_CONSTRAINTS_HEADING,
+  standingConstraintsBlock,
   saveSession,
   titleFromObjective,
   type SessionRecord,
@@ -146,6 +151,90 @@ describe("context compaction", () => {
     expect(rebuilt[1].content).toContain("[Earlier conversation, summarized]");
     expect(rebuilt[1].content).toContain("tests pass");
     expect(rebuilt[2]).toEqual({ role: "user", content: "recent" });
+  });
+
+  it("grades pressure in three bands, and only the top one compacts mid-task", () => {
+    const fits: AgentMessage[] = [{ role: "system", content: "sys" }, { role: "user", content: "hi" }];
+    const budgets = { contextLimit: 10_000, outputBudget: 1_000 };
+    // Grown a little at a time rather than guessed at, so the fixtures land in the intended band
+    // whatever the token estimator's constants happen to be.
+    const grow = (until: "advisable" | "required"): AgentMessage[] => {
+      const messages: AgentMessage[] = [{ role: "system", content: "sys" }, { role: "user", content: "go" }];
+      while (compactionUrgency(messages, budgets) !== until) {
+        if (messages.length > 500) throw new Error(`never reached ${until}`);
+        messages.push({ role: "assistant", content: `turn${messages.length} ${"word ".repeat(50)}` });
+      }
+      return messages;
+    };
+    const filling = grow("advisable");
+    const full = grow("required");
+
+    expect(compactionUrgency(fits, budgets)).toBe("none");
+    expect(compactionUrgency(filling, budgets)).toBe("advisable");
+    expect(compactionUrgency(full, budgets)).toBe("required");
+
+    // Advisable is a boundary decision; required is not a decision at all.
+    expect(planCompaction(filling, { ...budgets, keepRecent: 2, boundary: "mid-task" })).toBeNull();
+    expect(planCompaction(filling, { ...budgets, keepRecent: 2, boundary: "safe" })).not.toBeNull();
+    expect(planCompaction(full, { ...budgets, keepRecent: 2, boundary: "mid-task" })).not.toBeNull();
+  });
+
+  it("calls a concluded turn a safe boundary, and anything unfinished not one", () => {
+    const concluded: AgentMessage[] = [{ role: "user", content: "go" }, { role: "assistant", content: "Done." }];
+    const suspended: AgentMessage[] = [{ role: "user", content: "go" }, { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: {} }] }];
+    const awaitingResult: AgentMessage[] = [...suspended, { role: "tool", content: "x", toolCallId: "c1", name: "read_file" }];
+
+    expect(atSafeBoundary(concluded)).toBe(true);
+    expect(atSafeBoundary(suspended)).toBe(false);
+    expect(atSafeBoundary(awaitingResult)).toBe(false);
+    expect(atSafeBoundary([])).toBe(false);
+    // A plan the agent believes it is halfway through is mid-task wherever the turn ended.
+    expect(atSafeBoundary(concluded, { workInProgress: true })).toBe(false);
+  });
+
+  it("restates the governing facts verbatim rather than leaving them to the summary", () => {
+    const constraints = {
+      mode: "build",
+      objective: "Migrate the billing module, and never touch the production database",
+      approvals: { "run_command:bun test": "allow" as const, "run_command:rm -rf /": "deny" as const },
+      openTodos: ["port the invoice tests"],
+    };
+    const block = standingConstraintsBlock(constraints);
+
+    expect(block.startsWith(STANDING_CONSTRAINTS_HEADING)).toBe(true);
+    expect(block).toContain("Permission mode: build");
+    expect(block).toContain("never touch the production database");
+    expect(block).toContain("run_command:bun test");
+    expect(block).toContain("run_command:rm -rf /");
+    expect(block).toContain("port the invoice tests");
+  });
+
+  it("survives repeated compaction: the constraints are rebuilt from state, never from the last summary", () => {
+    const constraints = {
+      mode: "auto",
+      objective: "Refactor the parser",
+      approvals: { "write_file:src/parser.ts": "allow" as const },
+      openTodos: [],
+    };
+    const plan = { toSummarize: [{ role: "system" as const, content: "sys" }, { role: "user" as const, content: "old" }], toKeep: [{ role: "user" as const, content: "recent" }] };
+
+    let messages = buildCompactedMessages("first summary", plan, constraints);
+    for (let round = 0; round < 5; round += 1) {
+      // Each round summarizes away everything the previous round produced, which is precisely how a
+      // constraint that lives only inside a summary disappears. Rebuilt from state, it cannot.
+      messages = buildCompactedMessages(`summary ${round} of a transcript that mentions no rules`, { toSummarize: messages, toKeep: [] }, constraints);
+      expect(messages.some((message) => message.content.includes("write_file:src/parser.ts"))).toBe(true);
+      expect(messages.some((message) => message.content.includes("Permission mode: auto"))).toBe(true);
+    }
+    // Constraints lead: they are what the model reasons within, not one more historical detail.
+    const constraintIndex = messages.findIndex((message) => message.content.startsWith(STANDING_CONSTRAINTS_HEADING));
+    const summaryIndex = messages.findIndex((message) => message.content.startsWith("[Earlier conversation, summarized]"));
+    expect(constraintIndex).toBeLessThan(summaryIndex);
+  });
+
+  it("asks the summarizer to reproduce standing instructions rather than condense them", () => {
+    expect(COMPACTION_INSTRUCTION).toMatch(/verbatim/);
+    expect(COMPACTION_INSTRUCTION).toMatch(/prohibition/);
   });
 });
 

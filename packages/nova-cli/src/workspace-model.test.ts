@@ -3,6 +3,7 @@ import { NO_COLOR_PALETTE } from "./theme";
 import type { TabView } from "./tabs";
 import {
   WORKSPACE_LEGEND,
+  PaneActivity,
   applyAction,
   composeFrame,
   atLiveEdge,
@@ -266,5 +267,67 @@ describe("the frame", () => {
     const bar = composeFrame(snapshot(panes, { selected: 4, columns: 32 }))[0].text;
     expect(bar).toContain("5 pane-4");
     expect(visibleWidth(bar)).toBeLessThanOrEqual(32);
+  });
+});
+
+describe("pane activity", () => {
+  const pane = (key: string, lines: number, dropped = 0) => ({ key, lines: Array.from({ length: lines }, (_, index) => `${index}`), dropped });
+
+  it("measures the rate between frames, not the total", () => {
+    const activity = new PaneActivity();
+    activity.sample([pane("1", 10)]);
+    activity.sample([pane("1", 14)]);
+    const third = activity.sample([pane("1", 14)]);
+    expect(third.get("1")).toEqual([4, 0]);
+  });
+
+  it("draws no spike for a pane it is seeing for the first time", () => {
+    const activity = new PaneActivity();
+    expect(activity.sample([pane("1", 500)]).get("1")).toEqual([]);
+  });
+
+  it("counts lines that fell off the log, so the busiest pane does not read as idle", () => {
+    const activity = new PaneActivity();
+    activity.sample([pane("1", 100, 0)]);
+    // The log stayed full at 100 lines while 50 more were produced and dropped off the front.
+    const next = activity.sample([pane("1", 100, 50)]);
+    expect(next.get("1")).toEqual([50]);
+  });
+
+  it("forgets a pane that closed rather than carrying its history onto a new one", () => {
+    const activity = new PaneActivity();
+    activity.sample([pane("1", 10), pane("2", 10)]);
+    activity.sample([pane("1", 20)]);
+    const reopened = activity.sample([pane("1", 30), pane("2", 999)]);
+    expect(reopened.get("1")).toEqual([10, 10]);
+    expect(reopened.get("2")).toEqual([]);
+  });
+
+  it("keeps a bounded window of samples", () => {
+    const activity = new PaneActivity(5);
+    for (let frame = 0; frame <= 20; frame += 1) activity.sample([pane("1", frame)]);
+    expect(activity.sample([pane("1", 21)]).get("1")).toHaveLength(5);
+  });
+
+  it("puts the waveline on the header only when there is something to show", () => {
+    const base = {
+      panes: [{ kind: "tab" as const, key: "1", title: "main", subtitle: "opus", status: "running" as const, lines: ["a"], dropped: 0 }],
+      selected: 0, scroll: 0, palette: NO_COLOR_PALETTE, columns: 100, rows: 12,
+    };
+    const quiet = composeFrame(base);
+    const busy = composeFrame({ ...base, panes: [{ ...base.panes[0], activity: [0, 4, 9, 2, 0, 7] }] });
+
+    expect(quiet[1].text).not.toMatch(/[╱╲▁▔─]/);
+    expect(busy[1].text).toMatch(/[╱╲▁▔─]/);
+    // The header is still one row and still clipped to the terminal.
+    expect(busy[1].text.length).toBeLessThanOrEqual(100);
+  });
+
+  it("leaves the waveline off a terminal too narrow to hold both it and the title", () => {
+    const narrow = composeFrame({
+      panes: [{ kind: "tab", key: "1", title: "a rather long pane title here", subtitle: "claude-opus-5 · sandbox", status: "running", lines: ["a"], dropped: 0, activity: [1, 2, 3, 4] }],
+      selected: 0, scroll: 0, palette: NO_COLOR_PALETTE, columns: 56, rows: 12,
+    });
+    expect(narrow[1].text).not.toMatch(/[╱╲]/);
   });
 });

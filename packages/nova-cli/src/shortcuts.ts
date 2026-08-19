@@ -2,6 +2,8 @@ import type { Interface } from "node:readline/promises";
 import { KeyBindingRegistry, type KeypressEvent } from "./keybindings";
 import { paletteEntries, runCommandPalette, type PaletteKey, type RunPaletteOptions } from "./palette";
 import { runModelPicker, type PickerResult, type RunModelPickerOptions } from "./model-picker";
+import { runDefenderTriage, type DefenderOutcome, type RunDefenderOptions } from "./defender-screen";
+import type { PlacedSecretFinding } from "@circuit-nova/nova-core/nova-cli/tools";
 import { runChooser, type ChooserItem, type ChooserPaint, type RunChooserOptions } from "./chooser";
 import { runTable, type RunTableOptions, type TableRow } from "./table";
 import { rowsOccupied } from "./tui";
@@ -175,6 +177,28 @@ export async function openPalette(host: ShortcutHost, self?: unknown, options: R
     getSize: options.getSize ?? (() => ({ width: host.output.columns ?? 80, height: Math.max(1, (host.output.rows ?? 24) - 3) })),
   };
   return withBorrowedKeyboard(host, self, (keys, paint) => runCommandPalette(keys, paletteEntries(chords), paint, sized));
+}
+
+/**
+ * The defender triage screen over the same borrowed keyboard.
+ *
+ * Returns the decisions rather than acting on them: what the user asked to have fixed becomes the
+ * caller's next turn, once the screen has given the terminal back. Starting a model turn under a
+ * full-screen surface would print into a frame that is about to be erased.
+ */
+export async function openDefenderTriage(
+  host: KeyboardHost,
+  findings: readonly PlacedSecretFinding[],
+  options: Omit<RunDefenderOptions, "width" | "rows"> & { width?: number; rows?: number },
+  self?: unknown,
+): Promise<DefenderOutcome> {
+  const sized: RunDefenderOptions = {
+    width: options.width ?? host.output.columns ?? 80,
+    rows: options.rows ?? Math.max(12, (host.output.rows ?? 24) - 2),
+    ...options,
+    getSize: options.getSize ?? (() => ({ width: host.output.columns ?? 80, height: Math.max(12, (host.output.rows ?? 24) - 2) })),
+  };
+  return withBorrowedKeyboard(host, self, (keys, paint) => runDefenderTriage(keys, findings, paint, sized));
 }
 
 /**

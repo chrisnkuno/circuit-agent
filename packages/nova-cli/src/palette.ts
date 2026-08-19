@@ -153,14 +153,14 @@ export function advancePalette(
   entries: readonly PaletteEntry[],
   input: PaletteKey,
   /** Only `rows` is read, and only to size a page jump — the window height the user can actually see. */
-  options: Pick<PaletteOptions, "rows"> = {},
+  options: Pick<PaletteOptions, "rows"> & Pick<RunPaletteOptions, "rank"> = {},
 ): {
   state: PaletteState;
   /** Set once the interaction is over: the chosen command, or undefined when dismissed. */
   done?: { command?: string };
 } {
   const name = input.key.name;
-  const matches = rankPaletteEntries(entries, state.query);
+  const matches = (options.rank ?? rankPaletteEntries)(entries, state.query);
 
   if (name === "escape" || (input.key.ctrl && (name === "c" || name === "g"))) return { state, done: {} };
   if (name === "return" || name === "enter") {
@@ -218,6 +218,15 @@ export type RunPaletteOptions = PaletteOptions & {
   onDismiss?: (query: string) => void;
   /** Re-read before every frame so a live terminal resize cannot leave stale geometry behind. */
   getSize?: () => { width?: number; height?: number };
+  /**
+   * How matches are ordered. Defaults to the literal tiers below.
+   *
+   * Injected rather than hardcoded so a session can rank by *its own* situation — what it just
+   * changed, what it has already run — without this module having to know that a session exists.
+   * A ranker that breaks the tiers would break the palette's trustworthiness, which is why the
+   * context-aware one in `navigation.ts` only reorders entries that already tie.
+   */
+  rank?: (entries: readonly PaletteEntry[], query: string) => PaletteEntry[];
 };
 
 export async function runCommandPalette(
@@ -232,7 +241,8 @@ export async function runCommandPalette(
     const rows = Math.max(1, Math.min(options.rows ?? 8, size?.height ?? Number.POSITIVE_INFINITY));
     return { ...options, width: size?.width ?? options.width, rows };
   };
-  paint(renderPalette({ query: state.query, matches: rankPaletteEntries(entries, state.query), selected: state.selected }, liveOptions()));
+  const rank = options.rank ?? rankPaletteEntries;
+  paint(renderPalette({ query: state.query, matches: rank(entries, state.query), selected: state.selected }, liveOptions()));
 
   for await (const input of keys) {
     const step = advancePalette(state, entries, input, liveOptions());
@@ -241,7 +251,7 @@ export async function runCommandPalette(
       if (step.done.command === undefined) options.onDismiss?.(state.query);
       return step.done.command;
     }
-    paint(renderPalette({ query: state.query, matches: rankPaletteEntries(entries, state.query), selected: state.selected }, liveOptions()));
+    paint(renderPalette({ query: state.query, matches: rank(entries, state.query), selected: state.selected }, liveOptions()));
   }
   return undefined;
 }

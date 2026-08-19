@@ -399,13 +399,14 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       async execute(args) {
         if (Array.isArray(args.items)) {
           const texts = args.items.map((item, index) => requiredString(item, `items[${index}]`));
-          return { content: renderTodos(todos.replace(texts)) };
+          const replaced = todos.replace(texts);
+          return { content: renderTodos(replaced), data: { items: replaced } };
         }
         // Both in one call, and both tolerant of a single id: a model that passes `complete: 2`
         // should not be punished with an error it has to spend another round trip recovering from.
         const complete = idList(args.complete, "complete");
         const start = idList(args.start, "start");
-        if (complete.length === 0 && start.length === 0) return { content: renderTodos(todos.list()) };
+        if (complete.length === 0 && start.length === 0) return { content: renderTodos(todos.list()), data: { items: todos.list() } };
 
         // Saying so is cheaper than letting the model discover it by re-reading an identical list,
         // which is exactly the loop that made this the most-called tool in every measured run.
@@ -418,7 +419,10 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const warning = unknownIds.size > 0
           ? `No todo with id ${[...unknownIds].join(", ")} — it may be from an earlier list. Current ids are shown below.\n`
           : "";
-        return { content: `${note}${warning}${renderTodos(updated.items)}` };
+        // The same plan as values, not only as prose: a front end showing "4/9 done" must not have
+        // to parse the checklist it is rendering, and a golden-event suite must not break because a
+        // checkbox glyph changed.
+        return { content: `${note}${warning}${renderTodos(updated.items)}`, data: { items: updated.items } };
       },
     },
     {
@@ -430,7 +434,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       requiresApproval: false,
       parallelSafe: true,
       async execute() {
-        return { content: renderTodos(todos.list()) };
+        return { content: renderTodos(todos.list()), data: { items: todos.list() } };
       },
     },
   ];

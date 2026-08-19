@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barChart, heatStrip, lineChart } from "./charts";
+import { barChart, heatStrip, lineChart, plotSeries, scatterChart, StreamSeries, waveLine } from "./charts";
 import { ASCII_GLYPHS } from "./glyphs";
 import { visibleWidth } from "./markdown";
 
@@ -156,5 +156,110 @@ describe("heatStrip", () => {
     for (const row of heatStrip(findings, { width: 30, depth: "none", glyphs: ASCII_GLYPHS })) {
       for (const character of row) expect(character.codePointAt(0)).toBeLessThan(128);
     }
+  });
+});
+
+describe("scatter plots", () => {
+  const options = { width: 24, height: 4, depth: "none" as const };
+
+  it("returns exactly the block it was asked for, whatever the data", () => {
+    for (const points of [[], [{ x: 1, y: 1 }], [{ x: 0, y: 0 }, { x: 10, y: 10 }], [{ x: 3, y: 7 }, { x: 3, y: 7 }]]) {
+      const rendered = scatterChart(points, options);
+      expect(rendered).toHaveLength(4);
+    }
+  });
+
+  it("places the extremes in opposite corners", () => {
+    const rendered = scatterChart([{ x: 0, y: 0 }, { x: 100, y: 100 }], { ...options, bare: true });
+    expect(rendered[0].trimEnd().length).toBe(rendered[0].length); // the top row ends with ink
+    expect(rendered.at(-1)!.startsWith("⠀")).toBe(false);
+  });
+
+  it("does not connect its points — that is what a line chart is for", () => {
+    const scattered = scatterChart([{ x: 0, y: 0 }, { x: 10, y: 10 }], { ...options, bare: true });
+    const lined = lineChart([0, 10], { ...options, bare: true });
+    const ink = (rows: readonly string[]) => rows.join("").split("").filter((cell) => cell !== "⠀").length;
+    expect(ink(scattered)).toBeLessThan(ink(lined));
+  });
+
+  it("ignores points that are not numbers", () => {
+    expect(scatterChart([{ x: Number.NaN, y: 1 }, { x: 1, y: Number.POSITIVE_INFINITY }], options).join("").trim()).toBe("");
+  });
+});
+
+describe("wave lines", () => {
+  it("is exactly one row, exactly the requested width", () => {
+    for (const width of [1, 8, 40]) {
+      const wave = waveLine([1, 5, 2, 8, 3], { width });
+      expect(wave.includes("\n")).toBe(false);
+      expect([...wave]).toHaveLength(width);
+    }
+  });
+
+  it("shows direction: a rising series slopes up and a falling one slopes down", () => {
+    const rising = waveLine([0, 1, 2, 3, 4, 5, 6, 7], { width: 8 });
+    const falling = waveLine([7, 6, 5, 4, 3, 2, 1, 0], { width: 8 });
+    expect(rising).toContain("╱");
+    expect(falling).toContain("╲");
+  });
+
+  it("stays level for a steady series rather than shimmering between runes", () => {
+    const flat = waveLine([5, 5, 5, 5, 5, 5], { width: 6 });
+    expect(new Set([...flat]).size).toBe(1);
+  });
+
+  it("has an ASCII form for terminals that cannot draw the runes", () => {
+    const wave = waveLine([0, 5, 1, 6], { width: 12, glyphs: ASCII_GLYPHS });
+    expect(/^[-_^/\\]+$/.test(wave)).toBe(true);
+  });
+
+  it("renders nothing for a series with nothing in it", () => {
+    expect(waveLine([], { width: 10 })).toBe("");
+    expect(waveLine([Number.NaN], { width: 10 })).toBe("");
+  });
+});
+
+describe("streaming series", () => {
+  it("keeps the most recent samples, oldest first, and never grows past its capacity", () => {
+    const stream = new StreamSeries(4);
+    for (const value of [1, 2, 3, 4, 5, 6]) stream.push(value);
+    expect(stream.values()).toEqual([3, 4, 5, 6]);
+    expect(stream.length).toBe(4);
+  });
+
+  it("holds an unfilled window without padding it", () => {
+    const stream = new StreamSeries(5);
+    stream.push(1);
+    stream.push(2);
+    expect(stream.values()).toEqual([1, 2]);
+  });
+
+  it("refuses samples that are not numbers, and a capacity that is not a size", () => {
+    const stream = new StreamSeries(3);
+    stream.push(Number.NaN);
+    stream.push(Number.POSITIVE_INFINITY);
+    expect(stream.values()).toEqual([]);
+    expect(() => new StreamSeries(0)).toThrow();
+    expect(() => new StreamSeries(1.5)).toThrow();
+  });
+
+  it("hands a snapshot to the caller, not its own buffer", () => {
+    const stream = new StreamSeries(3);
+    stream.push(1);
+    const snapshot = stream.values();
+    snapshot.push(99);
+    expect(stream.values()).toEqual([1]);
+  });
+});
+
+describe("several series at once", () => {
+  it("scales them together, so two series drawn side by side are comparable", () => {
+    const together = plotSeries([{ values: [0, 1, 2] }, { values: [0, 50, 100] }], { width: 20, height: 4, depth: "none", bare: true });
+    const alone = plotSeries([{ values: [0, 1, 2] }], { width: 20, height: 4, depth: "none", bare: true });
+    // Against a neighbour reaching 100, the small series is a flat line near the bottom; alone it
+    // spans the whole height. Same data, different meaning — which is the point of a shared scale.
+    const rowsWithInk = (rows: readonly string[]) => rows.filter((row) => [...row].some((cell) => cell !== "⠀")).length;
+    expect(rowsWithInk(alone)).toBeGreaterThan(1);
+    expect(rowsWithInk(together)).toBeGreaterThanOrEqual(rowsWithInk(alone));
   });
 });

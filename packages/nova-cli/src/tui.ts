@@ -44,24 +44,45 @@ export class Spinner {
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
 
+  private delay: ReturnType<typeof setTimeout> | undefined;
+
   constructor(
     private readonly onTick: () => void,
     private readonly intervalMs = 120,
     private readonly glyphs: GlyphSet = UNICODE_GLYPHS,
+    /**
+     * How long an operation must last before it is worth animating.
+     *
+     * Zero renders immediately, which is right when the caller knows the wait is real. A short
+     * delay is right when it does not: an operation that finishes in 40ms draws a spinner frame
+     * and erases it, and a run of those reads as flicker rather than as feedback — the thing the
+     * spinner exists to prevent. 200ms is the usual threshold, and is below what a person
+     * perceives as a pause.
+     */
+    private readonly delayMs = 0,
   ) {}
 
   start(): void {
-    if (this.timer) return;
-    // Render immediately. Waiting one interval makes short operations look as though the CLI
-    // froze and then recovered, which is precisely the uncertainty a spinner is meant to remove.
-    this.onTick();
-    this.timer = setInterval(() => {
-      this.frame = (this.frame + 1) % this.glyphs.spinnerFrames.length;
+    if (this.timer || this.delay) return;
+    const begin = () => {
+      this.delay = undefined;
       this.onTick();
-    }, this.intervalMs);
+      this.timer = setInterval(() => {
+        this.frame = (this.frame + 1) % this.glyphs.spinnerFrames.length;
+        this.onTick();
+      }, this.intervalMs);
+    };
+    if (this.delayMs <= 0) begin();
+    else this.delay = setTimeout(begin, this.delayMs);
   }
 
   stop(): void {
+    // A spinner stopped inside its own start delay never drew anything; cancelling the pending
+    // start is what makes that true, and is the whole point of the delay.
+    if (this.delay) {
+      clearTimeout(this.delay);
+      this.delay = undefined;
+    }
     if (!this.timer) return;
     clearInterval(this.timer);
     this.timer = undefined;
@@ -264,6 +285,14 @@ export type StatusFields = {
   phase?: ActivityPhase;
   /** Exact tool name while an operation is active; omitted during model reasoning. */
   operation?: string;
+  /**
+   * Countable progress through the agent's own plan, when it has one.
+   *
+   * Ranked above every other optional field except the mode: "4/9" is the only thing on the line
+   * that says whether the run is progressing, which is the question a person watching a long turn
+   * is actually asking.
+   */
+  steps?: { done: number; total: number; label?: string };
   /**
    * A standing mode marker — currently the spending pace.
    *
@@ -493,9 +522,43 @@ export function activityLabel(phase: ActivityPhase, operation: string | undefine
  * The elapsed time is the one field that survives every narrowing: it is the only one that answers
  * "is this still going", which is the question a status line exists for.
  */
+/**
+ * Countable work, counted: `3/8` rather than a spinner that says only "still going".
+ *
+ * A spinner answers one question — is it alive — and cannot answer the two that matter during a
+ * long run: how far along is it, and has it stalled. Whenever the work has steps that can be
+ * counted, X-of-Y is the right display and a spinner is a fallback, not a default. The bar is a
+ * rendering of the same two numbers and never appears without them, so the reader is never asked
+ * to estimate a fraction from a length.
+ *
+ * Out-of-range input is clamped rather than rejected: a progress display that throws is worse than
+ * one that shows `8/8` for a moment while a count catches up.
+ */
+export function stepProgress(
+  done: number,
+  total: number,
+  options: { label?: string; width?: number; depth: ColorDepth; glyphs?: GlyphSet; from?: Rgb; to?: Rgb },
+): string {
+  const safeTotal = Math.max(0, Math.floor(Number.isFinite(total) ? total : 0));
+  const safeDone = Math.max(0, Math.min(safeTotal, Math.floor(Number.isFinite(done) ? done : 0)));
+  const counted = `${safeDone}/${safeTotal}`;
+  const label = options.label ? `${options.label} ` : "";
+  if (safeTotal === 0) return `${label}${counted}`;
+  const width = Math.floor(options.width ?? 0);
+  if (width <= 0) return `${label}${counted}`;
+  const bar = progressBar(safeDone / safeTotal, width, {
+    depth: options.depth,
+    glyphs: options.glyphs ?? UNICODE_GLYPHS,
+    ...(options.from ? { from: options.from } : {}),
+    ...(options.to ? { to: options.to } : {}),
+  });
+  return `${label}${counted} ${bar}`;
+}
+
 export function formatStatusLine(fields: StatusFields, width: number, depth: ColorDepth, glyphs: GlyphSet = UNICODE_GLYPHS): string {
   const label = activityLabel(fields.phase ?? "thinking", fields.operation, fields.elapsedMs);
   const ellipsis = glyphs.ellipsis;
+  const separator = ` ${glyphs.middot} `;
   const left = `${fields.spinnerGlyph} ${label}${ellipsis}`;
   const paintedLeft = `${paint(fields.spinnerGlyph, CYAN, depth)} ${paint(`${label}${ellipsis}`, DIM, depth)}`;
 
@@ -505,12 +568,16 @@ export function formatStatusLine(fields: StatusFields, width: number, depth: Col
     fields.tokens > 0 ? formatTokens(fields.tokens) : "",
     fields.toolCalls > 0 ? `${fields.toolCalls} tool${fields.toolCalls === 1 ? "" : "s"}` : "",
     fields.badge ?? "",
+    fields.steps && fields.steps.total > 0 ? stepProgress(fields.steps.done, fields.steps.total, { label: fields.steps.label ?? "steps", depth: "none" }) : "",
     fields.mode,
   ].filter((segment) => segment !== "");
 
   let kept = [...optional].reverse(); // most important first, as they read left to right
   for (;;) {
-    const right = [...kept, formatElapsed(fields.elapsedMs)].join(" · ");
+    // The terminal's own separator, not a hardcoded middot: this line is on screen for the whole
+    // of every turn, so a glyph the terminal cannot draw is a replacement box the user stares at
+    // for minutes rather than one that flickers past.
+    const right = [...kept, formatElapsed(fields.elapsedMs)].join(`${separator}`);
     const total = visibleWidth(left) + 1 + right.length;
     if (total <= width || kept.length === 0) {
       if (total > width) {

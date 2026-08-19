@@ -1,5 +1,7 @@
 import type { Palette } from "./theme";
 import type { TabView } from "./tabs";
+import { StreamSeries, waveLine } from "./charts";
+import { visibleWidth } from "./markdown";
 import { clip } from "./sections";
 import { scrollIndicator, scrollPercent } from "./tui";
 
@@ -29,6 +31,15 @@ export type WorkspacePane = {
   lines: readonly string[];
   /** How many lines fell off the front of the record. */
   dropped: number;
+  /**
+   * Recent output rate, oldest sample first, for the header's activity line.
+   *
+   * A pane's status says running or idle; this says *how* it is running — a steady stream, a burst
+   * and then silence, or nothing for the last minute. With several panes open that is the
+   * difference between "which of these is working" and "which of these is stuck", which the status
+   * mark alone cannot answer.
+   */
+  activity?: readonly number[];
 };
 
 export type WorkspaceSnapshot = {
@@ -156,6 +167,47 @@ export function paneTabs(snapshot: WorkspaceSnapshot): PaneTab[] {
   }));
 }
 
+/**
+ * Turns "how many lines does this pane have now" into "how fast is it producing them".
+ *
+ * The panes themselves keep a bounded log with no timestamps in it, so there is no series to plot
+ * without measuring one. Sampling the *difference* between redraws is enough and costs nothing: a
+ * pane that gained forty lines since the last frame was busy, one that gained none was not, and the
+ * shape of the last few dozen samples is exactly what the header waveline draws.
+ *
+ * Keyed by pane key, so a closed tab's samples go with it and a reopened one starts fresh rather
+ * than inheriting a stranger's history.
+ */
+export class PaneActivity {
+  private readonly series = new Map<string, StreamSeries>();
+  private readonly seen = new Map<string, number>();
+
+  constructor(private readonly capacity = 48) {}
+
+  /** Records this frame's totals and returns the samples to draw, per pane key. */
+  sample(panes: readonly { key: string; lines: readonly string[]; dropped: number }[]): Map<string, number[]> {
+    const live = new Set(panes.map((pane) => pane.key));
+    for (const key of [...this.series.keys()]) {
+      if (!live.has(key)) { this.series.delete(key); this.seen.delete(key); }
+    }
+    const result = new Map<string, number[]>();
+    for (const pane of panes) {
+      // Dropped lines are counted too: a pane producing faster than its log can hold is the busiest
+      // thing on the screen, and reading only `lines.length` would show it as perfectly idle.
+      const produced = pane.lines.length + pane.dropped;
+      const previous = this.seen.get(pane.key);
+      this.seen.set(pane.key, produced);
+      const stream = this.series.get(pane.key) ?? new StreamSeries(this.capacity);
+      this.series.set(pane.key, stream);
+      // The first sighting has no previous total to subtract, and guessing one would draw a spike
+      // that never happened.
+      if (previous !== undefined) stream.push(Math.max(0, produced - previous));
+      result.set(pane.key, stream.values());
+    }
+    return result;
+  }
+}
+
 /** Builds panes from the session's tabs — one pane each, in tab order. */
 export function tabPanes(
   views: readonly TabView[],
@@ -236,8 +288,15 @@ export function composeFrame(snapshot: WorkspaceSnapshot): FrameRow[] {
     return scrollIndicator(scrollPercent(offsetFromTop, pane.lines.length, height));
   })();
   const dropped = pane && pane.dropped > 0 ? `  (${pane.dropped} earlier lines dropped)` : "";
+  // One row tall by construction, which is why the waveline and not the braille plot: it rides on
+  // the header beside the title rather than taking rows the pane needs for its output.
+  const header = pane ? `${pane.title}  ${pane.subtitle}${dropped}` : "nothing open";
+  const activityWidth = Math.min(24, Math.max(0, columns - visibleWidth(header) - 3));
+  const activity = pane?.activity && pane.activity.length > 1 && activityWidth >= 8
+    ? `  ${waveLine(pane.activity, { width: activityWidth })}`
+    : "";
   rows.push({
-    text: pane ? `${pane.title}  ${pane.subtitle}${dropped}` : "nothing open",
+    text: pane ? `${header}${activity}` : header,
     bold: true,
     // A failing pane is named in the theme's error colour, so which pane is in trouble is answered
     // by the header rather than by reading its output.

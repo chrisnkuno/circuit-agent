@@ -88,8 +88,10 @@ describe("the keys", () => {
   it("navigates while browsing", () => {
     expect(keyToGuideAction({ name: "down" }, undefined, false)).toEqual({ kind: "move", step: 1 });
     expect(keyToGuideAction({ name: "j" }, "j", false)).toEqual({ kind: "move", step: 1 });
-    expect(keyToGuideAction({ name: "pagedown" }, undefined, false)).toEqual({ kind: "scroll", rows: 10 });
-    expect(keyToGuideAction({}, " ", false)).toEqual({ kind: "scroll", rows: 10 });
+    // A page is the window's height less one row of overlap, worked out by the shared viewport —
+    // not a fixed count that overshoots a tall terminal and undershoots a short one.
+    expect(keyToGuideAction({ name: "pagedown" }, undefined, false)).toEqual({ kind: "page", step: 1 });
+    expect(keyToGuideAction({}, " ", false)).toEqual({ kind: "page", step: 1 });
   });
 
   it("opens the filter on slash and leaves on q", () => {

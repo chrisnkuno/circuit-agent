@@ -21,7 +21,11 @@ export type {
   AgentToolResult,
   AgentTurnProvider,
   ToolProvenance,
+  StoredToolArtifact,
+  ToolResultArtifactStore,
 } from "./agent-runtime";
+export { evictedToolResult } from "./agent-runtime";
+export { WorkspaceArtifactStore, artifactPathFor, ARTIFACT_DIRECTORY, MAX_ARTIFACT_BYTES } from "./nova-cli/artifacts";
 
 export { NovaAgent, DEFAULT_NOVA_BUDGETS } from "./nova-cli/agent";
 export type { NovaAgentOptions, NovaBudgets, NovaEvent, NovaTurnResult } from "./nova-cli/agent";

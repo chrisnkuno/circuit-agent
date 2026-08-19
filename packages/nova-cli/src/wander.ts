@@ -1,4 +1,8 @@
 import {
+  parseWanderResults,
+  wanderGradeCounts,
+  WANDER_GRADES,
+  type WanderResults,
   buildWanderObjective,
   buildWanderScheduleObjective,
   isWanderRandomScheduleObjective,
@@ -10,6 +14,8 @@ import {
 } from "@circuit-nova/nova-core/wander";
 import type { ExaSearchClient, ExaSearchHit } from "@circuit-nova/nova-core/providers/exa";
 import type { Expense } from "@circuit-nova/nova-core/nova-cli/cost";
+import { barChart } from "./charts";
+import { heading, note, panel, type SectionStyle } from "./sections";
 
 /**
  * Wander, from the terminal.
@@ -171,4 +177,46 @@ export function wanderJobObjective(command: { cadence: Exclude<WanderCadence, "o
 export function resolveWanderJobTopic(objective: string, seed: string): string {
   if (isWanderRandomScheduleObjective(objective)) return pickWanderTopic(seed);
   return objective.replace(WANDER_MARKER, "").trim();
+}
+
+/**
+ * What the lab concluded, as a chart rather than a paragraph.
+ *
+ * A wander run produces five files of prose, and the one question a person asks first — did this
+ * find anything, or is it all speculation — is answered by three numbers buried in the last one.
+ * The bars answer it in a glance, and the claims under them say what was actually graded, which is
+ * the part a summary of a summary would lose.
+ *
+ * Reads the structured `RESULTS.json` the lab writes, never the prose: a chart scraped out of
+ * model-written markdown is a chart that empties itself the first time a heading changes.
+ */
+export function renderWanderResults(source: string, style: SectionStyle, width: number): string | null {
+  const results = parseWanderResults(source);
+  if (!results) return null;
+  return renderWanderChart(results, style, width);
+}
+
+export function renderWanderChart(results: WanderResults, style: SectionStyle, width: number): string {
+  const counts = wanderGradeCounts(results);
+  const bars = barChart(
+    counts.map(({ grade, count }) => ({ label: grade.replace("_", " "), value: count })),
+    // A fixed ceiling of the total, so the three bars are read against the whole lab rather than
+    // against whichever grade happened to win: "two of nine verified" is the finding, and bars
+    // scaled to their own maximum would draw that as a full bar.
+    { width: Math.max(24, Math.min(width, 72)), depth: style.depth, glyphs: style.glyphs, max: results.claims.length },
+  );
+  const strongest = WANDER_GRADES.find((grade) => counts.find((entry) => entry.grade === grade)?.count);
+  const lines = [
+    ...bars,
+    "",
+    ...results.claims
+      .slice()
+      .sort((left, right) => WANDER_GRADES.indexOf(left.grade) - WANDER_GRADES.indexOf(right.grade))
+      .map((claim) => `${claim.grade === strongest ? "•" : "·"} ${claim.claim}`),
+    ...(results.unknowns.length > 0 ? ["", `still unknown: ${results.unknowns.join("; ")}`] : []),
+  ];
+  return [
+    heading(results.topic || "wander", 2, style),
+    panel(lines, style, { title: `${results.claims.length} claim${results.claims.length === 1 ? "" : "s"}`, tone: "accent" }),
+  ].join("\n");
 }

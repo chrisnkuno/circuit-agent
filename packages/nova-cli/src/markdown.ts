@@ -192,13 +192,12 @@ function tableCells(line: string): string[] | null {
   return cells.length >= 2 ? cells : null;
 }
 
-function fitCell(text: string, width: number): string {
+function fitCell(text: string, width: number, glyphs: GlyphSet = UNICODE_GLYPHS): string {
   let result = "";
   for (const character of text) {
     if (visibleWidth(result + character) > width) {
-      const target = Math.max(0, width - 1);
-      while (visibleWidth(result) > target) result = [...result].slice(0, -1).join("");
-      result += "…";
+          while (visibleWidth(result) > Math.max(0, width - visibleWidth(glyphs.ellipsis))) result = [...result].slice(0, -1).join("");
+      result += glyphs.ellipsis;
       return result + " ".repeat(Math.max(0, width - visibleWidth(result)));
     }
     result += character;
@@ -210,7 +209,7 @@ function renderTableLine(cells: string[], separator: boolean, width: number, dep
   const cellWidth = Math.max(3, Math.floor((Math.max(width, 12) - cells.length - 1) / cells.length));
   if (separator) return paint(`${glyphs.boxTeeLeft}${cells.map(() => glyphs.boxHorizontal.repeat(cellWidth)).join(glyphs.boxCross)}${glyphs.boxTeeRight}`, DIM, depth);
   const contentWidth = Math.max(1, cellWidth - 2);
-  const rendered = cells.map((cell) => fitCell(parseInline(cell).map((token) => token.text).join(""), contentWidth));
+  const rendered = cells.map((cell) => fitCell(parseInline(cell).map((token) => token.text).join(""), contentWidth, glyphs));
   return `${glyphs.boxVertical}${rendered.map((cell) => ` ${cell} `).join(glyphs.boxVertical)}${glyphs.boxVertical}`;
 }
 
@@ -230,15 +229,22 @@ export function renderMarkdownLine(
 
   const fence = FENCE.exec(line);
   if (fence) {
+    // Both rules are drawn to the same length, which is the difference between a block that reads
+    // as a deliberate bracket and one that reads as a box someone failed to close. It is an open
+    // bracket on purpose — streamed markdown arrives a line at a time, so the right edge would have
+    // to be guessed before the code that determines it exists — but "open on the right" and
+    // "unfinished" look identical when the top rule stops after the label and the bottom is a stub.
+    const ruleWidth = Math.max(4, Math.min(width - 4, 40));
     if (state.inFence) {
       state.inFence = false;
       state.fenceLanguage = "";
-      return [paint(`  ${glyphs.boxBottomLeft}${glyphs.boxHorizontal.repeat(4)}`, DIM, depth)];
+      return [paint(`  ${glyphs.boxBottomLeft}${glyphs.boxHorizontal.repeat(ruleWidth)}`, DIM, depth)];
     }
     state.inFence = true;
     state.fenceLanguage = fence[1].trim();
-    const label = state.fenceLanguage ? ` ${state.fenceLanguage} ` : glyphs.boxHorizontal.repeat(4);
-    return [paint(`  ${glyphs.boxTopLeft}${glyphs.boxHorizontal}${label}`, DIM, depth)];
+    const label = state.fenceLanguage ? ` ${state.fenceLanguage} ` : "";
+    const drawn = 1 + visibleWidth(label);
+    return [paint(`  ${glyphs.boxTopLeft}${glyphs.boxHorizontal}${label}${glyphs.boxHorizontal.repeat(Math.max(0, ruleWidth - drawn))}`, DIM, depth)];
   }
 
   if (state.inFence) {

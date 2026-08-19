@@ -229,7 +229,7 @@ export function renderBanner(options: BannerOptions): string {
   wordmark.forEach((row, index) => {
     const from = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 1)];
     const to = NIGHT_GRADIENT[Math.min(NIGHT_GRADIENT.length - 1, index + 2)];
-    lines.push(`${flank(indent, next, depth, stars, intensity)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${gradientText(row, from, to, depth)}${trailing(next, depth, stars, intensity)}`);
+    lines.push(`${flank(indent, next, depth, stars, intensity)}${pad.slice(0, Math.max(0, indent - flankWidth(indent)))}${gradientText(row, from, to, depth)}${trailing(next, depth, stars, intensity, width - indent - wordmarkWidth)}`);
   });
 
   lines.push(starLine(width - 1, 0.035, next, depth, stars, intensity));
@@ -264,12 +264,22 @@ function flank(indent: number, next: () => number, depth: ColorDepth, stars: rea
   return `${" ".repeat(position)}${paint(glyph, intensity === 1 ? color : dimmed(color, intensity), depth)}${" ".repeat(reserved - position - 1)}`;
 }
 
-function trailing(next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS, intensity = 1): string {
+/**
+ * A star off the right edge of a wordmark row, when there is edge to spare.
+ *
+ * `room` is what makes it safe. The wordmark is drawn at the widest terminal it fits, and on a
+ * terminal only just wide enough there is no slack at all — a decoration added without asking wraps
+ * the row, and a wrapped banner row is a line the frame below it did not reserve.
+ */
+function trailing(next: () => number, depth: ColorDepth, stars: readonly string[] = STAR_GLYPHS, intensity = 1, room = Number.POSITIVE_INFINITY): string {
+  // Two spaces of gap plus the glyph is the narrowest this can be drawn at all.
+  if (room < 3) return "";
   if (next() > 0.35) return "";
   const brightness = 0.55 + next() * 0.45;
   const glyph = stars[Math.min(stars.length - 1, Math.floor(brightness * stars.length))];
   const color = STAR_COLORS[Math.min(STAR_COLORS.length - 1, Math.floor(brightness * STAR_COLORS.length))];
-  return `${" ".repeat(2 + Math.floor(next() * 4))}${paint(glyph, intensity === 1 ? color : dimmed(color, intensity), depth)}`;
+  const gap = Math.min(2 + Math.floor(next() * 4), Math.max(2, room - 1));
+  return `${" ".repeat(gap)}${paint(glyph, intensity === 1 ? color : dimmed(color, intensity), depth)}`;
 }
 
 /** The one-line hint under the banner, kept separate so callers can drop it. */

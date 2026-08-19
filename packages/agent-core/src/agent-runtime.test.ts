@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool } from "./agent-runtime";
+import { BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
 
 const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 const prices = { inputRwfPerMillionTokens: 1_610, outputRwfPerMillionTokens: 9_660 };
 
-function harness(turns: AgentModelTurn[], tools: AgentTool[], approved = true) {
+function harness(turns: AgentModelTurn[], tools: AgentTool[], approved = true, artifacts?: ToolResultArtifactStore) {
   const events: AgentRuntimeEvent[] = [];
   const requests: AgentModelRequest[] = [];
   let modelCalls = 0;
@@ -12,6 +12,7 @@ function harness(turns: AgentModelTurn[], tools: AgentTool[], approved = true) {
     model: { async complete(request) { requests.push(request); const turn = turns[modelCalls++]; if (!turn) throw new Error("Unexpected model call"); return turn; } },
     tools,
     prices,
+    ...(artifacts ? { artifacts } : {}),
     control: {
       async heartbeat() {},
       async isCancellationRequested() { return false; },
@@ -375,5 +376,77 @@ describe("bounded agent runtime", () => {
     ], [makeTool("read_a"), makeTool("read_b")]);
     await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "completed", toolCallsExecuted: 2 });
     expect(peak).toBe(2);
+  });
+});
+
+describe("oversized tool results", () => {
+  const hugeOutput = [...Array(20_000).keys()].map((index) => `log line ${index}`).join("\n");
+  const noisyTool: AgentTool[] = [
+    { name: "run_command", description: "Run a command", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: `${hugeOutput}\nFAILED at the end` }; } },
+  ];
+  const callTurns = [
+    turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "call-1", name: "run_command", arguments: { command: "bun test" } }] }),
+    turn({ content: "Read the log." }),
+  ];
+
+  function storeSpy(behaviour: "ok" | "throws" = "ok") {
+    const puts: Array<{ toolName: string; content: string }> = [];
+    const store: ToolResultArtifactStore = {
+      async put(input) {
+        puts.push({ toolName: input.toolName, content: input.content });
+        if (behaviour === "throws") throw new Error("read-only filesystem");
+        return { path: ".nova/artifacts/run_command-0123456789ab.txt", bytes: Buffer.byteLength(input.content), lines: input.content.split("\n").length, elided: false };
+      },
+    };
+    return { store, puts };
+  }
+
+  it("writes the whole result to an artifact and charges the transcript only for the excerpt", async () => {
+    const spy = storeSpy();
+    const value = harness(callTurns, noisyTool, true, spy.store);
+    const result = await value.runtime.execute(baseRequest);
+
+    const toolMessage = result.messages.find((message) => message.role === "tool");
+    expect(spy.puts[0].content).toHaveLength(hugeOutput.length + "\nFAILED at the end".length);
+    expect(toolMessage?.content.length).toBeLessThanOrEqual(baseRequest.maxToolResultChars);
+    // The handle, the beginning and — the reason any of this exists — the end.
+    expect(toolMessage?.content).toContain(".nova/artifacts/run_command-0123456789ab.txt");
+    expect(toolMessage?.content).toContain("log line 0");
+    expect(toolMessage?.content).toContain("FAILED at the end");
+  });
+
+  it("tells the front end where the full output went", async () => {
+    const spy = storeSpy();
+    const value = harness(callTurns, noisyTool, true, spy.store);
+    await value.runtime.execute(baseRequest);
+
+    const event = value.events.find((item) => item.type === "tool_result");
+    expect(event).toMatchObject({ type: "tool_result", artifact: { path: ".nova/artifacts/run_command-0123456789ab.txt", elided: false } });
+  });
+
+  it("truncates exactly as before when no store is configured, and when the store fails", async () => {
+    const withoutStore = harness(callTurns, noisyTool);
+    const plain = (await withoutStore.runtime.execute(baseRequest)).messages.find((message) => message.role === "tool");
+    expect(plain?.content).toContain("[tool result truncated]");
+    expect(plain?.content.length).toBeLessThanOrEqual(baseRequest.maxToolResultChars);
+
+    const failing = storeSpy("throws");
+    const withFailingStore = harness(callTurns, noisyTool, true, failing.store);
+    const result = await withFailingStore.runtime.execute(baseRequest);
+    // A store that cannot write must cost the run nothing beyond the excerpt it could not build.
+    expect(result.status).toBe("completed");
+    expect(result.messages.find((message) => message.role === "tool")?.content).toContain("[tool result truncated]");
+  });
+
+  it("leaves results that already fit untouched, and never calls the store for them", async () => {
+    const spy = storeSpy();
+    const small: AgentTool[] = [
+      { name: "run_command", description: "Run a command", inputSchema: {}, capabilityId: "workspace.terminal", effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "2 passed" }; } },
+    ];
+    const value = harness(callTurns, small, true, spy.store);
+    const result = await value.runtime.execute(baseRequest);
+
+    expect(result.messages.find((message) => message.role === "tool")?.content).toBe("2 passed");
+    expect(spy.puts).toHaveLength(0);
   });
 });

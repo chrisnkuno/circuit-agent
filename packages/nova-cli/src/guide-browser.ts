@@ -2,6 +2,7 @@ import { GUIDE_TOPICS, wrapText, type GuideTopic } from "./guide";
 import { NO_COLOR_PALETTE, type Palette } from "./theme";
 import { visibleWidth } from "./markdown";
 import { joinHorizontal, padToWidth as pad, scrollIndicator, scrollPercent, sliceToWidth } from "./tui";
+import { applyViewport, newViewport, visibleLines } from "./viewport";
 
 /**
  * The guide as something you move around in, rather than something printed at you.
@@ -67,6 +68,7 @@ export function bodyHeight(rows: number): number {
 export type GuideAction =
   | { kind: "move"; step: number }
   | { kind: "scroll"; rows: number }
+  | { kind: "page"; step: 1 | -1 }
   | { kind: "search" }
   | { kind: "type"; character: string }
   | { kind: "backspace" }
@@ -112,8 +114,10 @@ export function keyToGuideAction(
   if (name === "up" || name === "k") return { kind: "move", step: -1 };
   if (name === "down" || name === "j") return { kind: "move", step: 1 };
   if (name === "tab") return { kind: "move", step: key.shift ? -1 : 1 };
-  if (name === "pagedown" || character === " ") return { kind: "scroll", rows: 10 };
-  if (name === "pageup") return { kind: "scroll", rows: -10 };
+  // A page is the window's own height less one row of overlap, which the viewport works out — a
+  // fixed ten rows scrolled past content on a tall terminal and skipped lines on a short one.
+  if (name === "pagedown" || character === " ") return { kind: "page", step: 1 };
+  if (name === "pageup") return { kind: "page", step: -1 };
   if (name === "right") return { kind: "scroll", rows: 1 };
   if (name === "left") return { kind: "scroll", rows: -1 };
   return { kind: "none" };
@@ -128,13 +132,19 @@ export function applyGuideAction(state: GuideBrowserState, action: GuideAction):
       // A new topic starts at its beginning: a scroll offset measured in another page means nothing.
       return { ...state, selected: next, scroll: 0 };
     }
-    case "scroll": {
+    case "scroll":
+    case "page": {
       const topic = currentTopic(state);
       if (!topic) return state;
-      const height = bodyHeight(state.rows);
-      const total = topicLines(topic, bodyWidth(state.columns)).length;
-      const furthest = Math.max(0, total - height);
-      return { ...state, scroll: Math.max(0, Math.min(state.scroll + action.rows, furthest)) };
+      // The shared viewport owns the arithmetic — clamping, the last reachable line, and what a
+      // page means at the end of the content — so this screen and the file view cannot disagree
+      // about any of it.
+      const lines = topicLines(topic, bodyWidth(state.columns)).map((line) => line.text);
+      const viewport = { ...newViewport(lines, bodyHeight(state.rows)), top: state.scroll };
+      const moved = action.kind === "page"
+        ? applyViewport(viewport, { kind: action.step === 1 ? "pageDown" : "pageUp" })
+        : applyViewport(viewport, action.rows > 0 ? { kind: "down", rows: action.rows } : { kind: "up", rows: -action.rows });
+      return { ...state, scroll: moved.top };
     }
     case "search":
       return { ...state, searching: true };
@@ -250,7 +260,10 @@ export function composeGuideFrame(state: GuideBrowserState): GuideRow[] {
   if (rowCount === 1) return rows;
 
   const lines = topic ? topicLines(topic, body) : [{ text: "Nothing matches that." }];
-  const start = Math.max(0, Math.min(state.scroll, Math.max(0, lines.length - height)));
+  // Indices through the viewport, then read back out of `lines` — the rows carry styling the
+  // viewport neither knows nor needs to know about.
+  const indices = visibleLines({ ...newViewport(lines.map((_, index) => `${index}`), height), top: state.scroll });
+  const start = indices.length > 0 ? Number(indices[0]) : 0;
   const window = lines.slice(start, start + height);
 
   // The list scrolls with the selection, so a long list never hides the topic you are on.

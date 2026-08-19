@@ -19,6 +19,15 @@ export const WANDER_LAB_FILES = {
   reviewMethods: "wander/REVIEW_METHODS.md",
   reviewRival: "wander/REVIEW_RIVAL.md",
   consensus: "wander/CONSENSUS.md",
+  /**
+   * The consensus table again, as data.
+   *
+   * The grades exist in `CONSENSUS.md` as prose, which is right for a person and useless for
+   * anything else: charting them meant scraping generated markdown, and a chart built on a regex
+   * over model-written prose is a chart that silently empties the first time the editor changes a
+   * heading. One extra file the lab writes deliberately is cheaper than that, forever.
+   */
+  results: "wander/RESULTS.json",
 } as const;
 
 /** Curated discovery topics — curious, concrete, and suitable for multi-scientist critique. */
@@ -177,11 +186,64 @@ export function wanderPlannerInstructions(): string[] {
     "3) Methodologist → wander/REVIEW_METHODS.md (≤ ~600 words): independent peer review focused on methods — study design, measurement validity, sample/power, confounders, p-hacking/publication bias, and whether the Exa highlights actually support the PI's leaps. Be harsh; cite EVIDENCE.md URLs when rejecting a claim.",
     "4) Rival theorist → wander/REVIEW_RIVAL.md (≤ ~600 words): a second independent scientist with a competing stance — alternative mechanisms, selection effects, boundary conditions, and results that would favor the rival view. Do not repeat the methodologist; attack substance and interpretation.",
     "5) Consensus editor → wander/CONSENSUS.md (≤ ~1000 words plus a short claim table): reconcile the lab after reading all prior files. For every retained claim use exactly one grade: verified (supported by the Exa dossier or uncontroversial textbook mechanism), strong_plausible (good evidence but contested/incomplete), or speculative (interesting, weakly supported). Include explicit unknowns and the next experiment or observation that would upgrade each open claim.",
+    `6) Consensus editor, same pass → ${"wander/RESULTS.json"}: the same claim table as data, so it can be charted without re-reading prose. Exactly this shape: {"topic": string, "claims": [{"claim": string (≤ 160 chars), "grade": "verified" | "strong_plausible" | "speculative"}], "unknowns": [string]}. Valid JSON, no comments, no trailing prose, and every grade one of the three words. It must agree with CONSENSUS.md — it is the same table, not a second opinion.`,
     "Time budget: the bench is yours for about eight minutes, so a few substantial commands are fine — but the step stops itself before its host would, and anything still running is lost.",
     "Length discipline: this is a short lab session, not a monograph. Keep each notebook file inside its word cap. Prefer a compact plan JSON — long reasoning before the JSON risks aborting the model call.",
     "Epistemic rules: never invent citations, DOIs, quotes, statistics, or study results. Cite only URLs present in wander/EVIDENCE.md. If the dossier is thin, say so and keep most claims speculative. Fewer precise claims beat encyclopedic hedging.",
     "Between roles: re-read the previous scientist's file before writing the next; carry forward only what survived critique.",
     "Do not write wander/REPORT.html yourself — the control plane harvests a print-ready report from these notebook files after the step succeeds.",
-    "Verification may be a short python/node script that checks EVIDENCE.md, HYPOTHESES.md, REVIEW_METHODS.md, REVIEW_RIVAL.md, and CONSENSUS.md exist and that CONSENSUS.md contains the three grade labels — not an application test suite.",
+    "Verification may be a short python/node script that checks EVIDENCE.md, HYPOTHESES.md, REVIEW_METHODS.md, REVIEW_RIVAL.md, CONSENSUS.md and RESULTS.json exist, that CONSENSUS.md contains the three grade labels, and that RESULTS.json parses and every claim carries one of the three grades — not an application test suite.",
   ];
+}
+
+/** The three grades the lab may award, strongest first — the order every chart of them uses. */
+export const WANDER_GRADES = ["verified", "strong_plausible", "speculative"] as const;
+export type WanderGrade = typeof WANDER_GRADES[number];
+
+export type WanderClaim = { claim: string; grade: WanderGrade };
+export type WanderResults = { topic: string; claims: WanderClaim[]; unknowns: string[] };
+
+function isGrade(value: unknown): value is WanderGrade {
+  return typeof value === "string" && (WANDER_GRADES as readonly string[]).includes(value);
+}
+
+/**
+ * Reads `RESULTS.json` if the lab wrote one that means anything.
+ *
+ * Tolerant of everything except the part that would make a chart lie. A missing `unknowns`, a
+ * claim without text, an extra field, a topic that is not a string — all survivable, and each is
+ * dropped or defaulted. A claim whose grade is not one of the three is *dropped*, never coerced:
+ * inventing a grade for it would put a bar on the chart that no scientist awarded.
+ *
+ * Returns `null` rather than an empty result when there is nothing usable, so a caller can tell
+ * "the lab graded nothing" apart from "the lab wrote no file".
+ */
+export function parseWanderResults(source: string): WanderResults | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const value = parsed as Record<string, unknown>;
+  const claims = Array.isArray(value.claims)
+    ? value.claims.flatMap((entry) => {
+        if (typeof entry !== "object" || entry === null) return [];
+        const item = entry as Record<string, unknown>;
+        if (!isGrade(item.grade) || typeof item.claim !== "string" || !item.claim.trim()) return [];
+        return [{ claim: item.claim.trim(), grade: item.grade }];
+      })
+    : [];
+  if (claims.length === 0) return null;
+  return {
+    topic: typeof value.topic === "string" ? value.topic : "",
+    claims,
+    unknowns: Array.isArray(value.unknowns) ? value.unknowns.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "") : [],
+  };
+}
+
+/** How many claims landed on each grade, in `WANDER_GRADES` order and including the empty ones. */
+export function wanderGradeCounts(results: WanderResults): Array<{ grade: WanderGrade; count: number }> {
+  return WANDER_GRADES.map((grade) => ({ grade, count: results.claims.filter((claim) => claim.grade === grade).length }));
 }

@@ -245,6 +245,11 @@ export type RenderChooserOptions = {
 export function renderChooser<T>(state: ChooserState, items: readonly ChooserItem<T>[], options: RenderChooserOptions): string {
   const { paint } = options;
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  // Clipping marks the cut with the *terminal's* ellipsis. A hardcoded "…" is a character this
+  // renderer was explicitly told the terminal cannot draw, and it arrives exactly where the text
+  // was already too long to read — so an ASCII terminal lost the end of the row and got a
+  // replacement box in place of the sign that said so.
+  const clip = (text: string, width: number) => clipTo(text, width, glyphs);
   const height = options.height ?? 10;
   // Rows are clipped, never wrapped. A wrapped row costs the menu a line it did not reserve, which
   // is how a repaint leaves a stripe of the previous frame behind and why a long description used
@@ -261,10 +266,10 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
   if (options.title && chrome.title) {
     // The spinner sits with the title because that is where a reader is already looking for "what is
     // this list", and a list still loading is answering exactly that question.
-    lines.push(paint.cyan(clipTo(`  ${options.spinner ? `${options.spinner} ` : ""}${options.title}`, width)));
+    lines.push(paint.cyan(clip(`  ${options.spinner ? `${options.spinner} ` : ""}${options.title}`, width)));
   }
-  if (options.filter && state.query) lines.push(paint.dim(clipTo(`  filter: ${state.query}${matched ? "" : "   (no match)"}`, width)));
-  else if (!matched) lines.push(paint.dim(clipTo("  (no match)", width)));
+  if (options.filter && state.query) lines.push(paint.dim(clip(`  filter: ${state.query}${matched ? "" : "   (no match)"}`, width)));
+  else if (!matched) lines.push(paint.dim(clip("  (no match)", width)));
 
   // Keep the selection on screen, or the arrow keys look like they have stopped working. The same
   // maths the key handler uses, so a number on screen and a number pressed mean the same row.
@@ -275,7 +280,7 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
   let lastHeader: string | undefined;
   for (const [offset, item] of window.entries()) {
     const index = start + offset;
-    if (item.header && item.header !== lastHeader) lines.push(paint.cyan(clipTo(`  ${item.header}`, width)));
+    if (item.header && item.header !== lastHeader) lines.push(paint.cyan(clip(`  ${item.header}`, width)));
     lastHeader = item.header ?? lastHeader;
     const active = index === state.selected;
     const fadingOut = !active && index === options.transitionFrom;
@@ -287,35 +292,35 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
     // label cannot push a row past the edge and a long description cannot hide the label.
     const furniture = visibleWidth(`  ${active ? ">" : " "} ${number} `) + 2;
     if (width < furniture) {
-      lines.push(active ? paint.green(clipTo(`${glyphs.prompt}${item.label}`, width)) : clipTo(item.label, width));
+      lines.push(active ? paint.green(clip(`${glyphs.prompt}${item.label}`, width)) : clip(item.label, width));
       continue;
     }
     const room = Math.max(0, width - furniture);
     const hasTail = Boolean(item.hint || item.description);
     const labelBudget = Math.min(labelWidth, hasTail ? Math.max(1, Math.floor(room * 0.6)) : room);
-    const shownLabel = clipTo(item.label, labelBudget);
+    const shownLabel = clip(item.label, labelBudget);
     const padded = shownLabel + " ".repeat(Math.max(0, labelBudget - visibleWidth(shownLabel)));
     const marker = active ? paint.green(glyphs.prompt) : fadingOut ? paint.dim(glyphs.prompt) : " ";
     const head = `${marker} ${paint.dim(number)} ${padded}  `;
     const tail = `${item.hint ? ` ${item.hint}` : ""}${item.description ? `  ${item.description}` : ""}`;
     // The tail is cut *before* it is painted: clipping a coloured string mid-sequence bleeds that
     // colour down the rest of the page.
-    lines.push(`  ${head}${paint.dim(clipTo(tail, Math.max(0, room - visibleWidth(padded) - 2)))}`);
+    lines.push(`  ${head}${paint.dim(clip(tail, Math.max(0, room - visibleWidth(padded) - 2)))}`);
   }
 
   // Only worth naming once the window can't show the whole list at once — a menu that fits has
   // nothing a position would add over just seeing every row.
   const position = visible.length > height && chrome.pagination ? `  ${paginator(state.selected, visible.length)}` : "";
   if (chrome.help) {
-    lines.push(paint.dim(clipTo(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}${position}`, width)));
+    lines.push(paint.dim(clip(`  ${options.legend ?? `${glyphs.arrowUp}${glyphs.arrowDown} move ${glyphs.middot} Enter choose ${glyphs.middot} ${options.filter ? `type to filter ${glyphs.middot} ` : ""}${options.filter ? "Esc clear/cancel" : "Esc cancel"}`}${position}`, width)));
   } else if (position) {
     // A list with its help hidden still has somewhere to be in, and that is the one thing the rows
     // themselves cannot say once they no longer all fit.
-    lines.push(paint.dim(clipTo(position, width)));
+    lines.push(paint.dim(clip(position, width)));
   }
   // Last, under everything, because it is about what just happened rather than what is on offer —
   // and green, because every caller of it so far is reporting that something worked.
-  if (state.status && chrome.status) lines.push(paint.green(clipTo(`  ${state.status}`, width)));
+  if (state.status && chrome.status) lines.push(paint.green(clip(`  ${state.status}`, width)));
   return lines.join("\n");
 }
 
@@ -326,18 +331,24 @@ export function renderChooser<T>(state: ChooserState, items: readonly ChooserIte
  * and they each grew their own width arithmetic. Three copies is how two of them end up wrapping
  * on a narrow terminal while the third does not.
  */
-export function clipTo(text: string, width: number): string {
+export function clipTo(text: string, width: number, glyphs: GlyphSet = UNICODE_GLYPHS): string {
   if (width <= 0) return "";
   if (visibleWidth(text) <= width) return text;
+  // Room is reserved for the mark *as the terminal will draw it*. A unicode ellipsis is one column
+  // and an ASCII one is three, so reserving a single column — which was right for as long as the
+  // mark was hardcoded — overflows every clipped row by two the moment the ASCII set is in use.
+  // Two columns is enough to wrap a row, and a wrapped row is a line the frame did not reserve.
+  const mark = visibleWidth(glyphs.ellipsis) < width ? glyphs.ellipsis : "";
+  const budget = width - visibleWidth(mark);
   let out = "";
   const segments = typeof Intl.Segmenter === "function"
     ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map((entry) => entry.segment)
     : [...text];
   for (const segment of segments) {
-    if (visibleWidth(out + segment) > width - 1) break;
+    if (visibleWidth(out + segment) > budget) break;
     out += segment;
   }
-  return `${out}…`;
+  return `${out}${mark}`;
 }
 
 export type RunChooserOptions = RenderChooserOptions & {

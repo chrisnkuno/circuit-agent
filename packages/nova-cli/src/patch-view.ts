@@ -1,6 +1,7 @@
 import { GUTTER, note, panel, rule, type SectionStyle } from "./sections";
 import { UNICODE_GLYPHS } from "./glyphs";
-import { DIM, GREEN, RED, paint } from "./ansi";
+import { BOLD, DIM, GREEN, RED, REVERSE, paint, paintAll } from "./ansi";
+import { pairHunkLines, type Segment } from "./intraline";
 import { describeChange, highlightCode, type DiffLine } from "./code-view";
 import { visibleWidth } from "./markdown";
 
@@ -140,7 +141,9 @@ export function renderPatchFile(file: PatchFile, style: SectionStyle, options: {
       rows.push(paint(`${glyphs.ellipsis}${hunk.heading ? ` ${hunk.heading}` : ""}`, DIM, depth));
     }
     let lineNumber = hunk.newStart;
-    for (const line of hunk.lines) {
+    // Paired first, so a removal and the addition that replaced it can be compared token by token
+    // before either is painted. Order is untouched — this only annotates.
+    for (const line of pairHunkLines(hunk.lines)) {
       const number = line.kind === "remove" ? "" : `${lineNumber}`;
       if (line.kind !== "remove") lineNumber += 1;
       const gutterNumber = paint(number.padStart(5), DIM, depth);
@@ -148,9 +151,9 @@ export function renderPatchFile(file: PatchFile, style: SectionStyle, options: {
       // Syntax highlighting only on the surviving text: colouring a removed line the same as a
       // kept one makes the two hard to tell apart at a glance, which is the whole job here.
       const body = line.kind === "remove"
-        ? paint(line.text, RED, depth)
+        ? paintSegments(line.text, line.segments, RED, depth)
         : line.kind === "add"
-          ? paint(line.text, GREEN, depth)
+          ? paintSegments(line.text, line.segments, GREEN, depth)
           : highlightCode(line.text, depth);
       rows.push(`${gutterNumber} ${marker} ${body}`);
     }
@@ -197,4 +200,22 @@ export function renderPatch(
 /** How wide the rendered rows are, for a caller deciding whether to fold. */
 export function widestRow(text: string): number {
   return text.split("\n").reduce((widest, line) => Math.max(widest, visibleWidth(line)), 0);
+}
+
+/**
+ * A changed line, with the part that actually changed standing out from the part that did not.
+ *
+ * Reverse video for the changed run rather than a second colour: the line already carries its
+ * red or green, and a third hue inside it competes with that signal instead of refining it.
+ * Reversing keeps the same colour and changes only the emphasis, which is what the mark means.
+ *
+ * Falls back to the plain painted line whenever there is nothing to mark or the terminal has no
+ * colour at all — a no-colour terminal must never receive escape codes, and inserting visible
+ * markers around the changed run instead would corrupt anything copied out of the diff.
+ */
+export function paintSegments(text: string, segments: readonly Segment[] | undefined, colour: string, depth: SectionStyle["depth"]): string {
+  if (!segments || depth === "none") return paint(text, colour, depth);
+  return segments
+    .map((segment) => (segment.changed ? paintAll(segment.text, [colour, BOLD, REVERSE], depth) : paint(segment.text, colour, depth)))
+    .join("");
 }

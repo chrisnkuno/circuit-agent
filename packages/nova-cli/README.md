@@ -30,6 +30,7 @@ nova --budget 500           Approve and enforce a session spend cap in that curr
 nova --estimate "task"      Forecast input/output tokens and cost without calling a model
 nova settings               Configure keys, URLs, models, pricing, language and voice
 nova --language ar          Localize controls (also: en zh hi es fr bn pt ru ur)
+nova acp                    Speak the Agent Client Protocol on stdio, for an editor
 nova update                 Check and install the latest published CLI
 nova update --check         Check without changing the installed version
 ```
@@ -99,6 +100,10 @@ Use `--yes` for an explicitly unattended update. Without it, Nova refuses to mut
 **Spending is bounded before work starts.** `--budget N` is expressed in the selected local currency. In an interactive session Nova confirms that cap before starting a sandbox or calling a model; in a one-shot command the explicit flag is the approval. If the required FX rate is unavailable, Nova refuses to pretend it can enforce a converted cap.
 
 **Switching models is a menu, not a lookup.** `/model` opens a picker: arrow to a model and press Enter, with each one's price beside it and the cursor starting on the one in use. Press `t` and the same models become a table — input and output price in columns of their own, `←`/`→` to aim at a column and `s` to order by it, so "which of these is cheapest" is a keystroke rather than a read-through. Each row keeps the number `/model <n>` takes, so sorting never renumbers anything; `Esc` returns to the menu, and Enter switches from either view. Providers you have no key for are rows you can select, and selecting one opens settings — so a missing key is something you fix from where you noticed it. Typed forms skip the menu entirely: `/model opus` matches on any part of a model id and says which candidates it meant if the name is ambiguous. The transcript carries across the switch, and your choice is remembered for the next launch.
+
+**Large output leaves the conversation instead of being cut off.** A tool result too big for the transcript is written to `.nova/artifacts/`, and the model receives the beginning, the end, and the path. The end is the half that matters — a failing test says what failed on its last line — and the rest stays reachable through `read_file` with an offset, so nothing is lost to make room. Artifacts are content-addressed, so the same output repeated three times is one file.
+
+**Compaction happens at a boundary, and cannot quietly drop the rules.** Past 70% of the context window Nova summarizes as soon as the work reaches a clean stopping point; past 90% it summarizes regardless. A summary is lossy by design, so the governing facts are never left inside one: the permission mode, the original request, every action you approved or refused, and the plan's open items are re-derived from live state at each compaction and restated verbatim above the summary. A constraint that survives only as a sentence in a summary is a constraint that stops existing a few compactions later.
 
 **Undo is real.** Each turn snapshots the workspace into a private git index. `/undo` reverts modified files *and* removes files the agent created, without touching your staged changes.
 
@@ -227,6 +232,19 @@ Everything here lives under `.nova/` in your project, so it travels with the rep
 Every tool that does not ship with Nova is approval-gated on every call regardless of mode, and the approval prompt names where it came from — a tool called `deploy` from an MCP server never looks like one of Nova's own.
 
 On Windows, hook scripts need an extension `cmd.exe` can execute (`.cmd` or `.bat`, or a `.ps1` invoked through one); a `.sh` file will not run without a POSIX shell installed. Skill commands and hook invocations are quoted for `cmd.exe` automatically when the session is local — a sandbox session is always quoted for Linux, since that is what the container runs.
+
+## Editors: the Agent Client Protocol
+
+`nova acp` runs the same agent over stdio in [ACP](https://agentclientprotocol.com), the protocol Zed and JetBrains use to host an agent, so an editor can drive a Nova session without a bespoke integration. Streaming replies arrive as `session/update` notifications, every tool call is announced and updated, and an approval becomes a `session/request_permission` request the editor answers — the same four decisions the terminal offers, with the same rule that anything other than an explicit allow is a refusal.
+
+```jsonc
+// what an editor sends, one JSON-RPC message per line
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}
+{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/path/to/project"}}
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"…","prompt":[{"type":"text","text":"fix the failing test"}]}}
+```
+
+`session/load` resumes a stored session, and `session/set_mode` switches between `plan`, `build`, `auto` and `defender` — rebuilding the session under the new capability set, exactly as `/mode` does in the terminal, because plan mode is a mode in which the write tools are not loaded rather than one where they are discouraged. While `nova acp` is running, stdout carries only protocol messages; diagnostics go to stderr.
 
 ## Requirements
 

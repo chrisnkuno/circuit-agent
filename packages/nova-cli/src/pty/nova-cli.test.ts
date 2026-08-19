@@ -79,7 +79,7 @@ describe("nova CLI under a real pty", () => {
 
       const before = p.output().length;
       p.writeLine("/help");
-      await p.waitFor(/nova.*coding agent/i, { timeoutMs: 10_000, since: before });
+      await p.waitFor(/Find your way around|\/palette/i, { timeoutMs: 10_000, since: before });
 
       expect(p.output().slice(before)).not.toMatch(/uncaught|unhandled rejection/i);
     }, 30_000);
@@ -161,7 +161,7 @@ describe("nova CLI under a real pty", () => {
       // agent were wedged underneath it. Only a fresh command actually completing proves otherwise.
       const afterPrompt = p.output().length;
       p.writeLine("/help");
-      await p.waitFor(/nova.*coding agent/i, { timeoutMs: 10_000, since: afterPrompt });
+      await p.waitFor(/Find your way around|\/palette/i, { timeoutMs: 10_000, since: afterPrompt });
     }, 60_000);
   });
 
@@ -228,7 +228,7 @@ describe("nova CLI under a real pty", () => {
       // And genuinely usable afterward, the same standard as the mid-turn case above.
       const afterPrompt = p.output().length;
       p.writeLine("/help");
-      await p.waitFor(/nova.*coding agent/i, { timeoutMs: 10_000, since: afterPrompt });
+      await p.waitFor(/Find your way around|\/palette/i, { timeoutMs: 10_000, since: afterPrompt });
     }, 45_000);
   });
 

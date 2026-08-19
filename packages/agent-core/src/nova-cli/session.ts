@@ -196,20 +196,67 @@ export type CompactionPlan = {
 };
 
 /**
+ * How badly a transcript needs compacting, which is not the same question as whether it may be.
+ *
+ * `advisable` means the conversation has grown past the point where compacting is cheap and safe;
+ * `required` means the next turn will not fit and compacting is no longer optional. The split
+ * exists because the right moment to forget is a property of the *work*, not of the buffer: a
+ * numeric threshold alone forces a summary in the middle of a half-finished edit, where the detail
+ * being discarded is exactly the detail the next tool call needs. Splitting the decision lets the
+ * caller compact early when the work is at a boundary, and only override that when it must.
+ */
+export type CompactionUrgency = "none" | "advisable" | "required";
+
+/** Where compacting is cheap because the work has concluded, versus mid-task where it is not. */
+export type CompactionBoundary = "safe" | "mid-task";
+
+const ADVISABLE_SHARE = 0.7;
+const REQUIRED_SHARE = 0.9;
+
+export function compactionUrgency(
+  messages: readonly AgentMessage[],
+  options: { contextLimit: number; outputBudget: number },
+): CompactionUrgency {
+  const usable = Math.max(options.contextLimit - options.outputBudget, 0);
+  const used = estimateMessageTokens(messages);
+  if (used > usable * REQUIRED_SHARE) return "required";
+  if (used > usable * ADVISABLE_SHARE) return "advisable";
+  return "none";
+}
+
+/**
+ * Whether the transcript is at a point where forgetting is safe.
+ *
+ * Two conditions, both structural rather than guessed. The transcript must end with a plain
+ * assistant message — a turn that actually concluded, rather than one suspended between a tool
+ * call and its result, where summarizing would strand the call. And nothing may be marked
+ * in progress on the agent's own plan: an item the agent believes it is halfway through is a
+ * promise that the details behind it still matter.
+ */
+export function atSafeBoundary(messages: readonly AgentMessage[], options: { workInProgress?: boolean } = {}): boolean {
+  if (options.workInProgress) return false;
+  const last = messages.at(-1);
+  return last !== undefined && last.role === "assistant" && !("toolCalls" in last);
+}
+
+/**
  * Decides what to compact when a conversation approaches the model's context limit.
  *
  * OpenCode's threshold — summarize at 90% of what is left after reserving the output budget — is
- * the one used here. Two rules shape the split, and both exist to avoid breaking the transcript:
- * the system and opening messages are always kept, and the tail is cut at a boundary that never
- * separates an assistant's tool calls from their results, since a tool result whose call has been
- * summarized away is an API error rather than a smaller context.
+ * the ceiling used here, but not the only trigger: past 70% the transcript is compacted as soon as
+ * the work reaches a boundary, so the summary is written where there is a clean thing to say
+ * rather than wherever the buffer happened to fill. Two rules then shape the split, and both exist
+ * to avoid breaking the transcript: the system and opening messages are always kept, and the tail
+ * is cut at a boundary that never separates an assistant's tool calls from their results, since a
+ * tool result whose call has been summarized away is an API error rather than a smaller context.
  */
 export function planCompaction(
   messages: readonly AgentMessage[],
-  options: { contextLimit: number; outputBudget: number; keepRecent?: number },
+  options: { contextLimit: number; outputBudget: number; keepRecent?: number; boundary?: CompactionBoundary },
 ): CompactionPlan | null {
-  const threshold = Math.max((options.contextLimit - options.outputBudget) * 0.9, 0);
-  if (estimateMessageTokens(messages) <= threshold) return null;
+  const urgency = compactionUrgency(messages, options);
+  if (urgency === "none") return null;
+  if (urgency === "advisable" && (options.boundary ?? "mid-task") !== "safe") return null;
 
   const keepRecent = options.keepRecent ?? 6;
   // The system prompt and the original request are what the whole session means; they never go.
@@ -230,13 +277,64 @@ export const COMPACTION_INSTRUCTION = [
   "Summarize the conversation so far so that work can continue without the full transcript.",
   "Include: what the user asked for, what has been done and verified, the exact files and symbols involved, decisions made and why, and what remains.",
   "Preserve concrete details — paths, function names, commands run and their results, error messages. Drop pleasantries and superseded attempts.",
+  "Reproduce every standing instruction, prohibition and constraint the user gave, verbatim and in full, however long ago it was said — these are the one thing that must never be shortened or paraphrased away.",
   "Write it as notes to your future self, not as a report to the user.",
 ].join(" ");
 
-export function buildCompactedMessages(summary: string, plan: CompactionPlan): AgentMessage[] {
+/**
+ * The governing facts of a session, which a summary is not allowed to be the only record of.
+ *
+ * Summarization is lossy by design, and what it loses first is the boring part: the permission
+ * mode, which exact actions the user has already approved or refused, what the session is
+ * permitted to spend, what the original request actually said. Every one of those is a constraint
+ * on what the agent may *do*, and a constraint that survives only as a sentence in a summary is a
+ * constraint that quietly stops existing three compactions later — the failure mode is silent,
+ * because nothing errors when a rule is simply no longer mentioned.
+ *
+ * So they are never summarized. They are re-derived from live state at every compaction and
+ * re-stated verbatim, which means the block cannot drift from the ledger it describes: it is a
+ * rendering of the ledger, not a memory of it.
+ */
+export type StandingConstraints = {
+  mode: string;
+  /** The request that opened the session, in full. */
+  objective: string;
+  /** Decisions the user has already made about specific actions. */
+  approvals: Record<string, "allow" | "deny">;
+  /** Items the agent's own plan still has open. */
+  openTodos: string[];
+  /** What is left to spend, already formatted for a person. */
+  budgetRemaining?: string;
+};
+
+export const STANDING_CONSTRAINTS_HEADING = "[Standing constraints — still in force, not a summary]";
+
+export function standingConstraintsBlock(constraints: StandingConstraints): string {
+  const allowed = Object.entries(constraints.approvals).filter(([, decision]) => decision === "allow").map(([key]) => key);
+  const denied = Object.entries(constraints.approvals).filter(([, decision]) => decision === "deny").map(([key]) => key);
+  return [
+    STANDING_CONSTRAINTS_HEADING,
+    `Permission mode: ${constraints.mode}.`,
+    `Original request: ${constraints.objective.trim()}`,
+    allowed.length > 0 ? `Actions the user has standing-approved: ${allowed.join(", ")}.` : "No action has standing approval; every effectful call is asked for.",
+    ...(denied.length > 0 ? [`Actions the user has refused — do not propose them again: ${denied.join(", ")}.`] : []),
+    ...(constraints.openTodos.length > 0 ? [`Still open: ${constraints.openTodos.join("; ")}.`] : []),
+    ...(constraints.budgetRemaining ? [`Remaining approved spend: ${constraints.budgetRemaining}.`] : []),
+  ].join("\n");
+}
+
+/**
+ * The transcript after compaction: the system message, the constraints, the summary, the tail.
+ *
+ * Constraints first and summary second, deliberately. The summary is the part the model reasons
+ * *from*; the constraints are the part it must reason *within*, and putting them ahead of the
+ * narrative keeps them from reading as one more historical detail that happened to be mentioned.
+ */
+export function buildCompactedMessages(summary: string, plan: CompactionPlan, standing?: StandingConstraints): AgentMessage[] {
   const system = plan.toSummarize[0]?.role === "system" ? [plan.toSummarize[0]] : [];
   return [
     ...system,
+    ...(standing ? [{ role: "user" as const, content: standingConstraintsBlock(standing) }] : []),
     { role: "user" as const, content: `[Earlier conversation, summarized]\n\n${summary.trim()}` },
     ...plan.toKeep,
   ];

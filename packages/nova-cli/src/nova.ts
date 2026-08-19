@@ -4,6 +4,10 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agent";
+import { runAcpServer } from "./acp-server";
+import { renderGallery } from "./gallery";
+import { displayMask, fixObjective } from "./defender-screen";
+import { CommandUsage, rankWithContext, renderGroupedHelp, renderNextStep, type NavContext } from "./navigation";
 import { NovaSessionDaemon, type DaemonApprovalRequest, type DaemonNotification, type NovaDaemonClient } from "@circuit-nova/nova-core/nova-cli/daemon";
 import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
@@ -30,7 +34,7 @@ import { describeToolCall, summarizeToolResult } from "./transcript";
 import { renderMarkdown } from "./markdown";
 import { completeInput, inlineCompletion, isKnownCommand, parseModeCommand, renderCommandHelp, renderKeyboardShortcuts, suggestCommand, suggestionsFor } from "./commands";
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
-import { installShortcuts, openChooser, openModelPicker, openPalette, openTable, replaceLine, withBorrowedKeyboard } from "./shortcuts";
+import { installShortcuts, openChooser, openDefenderTriage, openModelPicker, openPalette, openTable, replaceLine, withBorrowedKeyboard } from "./shortcuts";
 import { runChooser, type ChooserItem } from "./chooser";
 import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
 import { hostOf, providerBaseUrl } from "./endpoints";
@@ -44,12 +48,12 @@ import { OutputRouter, TabSink, replayLines, terminalStream } from "./output";
 import { renderPatch } from "./patch-view";
 import { fetchableProviders, isCacheFresh, loadLiveModels, readModelCache } from "./model-fetch";
 import { JobStream, WatchRegistry, sandboxWarning } from "./job-stream";
-import { tabPanes, type WorkspaceSnapshot } from "./workspace-model";
+import { PaneActivity, tabPanes, type WorkspaceSnapshot } from "./workspace-model";
 import { explainScreenRefusal, withFullScreen, type ScreenCapabilities, type TerminalControls } from "./screen-host";
 import { findTopic, parseGuideCommand, renderGuideIndex, renderGuideTopic, renderWholeGuide, searchTopics } from "./guide";
 import { DEFAULT_THEME_NAME, NO_COLOR_PALETTE, buildPalette, detectPreferredTheme, findBuiltinTheme, parseColor, parseThemeCommand, type Palette, type Rgb } from "./theme";
 import { discoverThemes, findTheme, themeDirectory } from "./theme-files";
-import { buildWanderPrompt, gatherWanderEvidence, parseWanderCommand, wanderJobObjective } from "./wander";
+import { buildWanderPrompt, gatherWanderEvidence, parseWanderCommand, renderWanderResults, wanderJobObjective } from "./wander";
 import { WANDER_LAB_FILES } from "@circuit-nova/nova-core/wander";
 import {
   appendJobLog,
@@ -180,6 +184,10 @@ export function describeLocation(backend: SandboxBackend): string {
 
 type ParsedArgs = {
   mode: NovaMode;
+  /** Speak the Agent Client Protocol on stdio instead of running a terminal session. */
+  acp: boolean;
+  /** Draw every UI component once and exit, for looking at rendering rather than behaviour. */
+  gallery: boolean;
   prompt: string | null;
   resume: string | null;
   historyCommand: HistoryCommand | null;
@@ -265,6 +273,7 @@ const SESSION_ID = /^\d{8}T\d{6}Z-[a-z0-9]{6}$/;
 const DEFAULT_DOCKER_IMAGE = "debian:stable-slim";
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
+  const acpRequested = argv[0] === "acp" || argv.includes("--acp");
   const updateRequested = argv[0] === "update" || argv.includes("--update") || argv.includes("--check-update");
   const settingsRequested = argv[0] === "settings" || argv.includes("--settings");
   const historyRequested = argv[0] === "history";
@@ -272,11 +281,13 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     mode: "build", prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false, doctor: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
     root: process.cwd(), help: false, pace: "off", ascii: false, theme: undefined, pin: false,
+    acp: acpRequested,
+    gallery: argv[0] === "gallery" || argv.includes("--gallery"),
     backend: "local", dockerImage: DEFAULT_DOCKER_IMAGE, upload: false, preset: undefined, sandboxMinutes: 30, budget: undefined, provider: undefined, model: undefined, currency: undefined, country: undefined, language: undefined, allowSensitive: false, json: false,
   };
   const rest: string[] = [];
 
-  for (let index = argv[0] === "update" || argv[0] === "settings" || historyRequested ? 1 : 0; index < argv.length; index += 1) {
+  for (let index = argv[0] === "update" || argv[0] === "settings" || argv[0] === "acp" || argv[0] === "gallery" || historyRequested ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--plan" || argument === "-p") parsed.mode = "plan";
     else if (argument === "--auto" || argument === "-y") parsed.mode = "auto";
@@ -285,6 +296,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--help" || argument === "-h") parsed.help = true;
     else if (argument === "--version" || argument === "-v") parsed.version = true;
     else if (argument === "--settings") parsed.settings = true;
+    else if (argument === "--acp") parsed.acp = true;
+    else if (argument === "--gallery") parsed.gallery = true;
     else if (argument === "--estimate") parsed.estimateOnly = true;
     else if (argument === "--allow-sensitive") parsed.allowSensitive = true;
     else if (argument === "--json" || argument === "--headless") parsed.json = true;
@@ -369,6 +382,8 @@ ${style.bold("nova")} — a coding agent in your terminal
   nova --version            Print the installed CLI version
 
 ${style.bold("Where the files go")}
+  nova acp                  Speak the Agent Client Protocol on stdio (for editors)
+  nova gallery              Draw every UI component once, to see how this terminal renders it
   nova --sandbox            Work in a remote E2B sandbox, not on this machine
   nova --sandbox docker     Work in a local Docker container instead of a remote one
   nova --docker-image IMG   Image for --sandbox docker (or set DOCKER_CODING_IMAGE)
@@ -477,7 +492,7 @@ const expandables = new ExpandableStore();
 function contentWidth(): number {
   return screen?.current.contentWidth ?? (process.stdout.columns ?? 80);
 }
-const activity: { awaitingFirstDelta: boolean; toolCalls: number; tokens: number; phase: "thinking" | "operation"; operation?: string } = {
+const activity: { awaitingFirstDelta: boolean; toolCalls: number; tokens: number; phase: "thinking" | "operation"; operation?: string; steps?: { done: number; total: number; label?: string } } = {
   awaitingFirstDelta: false,
   toolCalls: 0,
   tokens: 0,
@@ -672,6 +687,15 @@ export function renderUserMessage(
   return box(body, { depth, width, title: "you", titleColor: "green", glyphs: glyphSet, borderStyle });
 }
 
+/**
+ * How long a turn must last before it is worth animating.
+ *
+ * A cached or refused turn can be over in tens of milliseconds, and drawing a spinner frame for it
+ * only to erase it reads as a flicker rather than as feedback. Below what a person registers as a
+ * pause, so a real turn still starts animating immediately as far as anyone can tell.
+ */
+const SPINNER_START_DELAY_MS = 200;
+
 export function renderEvent(event: NovaEvent): void {
   // Every event clears the spinner before printing. If the spinner is still running its next tick
   // redraws the bar underneath whatever just printed, so feedback continues through a whole run of
@@ -743,6 +767,14 @@ export function renderEvent(event: NovaEvent): void {
   }
   if (runtime.type === "tool_result") {
     activity.toolCalls += 1;
+    // Read from the structured result rather than from the rendered checklist: the counter must
+    // not depend on how the list happens to be printed.
+    const items = Array.isArray(runtime.data?.items) ? runtime.data.items as Array<{ status?: string }> : undefined;
+    if (items) {
+      activity.steps = items.length > 0
+        ? { done: items.filter((item) => item.status === "done").length, total: items.length, label: "plan" }
+        : undefined;
+    }
     const mark = runtime.isError ? style.red(glyphs.cross) : style.green(glyphs.check);
     const summary = summarizeToolResult(runtime.toolName, runtime.content, runtime.isError);
     // The announcement and the outcome are the same line, rewritten where it already sits. Reads
@@ -754,6 +786,13 @@ export function renderEvent(event: NovaEvent): void {
       out.write(`${completed}\n`);
     }
     pendingCalls.delete(runtime.toolCallId);
+
+    // Output too large for the transcript did not vanish — say where it went, in the same place the
+    // truncated tail used to be, so "the rest of it" is a path rather than a loss.
+    if (runtime.artifact) {
+      const artifact = runtime.artifact;
+      out.write(style.dim(`  ${glyphs.elbow} ${artifact.lines.toLocaleString()} lines kept in ${artifact.path}\n`));
+    }
 
     // The detail belongs *under* the line that announced it. Anything printed here ends the
     // rewritable block — the tool lines above are no longer the bottom of the screen, and touching
@@ -1147,6 +1186,30 @@ async function main(): Promise<number> {
   if (args.version) {
     out.write(`nova ${NOVA_CLI_VERSION}\n`);
     return 0;
+  }
+
+  if (args.gallery) {
+    // Drawn at the real terminal's width and glyph set, because the point is to see what this
+    // terminal does with it — the ASCII and no-colour forms are reached with --ascii and NO_COLOR,
+    // which are the same switches a real session honours.
+    out.write(`${renderGallery({
+      width: Math.max(24, (process.stdout.columns ?? 80) - 1),
+      depth: earlyDepth,
+      glyphs: args.ascii ? resolveGlyphs({ ...environment, NOVA_GLYPHS: "ascii" }) : resolveGlyphs(environment),
+    })}\n`);
+    return 0;
+  }
+
+  // Before anything that could print: from here on stdout is a protocol channel, and one stray
+  // human-readable byte on it is a parse error the client cannot recover from.
+  if (args.acp) {
+    return runAcpServer({
+      input: process.stdin,
+      write: (line) => process.stdout.write(line),
+      environment: processEnvironment,
+      defaultRoot: args.root,
+      mode: args.mode,
+    });
   }
 
   if (args.update) {
@@ -2067,6 +2130,34 @@ async function main(): Promise<number> {
   bindSigint();
   exitCleanly = () => { unbindSigint(); watched.stopAll(); screen?.exit(); uninstallShortcuts(); readline.close(); };
 
+  /** Set when the turn about to run is a wander lab, so its results chart is printed once, after it. */
+  let wanderRunning = false;
+  /** Which commands this session has reached for, so suggestions stop offering what you already use. */
+  const usage = new CommandUsage();
+  /** Findings the last `/scan` reported, so defender work can be offered when there is some. */
+  let lastScanFindings: number | undefined;
+
+  /**
+   * Where this session actually is, for anything that has to decide what to offer.
+   *
+   * Read fresh at every use rather than kept as state: every field here already lives somewhere
+   * that owns it — the ledger, the tab controller, the watch registry — and a second copy would be
+   * one more thing to keep in step, which is exactly how a "smart" suggestion starts describing a
+   * session that ended two turns ago.
+   */
+  const navContext = (): NavContext => ({
+    mode,
+    turns: ledger.history.length,
+    changedFiles: touchedFiles.size,
+    openTodos: agent.todos.filter((item) => item.status !== "done").length,
+    runningJobs: watched.size,
+    tabs: tabs.size,
+    sandbox: agent.workspaceKind !== "local",
+    providerConfigured: true,
+    hasSpend: Boolean(ledger.displayTotal?.micros),
+    ...(lastScanFindings === undefined ? {} : { openFindings: lastScanFindings }),
+    recent: usage.recent,
+  });
   let streamedAnswer = false;
   /** The last turn's terminal status, which headless mode turns into the process exit code. */
   let lastTurnStatus: AgentRuntimeResult["status"] = "failed";
@@ -2164,6 +2255,7 @@ async function main(): Promise<number> {
     activity.tokens = 0;
     activity.phase = "thinking";
     activity.operation = undefined;
+    activity.steps = undefined;
     touchedFiles = new Set();
     forgetToolLines();
     markdown.reset();
@@ -2178,6 +2270,9 @@ async function main(): Promise<number> {
         cost: ledger.displayTotal ? formatMoney(ledger.displayTotal) : "cost unknown",
         phase: activity.phase,
         operation: activity.operation,
+        // The agent's own plan, counted. Present only once it has one — an X-of-Y with nothing
+        // behind it is worse than no counter at all.
+        steps: activity.steps,
         badge: paceBadge(pace, glyphs),
       });
       // A pinned footer redraws its own fixed row and never needs the erase-above-cursor dance
@@ -2190,7 +2285,7 @@ async function main(): Promise<number> {
       // row that the corners and title have already spent part of.
       spinner = new Spinner(() => screen?.pinned
         ? showStatus(formatStatusLine(fields(), statusRoomFor(screen.current.columns), depth, glyphs))
-        : statusBar.render(fields(), depth, glyphs), 120, glyphs);
+        : statusBar.render(fields(), depth, glyphs), 120, glyphs, SPINNER_START_DELAY_MS);
       spinner.start();
     }
     turnActive = true;
@@ -2241,6 +2336,17 @@ async function main(): Promise<number> {
         out.write(`${panel([...touchedFiles].sort(), sectionStyle(), { title: "files modified", tone: "good" })}\n`);
       }
 
+      // A finished lab grades every claim it kept, and the grades are the finding. Read from the
+      // structured file the lab writes rather than from its prose, and shown only when the run that
+      // just ended was a wander — the file lingers in the project afterwards, and reprinting last
+      // week's chart under an unrelated turn would be a lie about what just happened.
+      if (wanderRunning) {
+        wanderRunning = false;
+        const graded = await agent.readFile(WANDER_LAB_FILES.results).catch(() => null);
+        const chart = graded ? renderWanderResults(graded.content, sectionStyle(), contentWidth()) : null;
+        if (chart) out.write(`${chart}\n`);
+      }
+
       const turn = ledger.record({
         usage: result.usage,
         iterations: result.iterations,
@@ -2256,6 +2362,10 @@ async function main(): Promise<number> {
       })}\n`);
       const warning = ledger.budgetWarning();
       if (warning) out.write(`  ${style.yellow(warning)}\n`);
+      // One line, at the one moment a person is deciding what to do next, naming the reason as well
+      // as the command. Suppressed once they have used it: a hint you have taken is not a hint.
+      const next = renderNextStep(navContext(), sectionStyle());
+      if (next && interactive) out.write(`${next}\n`);
       lastTurnStatus = result.status;
       headless?.turnEnd({
         status: result.status,
@@ -2710,10 +2820,27 @@ async function main(): Promise<number> {
     return "saved";
   };
 
+  /**
+   * Work a screen decided on, waiting for the terminal to be free.
+   *
+   * A full-screen surface cannot start a model turn under itself — the turn would print into a
+   * frame that is about to be erased, and there would be nothing to interrupt it with. So the
+   * triage screen returns decisions, they land here, and the loop picks them up exactly as though
+   * they had been typed. Drained before the prompt is drawn, so the queued objective is the next
+   * thing that runs rather than the thing after whatever the user types next.
+   */
+  const queuedInput: string[] = [];
+
   for (;;) {
     showIdleStatus();
     screen?.positionInput();
     let rawInput: string;
+    const queued = queuedInput.shift();
+    if (queued !== undefined) {
+      // Echoed, because work that starts without anyone typing it must still be visible as a
+      // request in the transcript — otherwise the next answer has no question above it.
+      out.write(`${renderUserTurn(queued)}\n`);
+    }
     try {
       // With a pinned footer the prompt is the input bar's left border, so readline redraws it as
       // part of the prompt and the box keeps its side through every edit. Without one there is no
@@ -2725,7 +2852,7 @@ async function main(): Promise<number> {
         : inlineBar()
           ? promptBox.draw(mode, where, idleStatusLine())
           : screen ? label : `\n${label}`;
-      rawInput = await readline.question(promptLabel);
+      rawInput = queued ?? await readline.question(promptLabel);
     } catch (error) {
       if (isReadlineExit(error) || exitRequested) break;
       throw error;
@@ -2740,18 +2867,30 @@ async function main(): Promise<number> {
     let input = rawInput.trim();
     if (!input) continue;
 
+    usage.record(input);
+
     // The palette resolves to a command and then falls through to the same dispatch a typed one
     // takes. Anything else would be a second place for a command's behaviour to live.
     if (input === "/palette") {
       const chosen = interactive
-        ? await openPalette({ readline, input: process.stdin, output: process.stdout, registry: keys })
+        ? await openPalette({ readline, input: process.stdin, output: process.stdout, registry: keys }, undefined, {
+            // Ranked against this session: the empty-query view is otherwise the catalog in
+            // alphabetical order, which is the least useful thing a palette can open on.
+            rank: (entries, query) => rankWithContext(entries, query, navContext()),
+          })
         : undefined;
       if (!chosen?.trim()) continue;
       input = chosen.trim();
     }
 
     if (input === "/exit" || input === "/quit") break;
-    if (input === "/help") { out.write(helpText(language, keys.shortcutLabels())); continue; }
+    if (input === "/help" || input === "/help all") {
+      // Grouped and filtered to what this session can actually use, with everything one keystroke
+      // away. The flag reference stays on `nova --help`, where someone reading about invocation is
+      // looking; inside a session it is thirty lines about starting a session you are already in.
+      out.write(`${renderGroupedHelp(navContext(), sectionStyle(), { all: input.endsWith(" all") })}\n`);
+      continue;
+    }
     const modeCommand = parseModeCommand(input);
     if (modeCommand?.type === "show") {
       const posture = mode === "plan" ? "read-only; write and command tools are unavailable" : mode === "build" ? "workspace changes ask for approval" : mode === "defender" ? "security review; every change still asks for approval" : "ordinary workspace changes are pre-approved; sensitive and external actions still ask";
@@ -3061,11 +3200,13 @@ async function main(): Promise<number> {
        * it reads the session and never mutates it, so leaving it puts you back exactly where you
        * were with nothing to undo.
        */
+      // Lives for as long as the panel is open, which is the only span its samples mean anything
+      // over: "lines since the last frame" is a rate only while the frames keep coming.
+      const paneActivity = new PaneActivity();
       const readSnapshot = (): WorkspaceSnapshot => {
         const views = tabs.views(describeTab);
         const activeIndex = Math.max(0, views.findIndex((view) => view.active));
-        return {
-          panes: [
+        const panes = [
             ...tabPanes(views, (id) => {
               const held = tabs.find(id);
               return { lines: held?.payload.sink.log.lines ?? [], dropped: held?.payload.sink.log.dropped ?? 0 };
@@ -3079,7 +3220,10 @@ async function main(): Promise<number> {
               lines: job.sink.log.lines,
               dropped: job.sink.log.dropped,
             })),
-          ],
+        ];
+        const activity = paneActivity.sample(panes);
+        return {
+          panes: panes.map((pane) => ({ ...pane, activity: activity.get(pane.key) })),
           selected: activeIndex,
           scroll: 0,
           palette,
@@ -3510,6 +3654,7 @@ async function main(): Promise<number> {
       await workspace.writeFile(WANDER_LAB_FILES.evidence, evidence.markdown);
       out.write(style.dim(`  ${evidence.hits.length} source${evidence.hits.length === 1 ? "" : "s"} → ${WANDER_LAB_FILES.evidence}\n`));
       input = buildWanderPrompt(wander.topic);
+      wanderRunning = true;
     }
 
     const jobsCommand = parseJobsCommand(input);
@@ -3823,17 +3968,55 @@ async function main(): Promise<number> {
       const include = input.slice("/scan".length).trim() || undefined;
       out.write(style.dim("  scanning for likely hardcoded secrets…\n"));
       const findings = await agent.scanSecrets(include);
+      lastScanFindings = findings.length;
       if (findings.length === 0) {
         out.write(`  ${style.green(glyphs.check)} No likely secrets found by pattern${include ? ` in ${include}` : ""}.\n`);
         continue;
       }
+      // Interactive: the queue, one finding at a time, with the evidence beside it and a decision
+      // attached — because a flat list of forty findings is read once and dealt with never. Piped
+      // or non-interactive: the same findings as lines, since there is nobody to press a key.
+      if (interactive && liveTerminal) {
+        out.write(`  ${style.yellow(`${findings.length} possible secret${findings.length === 1 ? "" : "s"}`)} found by pattern${include ? ` in ${include}` : ""} — verify each; a pattern match is a lead, not proof.\n`);
+        const outcome = await openDefenderTriage(
+          { readline, input: process.stdin, output: process.stdout },
+          findings,
+          {
+            style: { depth: renderDepth, glyphs },
+            // The matched line and its neighbours, read through the workspace so a sandboxed
+            // session shows the sandbox's copy. Already masked by the scan; the file is read here
+            // only to show the shape of the code around it.
+            loadEvidence: async (finding) => {
+              const window = await agent.readFile(finding.path, { offset: Math.max(1, finding.line - 2), limit: 5 }).catch(() => null);
+              if (!window) return undefined;
+              return window.content.split("\n").map((line, index) => {
+                const number = window.startLine + index;
+                // Never the file's own text for the matched line: the whole point of masking is
+                // that the secret does not get printed, and the line it sits on is where it is.
+                return number === finding.line ? `${number} | ${finding.masked}  (${finding.kind})` : `${number} | ${line}`;
+              });
+            },
+          },
+        );
+        lastScanFindings = outcome.findings.filter((finding) => finding.triage === "open").length;
+        for (const finding of outcome.toFix) {
+          out.write(`  ${style.yellow(glyphs.pending)} queued for repair: ${finding.path}:${finding.line} ${style.dim(finding.kind)}\n`);
+        }
+        // Decisions become work, one turn each, in the order they were picked. Queued rather than
+        // run inside the screen: a model turn needs the terminal back first.
+        for (const finding of outcome.toFix.reverse()) queuedInput.unshift(fixObjective(finding));
+        const ignored = outcome.findings.filter((finding) => finding.triage === "ignored").length;
+        if (ignored > 0) out.write(style.dim(`  ${ignored} ignored this pass\n`));
+        continue;
+      }
+
       const bySeverity = new Map<string, number>();
       for (const finding of findings) bySeverity.set(finding.severity, (bySeverity.get(finding.severity) ?? 0) + 1);
       out.write(`  ${style.yellow(`${findings.length} possible secret${findings.length === 1 ? "" : "s"}`)} found by pattern, worst first — verify each; a pattern match is a lead, not proof.\n`);
-      // Severity, not count-per-file: what a person triaging this list needs first is "how bad",
-      // read by shade — exactly what `heatStrip` is for over `barChart`, which would instead answer
-      // "how many" per row and bury the one critical finding among a pile of medium ones.
-      for (const line of heatStrip(
+      // Bar length is the count and the label is the severity. A heat strip shaded by count drew
+      // fourteen mediums darker than two criticals, which reads as "the mediums are the worse
+      // problem" — the one thing a security summary must never imply.
+      for (const line of barChart(
         (["critical", "high", "medium"] as const)
           .filter((severity) => bySeverity.has(severity))
           .map((severity) => ({ label: severity, value: bySeverity.get(severity) ?? 0 })),
@@ -3842,7 +4025,7 @@ async function main(): Promise<number> {
       out.write("\n");
       for (const finding of findings) {
         const severityColor = finding.severity === "critical" ? style.red : finding.severity === "high" ? style.yellow : style.dim;
-        out.write(`  ${severityColor(`[${finding.severity}]`)} ${finding.path}:${finding.line}: ${finding.kind} — ${style.dim(finding.masked)}\n`);
+        out.write(`  ${severityColor(`[${finding.severity}]`)} ${finding.path}:${finding.line}: ${finding.kind} — ${style.dim(displayMask(finding.masked, glyphs))}\n`);
       }
       continue;
     }

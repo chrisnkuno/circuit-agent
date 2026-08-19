@@ -131,7 +131,9 @@ export type AgentRuntimeEvent =
   | { type: "tool_call"; toolCallId: string; toolName: string; effect: ToolEffect; arguments: Record<string, unknown> }
   // `content` is truncated to fit the context budget and is written for the model; `data` is the
   // same result as values, untruncated, for a consumer that needs to act on it rather than read it.
-  | { type: "tool_result"; toolCallId: string; toolName: string; isError: boolean; effect: ToolEffect; content: string; data?: Record<string, unknown> }
+  // `artifact` is present when the result was too large for the transcript and was written to a
+  // file instead: `content` is then the bounded excerpt, and the artifact says where the rest is.
+  | { type: "tool_result"; toolCallId: string; toolName: string; isError: boolean; effect: ToolEffect; content: string; data?: Record<string, unknown>; artifact?: StoredToolArtifact }
   | { type: "runtime_stop"; status: AgentRuntimeResult["status"]; summary: string };
 
 export type AgentRuntimeControl = {
@@ -273,11 +275,85 @@ function truncate(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 32))}\n...[tool result truncated]`;
 }
 
+/** Where an oversized tool result was put, as the model and the front end both need to see it. */
+export type StoredToolArtifact = {
+  /** Root-relative path the model can hand straight to `read_file`. */
+  path: string;
+  bytes: number;
+  lines: number;
+  /** True when even the stored copy had to be cut — the store has its own ceiling. */
+  elided: boolean;
+};
+
+/**
+ * Somewhere to put a tool result that is too large to live in the conversation.
+ *
+ * Injected rather than built in, because *where* an artifact belongs is a property of the backend:
+ * a sandboxed session must write it inside the sandbox, next to the files the agent can actually
+ * read. The runtime only needs the promise of a path back. A runtime constructed without one keeps
+ * the old behaviour exactly — the result is truncated and the rest is gone.
+ */
+export interface ToolResultArtifactStore {
+  put(input: { toolName: string; toolCallId: string; content: string }): Promise<StoredToolArtifact>;
+}
+
+/**
+ * Below this many characters an excerpt is not worth building: the explanatory header would be
+ * most of what the model receives, which is less useful than the plain truncation it replaces.
+ */
+const EVICTION_MIN_BUDGET = 400;
+
+/** Room set aside for the "N lines elided" marker, which is written after the split is chosen. */
+const ELISION_MARKER_BUDGET = 96;
+
+function takeWithinBudget(lines: readonly string[], budget: number, fromEnd: boolean): string[] {
+  const taken: string[] = [];
+  let used = 0;
+  for (let step = 0; step < lines.length; step += 1) {
+    const line = lines[fromEnd ? lines.length - 1 - step : step];
+    const cost = line.length + 1;
+    if (used + cost > budget) break;
+    used += cost;
+    taken.push(line);
+  }
+  return fromEnd ? taken.reverse() : taken;
+}
+
+/**
+ * The bounded thing the model sees in place of a result that has been written to a file.
+ *
+ * Head *and* tail, not a prefix. A truncated prefix is precisely the wrong half of a test log, a
+ * stack trace or a build: the answer is almost always at the end, and cutting from the front is
+ * how an agent ends up reporting "the command produced a lot of output" instead of the one line
+ * that said what failed. The elision marker between them names the path again, so the way to get
+ * the middle is legible at the point where the middle went missing.
+ *
+ * Guaranteed never longer than `budget`, whatever the content — the caller is spending a context
+ * budget, and a helper that can overshoot it is a helper that has to be re-truncated anyway.
+ */
+export function evictedToolResult(content: string, artifact: StoredToolArtifact, budget: number): string {
+  const header =
+    `[Output too large for the transcript: ${artifact.lines} lines, ${artifact.bytes} bytes.` +
+    ` The whole thing is saved at ${artifact.path} — read any window of it with read_file(path, offset, limit),` +
+    ` or search it with run_command. The beginning and end are below.]`;
+  if (budget < EVICTION_MIN_BUDGET || header.length + ELISION_MARKER_BUDGET + 64 > budget) return truncate(content, budget);
+
+  const lines = content.split("\n");
+  const bodyBudget = budget - header.length - 2 - ELISION_MARKER_BUDGET;
+  const headBudget = Math.floor(bodyBudget * 0.6);
+  const head = takeWithinBudget(lines, headBudget, false);
+  const tail = takeWithinBudget(lines.slice(head.length), bodyBudget - headBudget, true);
+  const elided = lines.length - head.length - tail.length;
+  const marker = `...[${elided} line${elided === 1 ? "" : "s"} elided — full output at ${artifact.path}]...`;
+  const assembled = [header, "", ...head, marker, ...tail].join("\n");
+  return assembled.length <= budget ? assembled : assembled.slice(0, budget);
+}
+
 export class BoundedAgentRuntime {
   private readonly toolsByName: Map<string, AgentTool>;
 
   constructor(
-    private readonly dependencies: { model: AgentTurnProvider; tools: AgentTool[]; control: AgentRuntimeControl; prices: ModelPriceCatalog },
+    private readonly dependencies: { model: AgentTurnProvider; tools: AgentTool[]; control: AgentRuntimeControl; prices: ModelPriceCatalog; artifacts?: ToolResultArtifactStore },
   ) {
     this.toolsByName = new Map();
     for (const tool of dependencies.tools) {
@@ -462,7 +538,31 @@ export class BoundedAgentRuntime {
       for (const { call, tool, result } of results) {
         toolCallsExecuted += 1;
         const remaining = request.maxTotalToolResultChars - totalToolResultChars;
-        const content = truncate(result.content || "(empty tool result)", Math.max(0, Math.min(request.maxToolResultChars, remaining)));
+        const budget = Math.max(0, Math.min(request.maxToolResultChars, remaining));
+        const raw = result.content || "(empty tool result)";
+        /**
+         * Oversized results leave the conversation and become files.
+         *
+         * Only the excerpt is charged against the context budget, which is the entire point: a
+         * 400,000-character test log costs the transcript a few hundred characters and stays
+         * fully readable through `read_file`, instead of costing the whole per-call budget and
+         * still being missing the part that mattered.
+         *
+         * Storing is best-effort by construction. A read-only sandbox or a full disk must not
+         * turn into a failed turn over bookkeeping, so a store that throws falls back to exactly
+         * the truncation that would have happened if no store had been configured at all.
+         */
+        let artifact: StoredToolArtifact | undefined;
+        let content = truncate(raw, budget);
+        if (this.dependencies.artifacts && raw.length > budget && budget > 0) {
+          const stored = await this.dependencies.artifacts
+            .put({ toolName: call.name, toolCallId: call.id, content: raw })
+            .catch(() => undefined);
+          if (stored) {
+            artifact = stored;
+            content = evictedToolResult(raw, stored, budget);
+          }
+        }
         totalToolResultChars += content.length;
         messages.push({ role: "tool", content, toolCallId: call.id, name: call.name });
         const effect = tool.effect === "external" ? "external" : result.effect ?? tool.effect;
@@ -474,7 +574,7 @@ export class BoundedAgentRuntime {
           // running the linter after the e2e suite is not a reason to ask for the e2e suite again.
           strongestEvidence = Math.max(strongestEvidence, EVIDENCE_RANK[result.verification.kind ?? "check"]);
         }
-        await this.dependencies.control.persistEvent({ type: "tool_result", toolCallId: call.id, toolName: call.name, isError: result.isError ?? false, effect, content, ...(result.data ? { data: result.data } : {}) });
+        await this.dependencies.control.persistEvent({ type: "tool_result", toolCallId: call.id, toolName: call.name, isError: result.isError ?? false, effect, content, ...(result.data ? { data: result.data } : {}), ...(artifact ? { artifact } : {}) });
       }
       if (totalToolResultChars >= request.maxTotalToolResultChars) return stop("iteration_limit", "Run reached its total tool-result context budget.", iteration);
     }

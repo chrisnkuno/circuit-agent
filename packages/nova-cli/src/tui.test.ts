@@ -10,6 +10,7 @@ import {
   formatTokens,
   MarkdownStream,
   novaSpinnerFrame,
+  stepProgress,
   joinHorizontal,
   padToWidth,
   paginator,
@@ -543,7 +544,9 @@ describe("MarkdownStream", () => {
     const markdown = new MarkdownStream(stream, "none", () => 80);
     markdown.push("```ts\nconst x = 1;");
     markdown.end();
-    expect(writes.join("")).toContain("╰────\n");
+    // Matched by its corner: the closing rule is now drawn to the same length as the opening one,
+    // so a fixed stub width is no longer what "visually closed" means.
+    expect(writes.join("")).toMatch(/╰─{4,}/);
     expect(markdown.active).toBe(false);
   });
 
@@ -1165,5 +1168,83 @@ describe("sliceToWidth", () => {
   it("returns nothing for a zero or negative budget", () => {
     expect(sliceToWidth("abc", 0)).toBe("");
     expect(sliceToWidth("abc", -5)).toBe("");
+  });
+});
+
+describe("counted progress", () => {
+  it("shows the two numbers, and never a bar without them", () => {
+    expect(stepProgress(3, 8, { depth: "none" })).toBe("3/8");
+    expect(stepProgress(3, 8, { label: "plan", depth: "none" })).toBe("plan 3/8");
+    expect(stepProgress(0, 0, { label: "plan", depth: "none" })).toBe("plan 0/0");
+    // A total of zero has no fraction to draw, so no bar is drawn for it.
+    expect(stepProgress(0, 0, { width: 10, depth: "none" })).toBe("0/0");
+  });
+
+  it("draws a bar whose fill matches the fraction it reports", () => {
+    const empty = stepProgress(0, 10, { width: 10, depth: "none" });
+    const half = stepProgress(5, 10, { width: 10, depth: "none" });
+    const full = stepProgress(10, 10, { width: 10, depth: "none" });
+    const filled = (text: string) => [...text.split(" ").at(-1)!].filter((cell) => cell === "█").length;
+
+    expect(filled(empty)).toBe(0);
+    expect(filled(half)).toBe(5);
+    expect(filled(full)).toBe(10);
+  });
+
+  it("clamps nonsense rather than throwing where a person is watching", () => {
+    expect(stepProgress(12, 8, { depth: "none" })).toBe("8/8");
+    expect(stepProgress(-3, 8, { depth: "none" })).toBe("0/8");
+    expect(stepProgress(Number.NaN, Number.POSITIVE_INFINITY, { depth: "none" })).toBe("0/0");
+    expect(stepProgress(2.7, 8.9, { depth: "none" })).toBe("2/8");
+  });
+
+  it("puts counted progress on the status line, and drops it before the mode when space runs out", () => {
+    const fields = { mode: "build", spinnerGlyph: "*", elapsedMs: 1_000, toolCalls: 4, tokens: 2_000, cost: "$0.02", steps: { done: 4, total: 9, label: "plan" } };
+    expect(formatStatusLine(fields, 120, "none")).toContain("plan 4/9");
+    // Narrow enough that only the most important field survives: the mode outranks the counter.
+    const narrow = formatStatusLine(fields, 34, "none");
+    expect(narrow).toContain("build");
+    expect(narrow).not.toContain("plan 4/9");
+  });
+
+  it("omits the counter entirely when there is no plan behind it", () => {
+    const fields = { mode: "build", spinnerGlyph: "*", elapsedMs: 1_000, toolCalls: 0, tokens: 0, cost: "", steps: { done: 0, total: 0 } };
+    expect(formatStatusLine(fields, 120, "none")).not.toContain("0/0");
+  });
+});
+
+describe("spinner timing", () => {
+  it("draws nothing for an operation that finishes inside the start delay", async () => {
+    let ticks = 0;
+    const spinner = new Spinner(() => { ticks += 1; }, 20, undefined, 200);
+    spinner.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    spinner.stop();
+    expect(ticks).toBe(0);
+
+    // ...and still nothing after the delay would have elapsed, because it was cancelled.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(ticks).toBe(0);
+  });
+
+  it("animates once the wait is real, and stops when told", async () => {
+    let ticks = 0;
+    const spinner = new Spinner(() => { ticks += 1; }, 10, undefined, 20);
+    spinner.start();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const during = ticks;
+    spinner.stop();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(during).toBeGreaterThan(1);
+    expect(ticks).toBe(during);
+  });
+
+  it("keeps drawing immediately when no delay is configured", () => {
+    let ticks = 0;
+    const spinner = new Spinner(() => { ticks += 1; }, 10);
+    spinner.start();
+    spinner.stop();
+    expect(ticks).toBe(1);
   });
 });

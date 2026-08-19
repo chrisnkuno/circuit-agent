@@ -92,6 +92,7 @@ export function dropupWindow(count: number, rows: number, selected?: number): { 
  */
 export function renderDropup(entries: readonly DropupEntry[], options: DropupOptions): string[] {
   const glyphs = options.glyphs ?? UNICODE_GLYPHS;
+  const clip = (text: string, width: number) => clipTo(text, width, glyphs);
   const paint = options.paint ?? PLAIN;
   const columns = Math.max(1, options.width);
   const rows = options.maxRows ?? entries.length;
@@ -108,8 +109,8 @@ export function renderDropup(entries: readonly DropupEntry[], options: DropupOpt
   const lines = visible.map((entry, offset) => {
     const active = options.selected !== undefined && start + offset === options.selected;
     const marker = active ? paint.cyan(glyphs.prompt) : " ";
-    if (columns < 8) return clipTo(`${active ? glyphs.prompt : " "}${heads[offset]}`, columns);
-    const head = clipTo(heads[offset], headBudget);
+    if (columns < 8) return clip(`${active ? glyphs.prompt : " "}${heads[offset]}`, columns);
+    const head = clip(heads[offset], headBudget);
     const padded = head + " ".repeat(Math.max(0, headBudget - visibleWidth(head)));
     const used = visibleWidth(`  ${marker === " " ? " " : glyphs.prompt} ${padded}  `);
     const room = Math.max(0, columns - used);
@@ -124,10 +125,10 @@ export function renderDropup(entries: readonly DropupEntry[], options: DropupOpt
     // worse row than a description alone, so the description keeps a floor before the chord is cut.
     const keepChord = chord !== "" && room - chordWidth >= 12;
     const descriptionRoom = Math.max(0, keepChord ? room - chordWidth : room);
-    const tail = `${clipTo(entry.description, descriptionRoom)}${keepChord ? chord : ""}`;
+    const tail = `${clip(entry.description, descriptionRoom)}${keepChord ? chord : ""}`;
     // Clipped, never wrapped. A wrapped row occupies two screen rows while the paint arithmetic
     // believes it occupies one, and every row above it is then written to the wrong place.
-    return `  ${marker} ${active ? paint.cyan(padded) : padded}  ${paint.dim(clipTo(tail, room))}`;
+    return `  ${marker} ${active ? paint.cyan(padded) : padded}  ${paint.dim(clip(tail, room))}`;
   });
 
   // Best match nearest the prompt.

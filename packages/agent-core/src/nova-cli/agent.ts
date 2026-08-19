@@ -10,13 +10,19 @@ import { loadMemories, memoryPromptBlock, recallMemories } from "./memory";
 import { buildNovaSystemPrompt, collectProjectContext, type ProjectContext } from "./prompt";
 import { assertTurnTransition, EventJournal, runtimeEventForJournal, type TurnStatus } from "./protocol";
 import {
+  atSafeBoundary,
   buildCompactedMessages,
   COMPACTION_INSTRUCTION,
+  compactionUrgency,
   newSessionId,
   planCompaction,
   saveSession,
+  STANDING_CONSTRAINTS_HEADING,
   titleFromObjective,
+  type CompactionBoundary,
+  type CompactionUrgency,
   type SessionRecord,
+  type StandingConstraints,
 } from "./session";
 import { loadLocalExternalTooling, type LocalExternalTooling } from "./external-tools";
 import { NestedInstructionTracker } from "./nested-instructions";
@@ -24,6 +30,7 @@ import { createNovaTools, scanWorkspaceForSecrets, TodoList, type DelegateResult
 import type { Expense } from "./cost";
 import { predictAgentUsage, type AgentCostPrediction } from "./cost";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
+import { WorkspaceArtifactStore } from "./artifacts";
 import type { ReadResult, WorkspaceLimits } from "./workspace";
 
 /**
@@ -61,7 +68,10 @@ export type NovaAgentOptions = {
 export type NovaEvent =
   | { type: "runtime"; event: AgentRuntimeEvent }
   | { type: "checkpoint"; checkpoint: Checkpoint }
-  | { type: "compaction"; tokensBefore: number; messagesBefore: number; messagesAfter: number };
+  // `urgency` and `boundary` say *why* the transcript was compacted here rather than later, which
+  // is the only interesting thing about a compaction from outside: at 70% because the work reached
+  // a clean stopping point, or at 90% because it had to be.
+  | { type: "compaction"; tokensBefore: number; messagesBefore: number; messagesAfter: number; urgency?: CompactionUrgency; boundary?: CompactionBoundary };
 
 export type NovaBudgets = {
   maxIterations: number;
@@ -109,8 +119,25 @@ export class NovaAgent {
   private readonly workspace: NovaWorkspace;
   private readonly permissions: PermissionLedger;
   private readonly checkpoints: CheckpointStore;
+  /**
+   * Where tool results too large for the transcript are written.
+   *
+   * Through the workspace, so a sandboxed session's artifacts land in the sandbox where the
+   * agent's own `read_file` can reach them — an artifact on a host the agent cannot see is a
+   * handle to nothing.
+   */
+  private readonly artifacts: WorkspaceArtifactStore;
   private readonly budgets: NovaBudgets;
   private messages: AgentMessage[] = [];
+  /**
+   * The request that opened this session, kept whole.
+   *
+   * Not read back off `messages` on demand, because compaction rewrites the front of the
+   * transcript: after one summary the first user message is the constraints block, and after two
+   * the original wording is gone entirely. It is the thing every later turn is still in service
+   * of, so it is held here and restated at every compaction.
+   */
+  private openingObjective: string | null = null;
   private context: ProjectContext | null = null;
   private cancelled = false;
   private session: SessionRecord;
@@ -125,6 +152,7 @@ export class NovaAgent {
     this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...options.budgets };
     this.workspace = options.workspace ?? new LocalWorkspace(options.root, options.limits);
     this.nestedInstructions = new NestedInstructionTracker(this.workspace);
+    this.artifacts = new WorkspaceArtifactStore(this.workspace);
     this.checkpoints = new CheckpointStore(options.root, path.join(options.root, ".nova", "checkpoint-index"), options.git);
     this.session = {
       schemaVersion: 2,
@@ -171,6 +199,17 @@ export class NovaAgent {
   resume(record: SessionRecord): void {
     this.session = record;
     this.messages = [...record.messages];
+    // A resumed session may already have been compacted, in which case the earliest surviving user
+    // message is Nova's own constraints block or summary rather than anything the user typed.
+    // Those are skipped by their headings; if nothing is left, the session title is the best
+    // remaining record of what was asked.
+    this.openingObjective =
+      record.messages.find(
+        (message) =>
+          message.role === "user" &&
+          !message.content.startsWith(STANDING_CONSTRAINTS_HEADING) &&
+          !message.content.startsWith("[Earlier conversation, summarized]"),
+      )?.content ?? (record.title === "Untitled session" ? null : record.title);
     this.permissions.restore(record.approvals ?? {});
     this.journal = new EventJournal(this.options.root, record.id);
   }
@@ -387,6 +426,7 @@ export class NovaAgent {
         model: this.options.model,
         tools: subTools,
         prices: this.options.prices,
+        artifacts: this.artifacts,
         control: {
           heartbeat: async () => {},
           isCancellationRequested: async () => this.cancelled,
@@ -441,6 +481,8 @@ export class NovaAgent {
       // disk barrier here would add latency without improving recovery. Tool calls and approvals
       // do use durable barriers before they can affect the world.
       await transition("running");
+
+      this.openingObjective ??= objective;
 
       // Repository instructions and cheap world-state signals are refreshed at every user turn.
       // A long-lived session must not keep following an AGENTS.md that changed three turns ago.
@@ -499,12 +541,13 @@ export class NovaAgent {
         if (checkpoint) this.options.onEvent?.({ type: "checkpoint", checkpoint });
       }
 
-      const compaction = await this.compactIfNeeded(turnId);
+      const compaction = await this.compactIfNeeded(turnId, objective);
       compactionActualRwf = compaction.actualRwf;
       const runtime = new BoundedAgentRuntime({
         model: this.options.model,
         tools: scoped,
         prices: this.options.prices,
+        artifacts: this.artifacts,
         control: {
           heartbeat: async () => {},
           isCancellationRequested: async () => this.cancelled,
@@ -574,8 +617,17 @@ export class NovaAgent {
    * Uses the same model that does the work, with no tools: compaction is a reading task, and a
    * summarizer holding an `edit_file` tool is a summarizer that will eventually use it.
    */
-  private async compactIfNeeded(turnId: string): Promise<{ usage: ModelUsage; actualRwf: number }> {
-    const plan = planCompaction(this.messages, { contextLimit: this.budgets.contextLimit, outputBudget: this.budgets.maxOutputTokens });
+  private async compactIfNeeded(turnId: string, objective: string): Promise<{ usage: ModelUsage; actualRwf: number }> {
+    // Compaction happens between turns, which is already the cleanest boundary a session has: the
+    // previous exchange concluded, no tool call is outstanding. `atSafeBoundary` still asks,
+    // because "concluded" is not the same as "finished" — an agent that left an item in progress
+    // on its own plan is mid-task no matter where the turn ended, and the detail behind that item
+    // is exactly what a summary would drop.
+    const boundary = atSafeBoundary(this.messages, { workInProgress: this.todoList.list().some((item) => item.status === "in_progress") })
+      ? "safe"
+      : "mid-task";
+    const urgency = compactionUrgency(this.messages, { contextLimit: this.budgets.contextLimit, outputBudget: this.budgets.maxOutputTokens });
+    const plan = planCompaction(this.messages, { contextLimit: this.budgets.contextLimit, outputBudget: this.budgets.maxOutputTokens, boundary });
     if (!plan) return { usage: emptyModelUsage(), actualRwf: 0 };
     const before = this.messages.length;
 
@@ -597,10 +649,27 @@ export class NovaAgent {
     if (actualRwf > this.budgets.maxRwf) throw new Error("Compaction usage exceeds the approved model budget");
     if (!turn.content.trim()) return { usage: turn.usage, actualRwf };
 
-    this.messages = buildCompactedMessages(turn.content, plan);
-    this.options.onEvent?.({ type: "compaction", tokensBefore: 0, messagesBefore: before, messagesAfter: this.messages.length });
+    this.messages = buildCompactedMessages(turn.content, plan, this.standingConstraints(objective));
+    this.options.onEvent?.({ type: "compaction", tokensBefore: 0, messagesBefore: before, messagesAfter: this.messages.length, urgency, boundary });
     await this.journal.append({ type: "compaction", turnId, messagesBefore: before, messagesAfter: this.messages.length, actualRwf });
     return { usage: turn.usage, actualRwf };
+  }
+
+  /**
+   * The session's governing facts, read from live state at the moment of compaction.
+   *
+   * Every field here is fetched from the thing that actually enforces it — the permission ledger,
+   * the configured mode, the agent's own plan — rather than from the transcript being summarized.
+   * That is what makes the block incapable of drifting: it cannot preserve a stale approval,
+   * because it never reads the old one.
+   */
+  private standingConstraints(objective: string): StandingConstraints {
+    return {
+      mode: this.options.mode,
+      objective: this.openingObjective ?? objective,
+      approvals: this.permissions.snapshot(),
+      openTodos: this.todoList.list().filter((item) => item.status !== "done").map((item) => item.text),
+    };
   }
 }
 
