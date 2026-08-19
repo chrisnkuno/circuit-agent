@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalModal, type ApprovalState } from "../components/ApprovalModal";
 import { CostPanel } from "../components/CostPanel";
+import { ActivityPanel } from "../components/ActivityPanel";
 import { ModeBar } from "../components/ModeBar";
 import { SessionList, type SessionSummary } from "../components/SessionList";
 import { Message } from "../components/Message";
@@ -133,7 +134,7 @@ export function ChatScreen(props: {
   // in flight. Deliberately *this* tab's business — a turn in another tab must not grey out the
   // composer here, which was the whole complaint that tabs answer.
   const busy = (current?.busy ?? false) || current?.status === "running";
-  const { messages, approval, costReport, displayTotal, budgetFraction, costTurns, error } = chat;
+  const { messages, activity, approval, costReport, displayTotal, budgetFraction, costTurns, error } = chat;
 
   /** Patches the tab in front. Every old `setSomething` became one of these. */
   // Resolved through `findTab` rather than keyed straight into `updateTab`, for the same reason
@@ -846,6 +847,10 @@ export function ChatScreen(props: {
         </section>
 
         <aside className="side-panel">
+          {/* What it is doing right now, above what it intends to do next. Both were previously
+              answerable only by reading the transcript, which is where the answer scrolls away. */}
+          <ActivityPanel entries={activity} busy={busy} />
+
           {/* Todos are the agent's own plan — the answer to "what is it doing?" — so they belong in
               a fixed place you can watch, not appended to the bottom of a scrolling log where they
               slide away as output arrives. */}

@@ -188,6 +188,18 @@ button {
   min-height: 0;
 }
 
+/*
+ * Opaque, and deliberately not blurred.
+ *
+ * This bar used to carry `backdrop-filter: blur(10px)` over a translucent background. A filtered
+ * element is a backdrop root, and its descendants are composited against that backdrop — so the
+ * model menu, which is a child of this bar and hangs below it, was drawn *through*: the Stop button
+ * and the transcript underneath showed straight through the list of models. Reported as "the
+ * dropdown is a bit transparent", and it was.
+ *
+ * The blur was decoration over a page gradient the bar does not scroll across, so it costs nothing
+ * to drop. A solid surface also stops the bar tinting whatever happens to be behind it.
+ */
 .topbar {
   display: flex;
   align-items: center;
@@ -195,8 +207,7 @@ button {
   gap: var(--s4);
   padding: var(--s3) var(--s5);
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(10px);
-  background: var(--chrome-bg);
+  background: var(--bg1);
 }
 
 .brand {
@@ -1909,3 +1920,65 @@ button {
 .chart-line { fill: none; stroke: var(--chart-mark); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart-end { fill: var(--chart-mark); stroke: var(--panel-bg); stroke-width: 2; }
 .chart-note { margin: var(--s1) 0 0; font-size: 0.7rem; color: var(--muted); }
+
+/* Agent activity — see components/ActivityPanel.tsx. One row per tool call, settling in place from
+   running to done, rather than two transcript lines per call. */
+.panel-count {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: var(--sunken-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 var(--s2);
+}
+.activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  max-height: 220px;
+  overflow: auto;
+}
+.activity-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  border-radius: var(--radius-sm);
+}
+.activity-row.failed { background: var(--danger-dim); }
+.activity-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  align-self: center;
+}
+.activity-row.running .activity-mark { background: var(--accent); }
+.activity-row.ok .activity-mark { background: var(--ok); }
+.activity-row.failed .activity-mark { background: var(--danger); }
+.activity-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.activity-name { font-family: var(--mono); font-size: 0.76rem; }
+/* A summary is usually a path or a command: truncated rather than wrapped, so one long argument
+   cannot push every other row off the panel. The full text is in the title attribute. */
+.activity-summary {
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-preview {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--danger);
+  white-space: pre-wrap;
+  margin-top: 2px;
+}
+.activity-state { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); }
+.activity-state.running { color: var(--accent); }
+.activity-state.failed { color: var(--danger); }

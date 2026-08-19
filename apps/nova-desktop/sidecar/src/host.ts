@@ -317,6 +317,25 @@ export class NovaHost {
     const budget = settings.budget != null && settings.budget > 0 ? fromUnits(settings.budget, display) : undefined;
     const ledger = new CostLedger({ prices: resolved.prices, display, rates, budget });
 
+    /**
+     * Rebuilding the session a tab is already holding — a model or mode change — has to retire the
+     * old one *first*.
+     *
+     * The daemon keys live sessions by id, and a resumed agent keeps the id of the record it
+     * resumed. So asking it to open a record whose session is still live takes its "already open"
+     * path: it returns the existing session and never calls the factory, which means the new model
+     * or mode is silently not applied. Worse, the release that used to follow then disposed that
+     * session — the one the tab had just been pointed at — so every later request answered "Session
+     * is not active in this daemon" and the tab was dead until reopened.
+     *
+     * Retiring first costs the ordering this code otherwise protects (a tab holding nothing while a
+     * sandbox boots), and that protection is still what happens for every other rebuild: this only
+     * applies when the new session *is* the old one.
+     */
+    const priorEntry = tabId ? this.tabs.find(tabId) : undefined;
+    const retiredFirst = record && priorEntry?.sessionId === record.id ? priorEntry.payload : undefined;
+    if (retiredFirst) await this.retireSlot(retiredFirst);
+
     // One daemon client per tab, each with its own subscription. Two tabs sharing a client would
     // share its notification stream, and a `NovaDaemonClient` holds one active session anyway —
     // `sessionId` on it is a single value, so a second session in the same client would have
@@ -365,11 +384,8 @@ export class NovaHost {
     const entry = existing
       ? { tabId: existing.tabId, previous: this.tabs.replace(existing.tabId, opened.sessionId, slot) }
       : { tabId: this.tabs.add(opened.sessionId, slot).tabId, previous: undefined };
-    if (entry.previous) {
-      entry.previous.running = false;
-      await entry.previous.client.release(true).catch(() => undefined);
-      entry.previous.client.disconnect();
-    }
+    // Skipped when it was already retired above, so nothing is released twice.
+    if (entry.previous && entry.previous !== retiredFirst) await this.retireSlot(entry.previous);
 
     return {
       tabId: entry.tabId,
@@ -419,6 +435,13 @@ export class NovaHost {
     const root = this.memoryRoot(tabId);
     const result = await forgetMemory(scope, index, root, process.env);
     return { file: result.file, changed: result.changed, entries: await loadMemories(root, process.env) };
+  }
+
+  /** Ends a session a tab is no longer holding, releasing its agent and its workspace with it. */
+  private async retireSlot(slot: TabSlot): Promise<void> {
+    slot.running = false;
+    await slot.client.release(true).catch(() => undefined);
+    slot.client.disconnect();
   }
 
   private async openSession(root: string, mode: NovaMode, sandbox: boolean, upload: boolean, tabId?: string) {

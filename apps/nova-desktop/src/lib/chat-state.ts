@@ -23,8 +23,29 @@ export type ChatMessage = {
 
 export type ApprovalState = { requestId: string; toolName: string; summary: string };
 
+/**
+ * One thing the agent did, as a single entry that resolves — not two lines.
+ *
+ * Tool calls and their results used to be appended straight into the transcript, two rows each, so
+ * a turn that read four files and ran the tests put ten machine lines between one sentence of the
+ * answer and the next. The conversation is what a person is reading; the tool log is what they
+ * check when something looks wrong. Splitting them is the whole point: a call arrives `running` and
+ * the matching result settles the same entry rather than adding another.
+ */
+export type ActivityEntry = {
+  /** The tool call id, so the result can find the call it belongs to. */
+  id: string;
+  name: string;
+  summary?: string;
+  status: "running" | "ok" | "failed";
+  preview?: string;
+};
+
 export type ChatState = {
+  /** The conversation: what was asked, what was answered, and what the session said about itself. */
   messages: ChatMessage[];
+  /** What the agent did, in order. Kept out of `messages` so the conversation stays readable. */
+  activity: ActivityEntry[];
   /**
    * Text accumulated for the answer currently streaming.
    *
@@ -45,7 +66,7 @@ export type ChatState = {
 export const STREAMING_ID = "streaming";
 
 export function initialChatState(): ChatState {
-  return { messages: [], streaming: "", approval: null, costReport: "No turns yet.", error: null };
+  return { messages: [], activity: [], streaming: "", approval: null, costReport: "No turns yet.", error: null };
 }
 
 /**
@@ -68,24 +89,30 @@ export function applyChatEvent(state: ChatState, event: IpcEvent, now: () => num
     case "tool_call":
       return {
         ...state,
-        messages: [...state.messages, {
+        activity: [...state.activity, {
           id: event.toolCallId,
-          role: "tool",
-          content: `→ ${event.name}${event.summary ? `: ${event.summary}` : ""}`,
+          name: event.name,
+          ...(event.summary ? { summary: event.summary } : {}),
+          status: "running",
         }],
       };
 
-    case "tool_result":
-      return {
-        ...state,
-        messages: [...state.messages, {
-          // Distinct from the call's own id: both are in the list at once, and React needs them
-          // to be different or it reuses one row for both.
-          id: `${event.toolCallId}-result`,
-          role: "tool",
-          content: `${event.ok ? "✓" : "✗"} ${event.name}${event.preview ? `\n${event.preview}` : ""}`,
-        }],
+    case "tool_result": {
+      // Settles the call it belongs to. A result whose call was never seen still gets an entry:
+      // dropping it would hide work that happened, which is the one thing this panel exists to show.
+      const index = state.activity.findIndex((entry) => entry.id === event.toolCallId);
+      const settled: ActivityEntry = {
+        id: event.toolCallId,
+        name: event.name,
+        ...(index >= 0 && state.activity[index].summary ? { summary: state.activity[index].summary } : {}),
+        status: event.ok ? "ok" : "failed",
+        ...(event.preview ? { preview: event.preview } : {}),
       };
+      if (index < 0) return { ...state, activity: [...state.activity, settled] };
+      const activity = [...state.activity];
+      activity[index] = settled;
+      return { ...state, activity };
+    }
 
     case "approval_needed":
       return {
