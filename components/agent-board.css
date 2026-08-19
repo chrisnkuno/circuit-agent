@@ -17,14 +17,14 @@
   cursor: pointer;
   transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
 }
-.outline:hover { border-color: var(--vermilion); color: var(--vermilion); background: rgba(79, 157, 255, 0.07); }
+.outline:hover { border-color: var(--vermilion); color: var(--vermilion); background: var(--accent-tint-2); }
 .outline span { padding-left: 18px; font-size: 17px; }
 .agent-summary {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   margin-top: 32px;
   border: 1px solid var(--line);
-  background: rgba(10, 13, 24, 0.58);
+  background: var(--surface-2-mid);
 }
 .agent-summary div { padding: 18px; border-right: 1px solid var(--line); }
 .agent-summary div:last-child { border: 0; }
@@ -38,16 +38,16 @@
 }
 .agent-summary b { font-size: 20px; letter-spacing: -0.02em; margin-top: 7px; display: block; color: var(--bone); }
 .agent-board { margin-top: 12px; display: grid; gap: 12px; }
-.empty-state { border: 1px dashed rgba(150, 185, 240, 0.28); color: var(--muted); margin: 0; padding: 28px; font-size: 14px; line-height: 1.6; }
-.run-card { background: rgba(10, 13, 24, 0.62); border: 1px solid var(--line); }
+.empty-state { border: 1px dashed var(--tint-7); color: var(--muted); margin: 0; padding: 28px; font-size: 14px; line-height: 1.6; }
+.run-card { background: var(--surface-2); border: 1px solid var(--line); }
 .run-card header { display: flex; justify-content: space-between; align-items: start; padding: 18px 20px; border-bottom: 1px solid var(--line); }
 .run-card h3 { margin: 5px 0 0; font-size: 18px; }
 .run-card header > b {
   font-size: 10px;
   letter-spacing: 0.1em;
   color: var(--gold);
-  background: rgba(95, 178, 255, 0.12);
-  border: 1px solid rgba(95, 178, 255, 0.34);
+  background: var(--gold-tint-2);
+  border: 1px solid var(--gold-tint-6);
   padding: 6px 8px;
 }
 .run-card ol { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); }
@@ -65,13 +65,13 @@
 .step-dot {
   flex: 0 0 21px;
   height: 21px;
-  border: 1px solid rgba(150, 185, 240, 0.32);
+  border: 1px solid var(--tint-9);
   display: grid;
   place-items: center;
   font-size: 10px;
   color: var(--muted);
 }
-.step-dot.ready { background: rgba(95, 178, 255, 0.16); border-color: var(--gold); color: var(--gold); }
+.step-dot.ready { background: var(--gold-tint-4); border-color: var(--gold); color: var(--gold); }
 .run-card li strong,
 .run-card li small { display: block; }
 .run-card li strong { font-size: 13px; line-height: 1.35; }

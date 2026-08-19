@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { AuthPanel, useCurrentOrganization } from "@/components/auth-panel";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { projectNovaGrowth, type GrowthBaseline, type GrowthFeature, type GrowthFeedback } from "@/lib/growth-model";
 
 const emptyBaseline: GrowthBaseline = {
@@ -126,7 +127,7 @@ export function GrowingNova() {
   return <main className="growing-nova-page">
     <header className="growth-topbar">
       <Link href="/" className="growth-brand">CIRCUIT <span>NOVA</span></Link>
-      <nav><Link href="/terminal">Agent terminal</Link><AuthPanel /></nav>
+      <nav><Link href="/terminal">Agent terminal</Link><ThemeToggle /><AuthPanel /></nav>
     </header>
 
     <section className="growth-hero">

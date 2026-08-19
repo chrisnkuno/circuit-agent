@@ -31,10 +31,25 @@ import { verifyCredentials } from "./verify.js";
 import { TabRegistry } from "./tabs.js";
 import type { IpcEvent, IpcRequest, NovaSettings, ProviderId } from "./protocol.js";
 import { DEFAULT_MODELS } from "./protocol.js";
-import { credentialsFor, settingsToEnvironment } from "./settings.js";
+import { credentialsFor, settingsToEnvironment, validateApiKey } from "./settings.js";
 
 type Emit = (event: IpcEvent) => void;
 
+/** Turn raw provider error messages into user-friendly ones. */
+function formatProviderError(raw: string): string {
+  if (/authentication_error|401|unauthorized|invalid.*api.*key|invalid.*x-api-key/i.test(raw)) {
+    return "Authentication failed — your API key was rejected by the provider. Open Settings and re-enter a valid key.";
+  }
+  if (/rate.limit|429|too.many.requests/i.test(raw)) {
+    return "Rate-limited by the provider. Wait a moment and try again, or switch to a different model in Settings.";
+  }
+  return raw;
+}
+
+type PendingApproval = {
+  requestId: string;
+  resolve: (decision: PermissionDecision) => void;
+};
 function tokenPricesToCatalog(prices: TokenPrices | undefined, fxRwfPerUsd: number): ModelPriceCatalog {
   if (!prices) {
     return { inputRwfPerMillionTokens: 2_000, outputRwfPerMillionTokens: 8_000 };
@@ -147,9 +162,12 @@ export class NovaHost {
     switch (request.type) {
       case "ping":
         return { pong: true };
-      case "settings.set":
+      case "settings.set": {
+        const validationError = await validateApiKey(request.settings);
+        if (validationError) throw new Error(validationError);
         this.settings = request.settings;
         return this.describeProviders();
+      }
       case "providers.describe":
         return this.describeProviders();
       // Takes the settings in the request rather than the stored ones: this is asked from a form
@@ -638,7 +656,8 @@ export class NovaHost {
         toolCallsExecuted: result.toolCallsExecuted,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = formatProviderError(raw);
       this.emit({ ...tag, type: "error", message });
       this.emit({ ...tag, type: "turn_status", status: "failed", summary: message });
       throw error;

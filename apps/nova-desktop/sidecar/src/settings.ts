@@ -1,5 +1,6 @@
 import type { NovaSettings, ProviderId } from "./protocol.js";
 import { CIRCUITNOTION_DEFAULT_BASE_URL, DEFAULT_MODELS } from "./protocol.js";
+import { buildCircuitNotionHeaders } from "@circuit-nova/nova-core/providers/circuitnotion";
 
 /**
  * The key and base URL to use for one provider.
@@ -57,4 +58,62 @@ export function defaultBaseUrl(provider: ProviderId): string {
   if (provider === "circuitnotion") return CIRCUITNOTION_DEFAULT_BASE_URL;
   if (provider === "openai") return "https://api.openai.com/v1";
   return "";
+}
+
+/**
+ * Validate an API key by making a lightweight request to the provider's models endpoint.
+ * Returns a human-readable error message if validation fails, or undefined if the key is valid.
+ */
+export async function validateApiKey(settings: NovaSettings): Promise<string | undefined> {
+  const apiKey = settings.apiKey.trim();
+  if (!apiKey) return "API key is required.";
+
+  const baseUrl = settings.baseUrl.trim() || defaultBaseUrl(settings.provider);
+  if (!baseUrl) return undefined; // no base URL to validate against
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (settings.provider === "circuitnotion" && settings.relaySecret?.trim()) {
+    const relayHeaders = buildCircuitNotionHeaders(settings.relaySecret.trim());
+    Object.assign(headers, relayHeaders);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const url = `${baseUrl.replace(/\/+$/, "")}/models`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const body = await response.text().catch(() => "");
+      let detail = "invalid API key";
+      try {
+        const json = JSON.parse(body);
+        detail = json.error?.message || json.message || detail;
+      } catch {
+        // non-JSON error body — use raw text if short enough
+        if (body.length < 200) detail = body;
+      }
+      return `${settings.provider} authentication failed: ${detail}`;
+    }
+
+    if (!response.ok) {
+      return `${settings.provider} API returned status ${response.status}. Check your base URL (${baseUrl}).`;
+    }
+
+    return undefined; // valid
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return `${settings.provider} API did not respond within 8 seconds. Check your base URL and network connection.`;
+    }
+    // Network/DNS errors — don't block saving, just warn
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

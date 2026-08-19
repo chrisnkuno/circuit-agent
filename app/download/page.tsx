@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { GyroscopeScene } from "@/components/gyroscope-scene";
 import { CopyCommand } from "@/components/copy-command";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 /**
  * Download / run-anywhere page for Circuit·Nova.
@@ -71,7 +72,10 @@ export default async function DownloadPage() {
       <div className="kage-grain" aria-hidden="true" />
       <div className="kage-vignette" aria-hidden="true" />
       <main className="download-main">
-        <Link className="download-back" href="/">← Circuit·Nova</Link>
+        <div className="download-back-row">
+          <Link className="download-back" href="/">← Circuit·Nova</Link>
+          <ThemeToggle />
+        </div>
 
         <p className="eyebrow"><span className="dot" aria-hidden="true" />Nova Desktop — run the agent on your machine</p>
         <h1 className="download-title">Your agent,<br />on your machine.</h1>

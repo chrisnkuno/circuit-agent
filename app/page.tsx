@@ -11,6 +11,7 @@ import { AuthPanel, useCurrentOrganization } from "@/components/auth-panel";
 import { GyroscopeScene } from "@/components/gyroscope-scene";
 import { CopyCommand } from "@/components/copy-command";
 import { KageFurniture } from "@/components/kage-ui";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { useMoney } from "@/components/money-preferences";
 import { authClient } from "@/lib/auth-client";
 
@@ -237,7 +238,7 @@ export default function Home() {
       <nav className="nav-links">
         {chapters.map((chapter) => <a className="nav-link" key={chapter.id} href={`#${chapter.id}`}><span>{chapter.b}</span><span className="alt">{chapter.num} — {chapter.b}</span></a>)}
       </nav>
-      <div className="nav-auth"><Link href="/growing-nova" className="nav-link">Growing Nova ↗</Link><AuthPanel /></div>
+      <div className="nav-auth"><Link href="/growing-nova" className="nav-link">Growing Nova ↗</Link><ThemeToggle /><AuthPanel /></div>
       <button className="nav-burger" aria-label="Open menu"><i /><i /></button>
     </header>
 
