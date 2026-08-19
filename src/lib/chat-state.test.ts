@@ -37,8 +37,9 @@ describe("a streamed answer", () => {
     const assistants = state.messages.filter((message) => message.role === "assistant");
     expect(assistants).toHaveLength(1);
     expect(assistants[0].content).toBe("Looking… found it.");
-    // …and the tool line is still there, after the answer it interrupted.
-    expect(state.messages.map((message) => message.role)).toEqual(["assistant", "tool"]);
+    // …and the tool call is recorded, but in the activity log rather than between the sentences.
+    expect(state.messages.map((message) => message.role)).toEqual(["assistant"]);
+    expect(state.activity.map((entry) => entry.name)).toEqual(["read_file"]);
   });
 
   it("settles into a stable id when the turn ends, so the next turn starts a new bubble", () => {
@@ -62,10 +63,10 @@ describe("a streamed answer", () => {
       { type: "tool_call", toolCallId: "c1", name: "read_file" } as IpcEvent,
       { type: "tool_result", toolCallId: "c1", name: "read_file", ok: true } as IpcEvent,
     ], clock);
-    expect(state.messages.map((message) => message.role)).toEqual(["assistant", "tool", "tool"]);
+    expect(state.messages.map((message) => message.role)).toEqual(["assistant"]);
     state = applyChatEvent(state, status("completed"), clock);
     // Same order after settling — only the id changed.
-    expect(state.messages.map((message) => message.role)).toEqual(["assistant", "tool", "tool"]);
+    expect(state.messages.map((message) => message.role)).toEqual(["assistant"]);
     expect(state.messages[0].id).not.toBe(STREAMING_ID);
     expect(state.messages[0].content).toBe("Reading the file first.");
   });
@@ -87,33 +88,58 @@ describe("a streamed answer", () => {
   });
 });
 
-describe("tool calls and their results", () => {
-  it("shows a call with its summary, and omits the separator when there is none", () => {
-    const withSummary = applyChatEvent(fresh(), { type: "tool_call", toolCallId: "a", name: "read_file", summary: "app.ts" } as IpcEvent, clock);
-    expect(withSummary.messages[0].content).toBe("→ read_file: app.ts");
-    const bare = applyChatEvent(fresh(), { type: "tool_call", toolCallId: "b", name: "list_files" } as IpcEvent, clock);
-    expect(bare.messages[0].content).toBe("→ list_files");
+/**
+ * Tool activity is a log, not conversation. It used to be appended into the transcript as two lines
+ * per call, so a turn that read four files and ran the tests put ten machine lines between one
+ * sentence of the answer and the next. These tests state where it goes now, and that a call and its
+ * result are one thing rather than two.
+ */
+describe("what the agent did", () => {
+  it("records a call with its summary, out of the conversation", () => {
+    const state = applyChatEvent(fresh(), { type: "tool_call", toolCallId: "a", name: "read_file", summary: "app.ts" } as IpcEvent, clock);
+    expect(state.messages).toHaveLength(0);
+    expect(state.activity).toEqual([{ id: "a", name: "read_file", summary: "app.ts", status: "running" }]);
+  });
+
+  it("leaves out a summary that was never given rather than inventing one", () => {
+    const state = applyChatEvent(fresh(), { type: "tool_call", toolCallId: "b", name: "list_files" } as IpcEvent, clock);
+    expect(state.activity[0].summary).toBeUndefined();
+  });
+
+  it("settles the call it belongs to instead of adding a second row", () => {
+    const state = applyChatEvents(fresh(), [
+      { type: "tool_call", toolCallId: "same", name: "run", summary: "bun test" } as IpcEvent,
+      { type: "tool_result", toolCallId: "same", name: "run", ok: true } as IpcEvent,
+    ], clock);
+    expect(state.activity).toHaveLength(1);
+    expect(state.activity[0]).toMatchObject({ status: "ok", summary: "bun test" });
   });
 
   it("distinguishes a failed tool from a successful one", () => {
     const ok = applyChatEvent(fresh(), { type: "tool_result", toolCallId: "a", name: "run", ok: true } as IpcEvent, clock);
     const bad = applyChatEvent(fresh(), { type: "tool_result", toolCallId: "a", name: "run", ok: false } as IpcEvent, clock);
-    expect(ok.messages[0].content.startsWith("✓")).toBe(true);
-    expect(bad.messages[0].content.startsWith("✗")).toBe(true);
+    expect(ok.activity[0].status).toBe("ok");
+    expect(bad.activity[0].status).toBe("failed");
   });
 
-  it("gives a call and its result different ids, since both are on screen at once", () => {
+  it("keeps a result whose call was never seen", () => {
+    // Dropping it would hide work that actually happened, which is the one thing this log is for.
+    const state = applyChatEvent(fresh(), { type: "tool_result", toolCallId: "orphan", name: "run", ok: true } as IpcEvent, clock);
+    expect(state.activity).toHaveLength(1);
+    expect(state.activity[0].status).toBe("ok");
+  });
+
+  it("carries the result's preview, for the failure that needs explaining", () => {
+    const state = applyChatEvent(fresh(), { type: "tool_result", toolCallId: "a", name: "run", ok: false, preview: "exit 1" } as IpcEvent, clock);
+    expect(state.activity[0].preview).toBe("exit 1");
+  });
+
+  it("keeps each call distinct, in the order they happened", () => {
     const state = applyChatEvents(fresh(), [
-      { type: "tool_call", toolCallId: "same", name: "run" } as IpcEvent,
-      { type: "tool_result", toolCallId: "same", name: "run", ok: true } as IpcEvent,
+      { type: "tool_call", toolCallId: "one", name: "read_file" } as IpcEvent,
+      { type: "tool_call", toolCallId: "two", name: "run" } as IpcEvent,
     ], clock);
-    const ids = state.messages.map((message) => message.id);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it("includes a preview on its own line when the result has one", () => {
-    const state = applyChatEvent(fresh(), { type: "tool_result", toolCallId: "a", name: "run", ok: true, preview: "exit 0" } as IpcEvent, clock);
-    expect(state.messages[0].content).toBe("✓ run\nexit 0");
+    expect(state.activity.map((entry) => entry.name)).toEqual(["read_file", "run"]);
   });
 });
 

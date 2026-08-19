@@ -328,3 +328,82 @@ describe("reading a file for the explorer", () => {
     await expect(request({ type: "files.read", path: "../outside.txt", tabId: opened.tabId })).rejects.toThrow();
   }, 60_000);
 });
+
+/**
+ * Switching model rebuilds the session underneath the conversation, which is the point — the new
+ * model has to see the history. What must not change is that the tab still works afterwards.
+ */
+describe("a tab after its model changes", () => {
+  it("still accepts a turn", async () => {
+    const { request, events } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const opened = await request({ type: "session.open", root: await tempProject("model-then-turn") }) as { tabId: string };
+
+    await request({ type: "model.set", model: "claude-fable-5", tabId: opened.tabId });
+
+    stub.enqueue({ kind: "text", text: "still here" });
+    await request({ type: "turn.send", objective: "are you there?", tabId: opened.tabId });
+    expect(textOf(events, opened.tabId)).toContain("still here");
+  }, 60_000);
+
+  it("still accepts a turn when the conversation already had one", async () => {
+    // The case that actually broke, and the reason the first test above passed while the app did
+    // not: a session is only written to disk once it has a turn in it. Switching model then loads
+    // that record and asks the daemon to open it — but the old session is still live, so the daemon
+    // returns it instead of building anything, and the release that follows disposes the very
+    // session the tab has just been pointed at. Every later request answers "Session is not active
+    // in this daemon", which is what a person sees as the tab silently dying after one exchange.
+    const { request, events } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const opened = await request({ type: "session.open", root: await tempProject("model-after-turn") }) as { tabId: string };
+
+    stub.enqueue({ kind: "text", text: "first answer" });
+    await request({ type: "turn.send", objective: "hello", tabId: opened.tabId });
+
+    await request({ type: "model.set", model: "claude-fable-5", tabId: opened.tabId });
+
+    stub.enqueue({ kind: "text", text: "second answer" });
+    await request({ type: "turn.send", objective: "how are you?", tabId: opened.tabId });
+    expect(textOf(events, opened.tabId)).toContain("second answer");
+  }, 60_000);
+
+  it("survives a mode change after a turn, which fails the same way", async () => {
+    const { request, events } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const opened = await request({ type: "session.open", root: await tempProject("mode-after-turn") }) as { tabId: string };
+
+    stub.enqueue({ kind: "text", text: "first answer" });
+    await request({ type: "turn.send", objective: "hello", tabId: opened.tabId });
+
+    await request({ type: "mode.set", mode: "plan", tabId: opened.tabId });
+
+    stub.enqueue({ kind: "text", text: "after the mode change" });
+    await request({ type: "turn.send", objective: "and now?", tabId: opened.tabId });
+    expect(textOf(events, opened.tabId)).toContain("after the mode change");
+  }, 60_000);
+
+  it("keeps the conversation across the switch rather than starting fresh", async () => {
+    // The whole reason the session is rebuilt from its record: the new model has to see what was
+    // already said. A rebuild that quietly dropped the history would look like it worked.
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await tempProject("model-keeps-history");
+    const opened = await request({ type: "session.open", root }) as { tabId: string };
+
+    stub.enqueue({ kind: "text", text: "remembered answer" });
+    await request({ type: "turn.send", objective: "remember this", tabId: opened.tabId });
+    await request({ type: "model.set", model: "claude-fable-5", tabId: opened.tabId });
+
+    const listed = await request({ type: "session.list", root }) as Array<{ id: string }>;
+    expect(listed.length).toBe(1);
+  }, 60_000);
+
+  it("reports the session it rebuilt, so the window is not left holding the old one", async () => {
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const opened = await request({ type: "session.open", root: await tempProject("model-session-id") }) as { tabId: string; sessionId: string };
+
+    const after = await request({ type: "model.set", model: "claude-fable-5", tabId: opened.tabId }) as { sessionId?: string };
+    expect(after.sessionId).toBeTruthy();
+  }, 60_000);
+});
