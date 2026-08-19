@@ -59,6 +59,32 @@
   --s5: 1.5rem;
   --s6: 2rem;
   --s7: 3rem;
+  /*
+   * One type scale, on the same principle as the spacing scale above.
+   *
+   * There were nineteen distinct font sizes in this file, a dozen of them within 0.02rem of each
+   * other — 0.7, 0.72, 0.75, 0.76, 0.78, 0.8, 0.82, 0.83, 0.84, 0.85, 0.86, 0.88. No reader can
+   * see the difference between two of those; what they see is that nothing quite lines up, which
+   * is the same "slightly off rather than wrong" the spacing scale was introduced to fix. Seven
+   * steps, in pixels that land on whole numbers at the default root size.
+   */
+  --t1: 0.6875rem;  /* 11px — micro labels, panel headers */
+  --t2: 0.75rem;    /* 12px — captions, meta, mono detail */
+  --t3: 0.8125rem;  /* 13px — secondary text, controls */
+  --t4: 0.875rem;   /* 14px — the body size of the window */
+  --t5: 1rem;       /* 16px — emphasis */
+  --t6: 1.125rem;   /* 18px — panel and dialog titles */
+  --t7: 1.375rem;   /* 22px — screen titles */
+  /*
+   * Motion, as two durations and one curve.
+   *
+   * The whole stylesheet had four transitions in it, so every state change in the window was
+   * instant — which does not read as fast, it reads as unfinished. These are deliberately short:
+   * a control that takes 300ms to acknowledge a click feels slower than one that takes none.
+   */
+  --fast: 120ms;
+  --slow: 200ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 14px;
@@ -217,14 +243,14 @@ button {
 }
 
 .brand strong {
-  font-size: 1.15rem;
+  font-size: var(--t6);
   letter-spacing: 0.04em;
   font-weight: 700;
 }
 
 .brand span {
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--t3);
 }
 
 .topbar-actions {
@@ -270,11 +296,11 @@ button {
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: var(--s1) var(--s3);
-  font-size: 0.85rem;
+  font-size: var(--t4);
   font-weight: 500;
   line-height: 1.2;
   white-space: nowrap;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 
 .btn:hover:not(:disabled) {
@@ -339,7 +365,7 @@ button {
 .btn.tiny {
   min-height: 1.5rem;
   padding: 0 var(--s2);
-  font-size: 0.75rem;
+  font-size: var(--t2);
 }
 
 .btn:disabled {
@@ -389,7 +415,7 @@ button {
   padding: var(--s2) var(--s4);
   border-bottom: 1px solid var(--line);
   background: var(--sunken-bg);
-  font-size: 0.72rem;
+  font-size: var(--t2);
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -444,7 +470,7 @@ button {
   background: transparent;
   color: var(--muted);
   padding: 0.3rem 0.85rem;
-  font-size: 0.85rem;
+  font-size: var(--t4);
   border-right: 1px solid var(--line);
 }
 
@@ -470,7 +496,7 @@ button {
  */
 .mode-hint {
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--t3);
   flex: 1 1 16rem;
   min-width: 0;
   order: 3;
@@ -572,7 +598,7 @@ button {
   max-width: none;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: var(--t3);
   line-height: 1.5;
   border-left: 2px solid var(--line);
   padding-left: var(--s3);
@@ -633,7 +659,7 @@ button {
 .settings-card .lede {
   margin: 0;
   color: var(--muted);
-  font-size: 1.05rem;
+  font-size: var(--t6);
   max-width: 36ch;
 }
 
@@ -644,7 +670,7 @@ button {
 }
 
 .field label {
-  font-size: 0.8rem;
+  font-size: var(--t3);
   color: var(--muted);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -721,7 +747,7 @@ button {
 
 .modal h2 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: var(--t6);
 }
 
 .modal p {
@@ -755,7 +781,7 @@ button {
 
 .error-banner {
   color: var(--danger);
-  font-size: 0.9rem;
+  font-size: var(--t4);
 }
 
 /* ---- Transcript ------------------------------------------------------- */
@@ -896,7 +922,7 @@ button {
   padding: 0.3rem 0.35rem 0.3rem 0.7rem;
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: var(--t2);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
@@ -907,13 +933,13 @@ button {
   padding: 0.7rem 0.85rem;
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: var(--t3);
   line-height: 1.55;
 }
 
 .btn.copy {
   padding: 0.15rem 0.5rem;
-  font-size: 0.72rem;
+  font-size: var(--t2);
   border-radius: 0.4rem;
 }
 
@@ -931,7 +957,7 @@ button {
 .empty-state h2 {
   margin: 0;
   color: var(--text);
-  font-size: 1.3rem;
+  font-size: var(--t7);
 }
 
 .empty-state p {
@@ -949,7 +975,7 @@ button {
   padding: 0.75rem 0.9rem;
   border-radius: 0.6rem;
   border: 1px solid var(--line);
-  font-size: 0.9rem;
+  font-size: var(--t4);
   line-height: 1.45;
 }
 
@@ -965,7 +991,7 @@ button {
 
 .notice-hint {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--t4);
 }
 
 /* ---- Approval --------------------------------------------------------- */
@@ -984,7 +1010,7 @@ button {
 
 .approval-tool {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: var(--t2);
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 0.35rem;
@@ -994,7 +1020,7 @@ button {
 .approval-note {
   margin: 0;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: var(--t4);
 }
 
 /* The thing under review: full width, selectable, scrolls rather than truncating. Shortening what
@@ -1008,7 +1034,7 @@ button {
   border: 1px solid var(--line);
   background: var(--code-bg);
   font-family: var(--mono);
-  font-size: 0.83rem;
+  font-size: var(--t3);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1027,7 +1053,7 @@ button {
 
 .approval-choice kbd {
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: var(--t1);
   border: 1px solid var(--line-strong);
   border-radius: 0.3rem;
   padding: 0 0.3rem;
@@ -1041,7 +1067,7 @@ button {
 .approval-footnote {
   margin: 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--t3);
 }
 
 /* ---- Side panel ------------------------------------------------------- */
@@ -1068,7 +1094,7 @@ button {
 .panel-empty {
   margin: 0;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--t4);
   line-height: 1.5;
 }
 
@@ -1085,7 +1111,7 @@ button {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.5rem;
-  font-size: 0.86rem;
+  font-size: var(--t4);
   line-height: 1.45;
   color: var(--muted);
 }
@@ -1119,7 +1145,7 @@ button {
   flex-direction: column;
   align-items: flex-start;
   gap: 0.35rem;
-  font-size: 0.84rem;
+  font-size: var(--t3);
   color: var(--muted);
 }
 
@@ -1135,7 +1161,7 @@ button {
 .composer-hint {
   text-align: center;
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: var(--t1);
   color: var(--muted);
 }
 
@@ -1147,7 +1173,7 @@ button {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(135deg, rgba(61, 214, 198, 0.12), rgba(61, 214, 198, 0.05));
-  font-size: 0.85rem;
+  font-size: var(--t4);
 }
 
 .update-banner-text {
@@ -1226,7 +1252,7 @@ button {
 
 .model-name {
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: var(--t3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1234,14 +1260,14 @@ button {
 
 .model-caret {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: var(--t1);
 }
 
+/* Positioned against the viewport, because it is portalled to the body — see components/Overlay.tsx.
+   Nothing in the tree above the trigger can reach it any more. */
 .model-menu {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  z-index: 30;
+  position: fixed;
+  z-index: 60;
   width: min(26rem, 80vw);
   background: var(--bg1);
   border: 1px solid var(--line-strong);
@@ -1294,7 +1320,7 @@ button {
 
 .model-option-name {
   font-family: var(--mono);
-  font-size: 0.82rem;
+  font-size: var(--t3);
 }
 
 .model-option.current .model-option-name {
@@ -1303,7 +1329,7 @@ button {
 }
 
 .model-option-meta {
-  font-size: 0.72rem;
+  font-size: var(--t2);
   color: var(--muted);
 }
 
@@ -1311,7 +1337,7 @@ button {
   margin: 0;
   padding-top: 0.35rem;
   border-top: 1px solid var(--line);
-  font-size: 0.72rem;
+  font-size: var(--t2);
   color: var(--muted);
 }
 
@@ -1330,7 +1356,7 @@ button {
   border: 1px solid var(--line);
   background: var(--code-bg);
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: var(--t3);
   line-height: 1.55;
   white-space: pre;
 }
@@ -1347,7 +1373,7 @@ button {
 .advanced summary {
   cursor: pointer;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: var(--t4);
 }
 
 .advanced[open] summary {
@@ -1371,7 +1397,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  font-size: 0.85rem;
+  font-size: var(--t4);
   padding-top: 0.4rem;
 }
 
@@ -1386,13 +1412,13 @@ button {
 .verify em {
   color: var(--muted);
   font-style: normal;
-  font-size: 0.8rem;
+  font-size: var(--t3);
 }
 
 .save-hint {
   margin: -0.5rem 0 0;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: var(--t3);
 }
 
 /* ---- Keyboard help ----------------------------------------------------- */
@@ -1405,7 +1431,7 @@ button {
   border-radius: var(--radius);
   background: var(--panel-bg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  font-size: 0.8rem;
+  font-size: var(--t3);
   overflow: hidden;
 }
 
@@ -1414,7 +1440,7 @@ button {
   color: var(--muted);
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  font-size: 0.72rem;
+  font-size: var(--t2);
   font-weight: 600;
   padding: var(--s2) var(--s4);
   background: var(--sunken-bg);
@@ -1449,7 +1475,7 @@ button {
 
 .keys-help kbd {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: var(--t1);
   border: 1px solid var(--line-strong);
   border-radius: 0.3rem;
   padding: 0.05rem 0.3rem;
@@ -1584,7 +1610,7 @@ button {
 
 .recent-projects h2 {
   margin: 0 0 0.4rem;
-  font-size: 0.72rem;
+  font-size: var(--t2);
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1629,14 +1655,14 @@ button {
 }
 
 .recent-name {
-  font-size: 0.86rem;
+  font-size: var(--t4);
   font-weight: 560;
 }
 
 /* The full path is a disambiguator, not the label — clipped rather than wrapped so a deep path
    cannot push the sidebar wider than the transcript. */
 .recent-path {
-  font-size: 0.72rem;
+  font-size: var(--t2);
   opacity: 0.55;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1704,7 +1730,7 @@ button {
   flex: none;
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: var(--t1);
   line-height: 1.5;
   letter-spacing: 0.02em;
 }
@@ -1739,7 +1765,7 @@ button {
   border: none;
   background: none;
   color: var(--muted);
-  font-size: 1rem;
+  font-size: var(--t5);
   line-height: 1;
   padding: 0.35rem 0.5rem;
   border-radius: 6px;
@@ -1755,7 +1781,7 @@ button {
   align-self: center;
   padding-left: var(--s4);
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: var(--t3);
   white-space: nowrap;
 }
 
@@ -1837,21 +1863,21 @@ button {
 }
 .guide-entry:hover { background: var(--sunken-bg); }
 .guide-entry.current { background: var(--accent-dim); border-color: var(--accent-edge); }
-.guide-entry-title { display: block; font-size: 0.85rem; font-weight: 600; }
-.guide-entry-summary { display: block; font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+.guide-entry-title { display: block; font-size: var(--t4); font-weight: 600; }
+.guide-entry-summary { display: block; font-size: var(--t2); color: var(--muted); margin-top: 2px; }
 .guide-body {
   min-width: 0;
   max-height: 480px;
   overflow: auto;
   padding-right: var(--s2);
 }
-.guide-body-title { margin: 0 0 var(--s3); font-size: 1.05rem; }
+.guide-body-title { margin: 0 0 var(--s3); font-size: var(--t6); }
 /* Prose gets the same measure the transcript uses: a guide read across a 900px line is a guide
    whose reader keeps losing the line they were on. */
-.guide-body p { margin: 0 0 var(--s3); max-width: var(--measure); line-height: 1.6; font-size: 0.9rem; }
+.guide-body p { margin: 0 0 var(--s3); max-width: var(--measure); line-height: 1.6; font-size: var(--t4); }
 .guide-keys { border-collapse: collapse; margin-top: var(--s2); }
 .guide-keys th { text-align: left; padding: var(--s1) var(--s3) var(--s1) 0; vertical-align: top; font-weight: 400; }
-.guide-keys td { padding: var(--s1) 0; font-size: 0.85rem; color: var(--muted); }
+.guide-keys td { padding: var(--s1) 0; font-size: var(--t4); color: var(--muted); }
 
 @media (max-width: 780px) {
   .guide-panes { grid-template-columns: 1fr; }
@@ -1883,7 +1909,7 @@ button {
   justify-content: center;
   gap: var(--s2);
   flex-wrap: wrap;
-  font-size: 0.78rem;
+  font-size: var(--t3);
   margin-top: var(--s3);
 }
 
@@ -1893,7 +1919,7 @@ button {
   flex-wrap: wrap;
   gap: var(--s2) var(--s3);
   margin: 0 0 var(--s3);
-  font-size: 0.75rem;
+  font-size: var(--t2);
   color: var(--muted);
 }
 .provider-state .ready { color: var(--ok); }
@@ -1905,7 +1931,7 @@ button {
 .cost-charts { display: flex; flex-direction: column; gap: var(--s3); margin-bottom: var(--s3); }
 .chart { margin: 0; }
 .chart-title {
-  font-size: 0.7rem;
+  font-size: var(--t1);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1919,13 +1945,13 @@ button {
 .chart-bar.peak { fill: var(--chart-mark); }
 .chart-line { fill: none; stroke: var(--chart-mark); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart-end { fill: var(--chart-mark); stroke: var(--panel-bg); stroke-width: 2; }
-.chart-note { margin: var(--s1) 0 0; font-size: 0.7rem; color: var(--muted); }
+.chart-note { margin: var(--s1) 0 0; font-size: var(--t1); color: var(--muted); }
 
 /* Agent activity — see components/ActivityPanel.tsx. One row per tool call, settling in place from
    running to done, rather than two transcript lines per call. */
 .panel-count {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: var(--t1);
   color: var(--muted);
   background: var(--sunken-bg);
   border: 1px solid var(--line);
@@ -1962,11 +1988,11 @@ button {
 .activity-row.ok .activity-mark { background: var(--ok); }
 .activity-row.failed .activity-mark { background: var(--danger); }
 .activity-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.activity-name { font-family: var(--mono); font-size: 0.76rem; }
+.activity-name { font-family: var(--mono); font-size: var(--t2); }
 /* A summary is usually a path or a command: truncated rather than wrapped, so one long argument
    cannot push every other row off the panel. The full text is in the title attribute. */
 .activity-summary {
-  font-size: 0.72rem;
+  font-size: var(--t2);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1974,11 +2000,62 @@ button {
 }
 .activity-preview {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: var(--t1);
   color: var(--danger);
   white-space: pre-wrap;
   margin-top: 2px;
 }
-.activity-state { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); }
+.activity-state { font-family: var(--mono); font-size: var(--t1); color: var(--muted); }
 .activity-state.running { color: var(--accent); }
 .activity-state.failed { color: var(--danger); }
+
+/*
+ * Motion.
+ *
+ * Every state change in this window used to be instant, which does not read as fast — it reads as
+ * unfinished, because nothing acknowledges the pointer. These are the surfaces a person actually
+ * touches, and the durations are deliberately short: a control that takes a third of a second to
+ * respond feels slower than one that takes none. The global `prefers-reduced-motion` rule near the
+ * top of this file turns every one of them off, so none of this is imposed on someone who asked
+ * for stillness.
+ */
+.file-btn,
+.guide-entry,
+.starter,
+.activity-row,
+.segment,
+.session-item,
+.recent-item,
+.model-option,
+.tab {
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+
+/* Panels lift very slightly under the pointer — enough to say "this is a surface you can act on",
+   not enough to move the layout. */
+.panel {
+  transition: border-color var(--slow) var(--ease), box-shadow var(--slow) var(--ease);
+}
+
+/* Overlays arrive rather than appear. A menu that pops into place at full size reads as a glitch;
+   16ms of travel is enough to make it read as opening. */
+@keyframes overlay-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.model-menu {
+  animation: overlay-in var(--fast) var(--ease);
+  transform-origin: top right;
+}
+
+.modal-backdrop { animation: scrim-in var(--fast) var(--ease); }
+.modal { animation: overlay-in var(--slow) var(--ease); }
+
+/* The transcript follows new output rather than jumping to it. */
+.transcript { scroll-behavior: smooth; }
