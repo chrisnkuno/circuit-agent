@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildModelOptions, filterModels } from "../lib/models";
+import { Overlay } from "./Overlay";
 import type { ProviderId } from "../lib/settings";
 
 /**
@@ -28,7 +29,11 @@ export function ModelPicker(props: {
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Where to draw the menu, since it no longer lives inside the bar. Measured when it opens: the
+  // trigger does not move while it is open, so one measurement is enough.
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
 
   const options = useMemo(
     () => buildModelOptions(props.configured ?? props.provider),
@@ -38,6 +43,8 @@ export function ModelPicker(props: {
 
   useEffect(() => {
     if (!open) return;
+    const box = triggerRef.current?.getBoundingClientRect();
+    if (box) setAnchor({ top: box.bottom + 6, right: Math.max(8, window.innerWidth - box.right) });
     inputRef.current?.focus();
     setCursor(Math.max(0, visible.findIndex((option) => option.model === props.model && option.provider === props.provider)));
     // Opening on the model in use makes the common case "look, then Escape".
@@ -46,7 +53,12 @@ export function ModelPicker(props: {
   useEffect(() => {
     if (!open) return;
     const onClickAway = (event: MouseEvent) => {
-      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
+      // The menu is no longer inside `boxRef` — it is portalled — so a click in it has to be
+      // recognised by its own container, or choosing a model would count as clicking away.
+      const target = event.target as Node;
+      if (boxRef.current?.contains(target)) return;
+      if ((target as Element)?.closest?.(".model-menu")) return;
+      setOpen(false);
     };
     window.addEventListener("mousedown", onClickAway);
     return () => window.removeEventListener("mousedown", onClickAway);
@@ -75,6 +87,7 @@ export function ModelPicker(props: {
   return (
     <div className="model-picker" ref={boxRef}>
       <button
+        ref={triggerRef}
         className="btn ghost model-trigger"
         type="button"
         disabled={props.busy}
@@ -87,8 +100,14 @@ export function ModelPicker(props: {
         <span className="model-caret" aria-hidden="true">▾</span>
       </button>
 
-      {open ? (
-        <div className="model-menu" role="listbox" aria-label="Models" onKeyDown={onKeyDown}>
+      <Overlay open={open} ownsEscape>
+        <div
+          className="model-menu"
+          role="listbox"
+          aria-label="Models"
+          onKeyDown={onKeyDown}
+          style={anchor ? { top: anchor.top, right: anchor.right } : undefined}
+        >
           <input
             ref={inputRef}
             className="model-filter"
@@ -129,7 +148,7 @@ export function ModelPicker(props: {
           </div>
           <p className="model-foot">Switching keeps the conversation. Prices are list rates, not your contract.</p>
         </div>
-      ) : null}
+      </Overlay>
     </div>
   );
 }
