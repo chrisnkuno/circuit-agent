@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { approvalDetail, approvalKey } from "../lib/approval";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import type { PermissionDecision } from "../lib/settings";
 
 export type ApprovalState = {
@@ -38,37 +39,33 @@ export function ApprovalModal(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [props]);
 
-  /** Keeps Tab inside the dialog: nothing behind it is answerable while it is open. */
-  function trapTab(event: React.KeyboardEvent) {
-    if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button");
-    if (!focusable || focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || active === dialogRef.current)) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
   return (
-    <div className="modal-backdrop">
-      <div
-        className="modal approval"
+    <Dialog open>
+      <DialogContent
+        className="approval"
         role="alertdialog"
-        aria-modal="true"
         aria-labelledby="approval-title"
         aria-describedby="approval-subject"
         tabIndex={-1}
         ref={dialogRef}
-        onKeyDown={trapTab}
+        // Focus lands on the dialog, never on a button. Radix would otherwise focus the first
+        // focusable child, which is "Allow once" — making Enter, the key people press to dismiss
+        // things, an approval. That is the one outcome that must not be reachable by reflex.
+        onOpenAutoFocus={(event) => { event.preventDefault(); dialogRef.current?.focus(); }}
+        // Escape is *answered*, not obeyed: the keyboard handler below turns it into a denial, so
+        // Radix must not also close the dialog behind it. A dialog that vanishes while the agent is
+        // still waiting is a hang with no visible cause.
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        // An approval cannot be dismissed by clicking past it either — there is a decision to make.
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
       >
         <div className="approval-head">
-          <h2 id="approval-title">{detail.executes ? "Run this command?" : "Allow this action?"}</h2>
+          {/* Radix's own title, rendered as the heading this dialog already had. Without it the
+              primitive has nothing to point `aria-modal` labelling at, and warns in development. */}
+          <DialogTitle asChild>
+            <h2 id="approval-title">{detail.executes ? "Run this command?" : "Allow this action?"}</h2>
+          </DialogTitle>
           <code className="approval-tool">{props.approval.toolName}</code>
         </div>
 
@@ -97,7 +94,7 @@ export function ApprovalModal(props: {
         <p className="approval-footnote">
           Escape denies. “Always” applies only to this exact action, not to the tool in general.
         </p>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

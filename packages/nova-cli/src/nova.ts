@@ -7,7 +7,9 @@ import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agen
 import { runAcpServer } from "./acp-server";
 import { renderGallery } from "./gallery";
 import { displayMask, fixObjective } from "./defender-screen";
-import { CommandUsage, rankWithContext, renderGroupedHelp, renderNextStep, type NavContext } from "./navigation";
+import { CommandUsage, navSignals, rankWithContext, renderAsks, renderGroupedHelp, renderHint, renderRecovery, renderStarters, renderSuggestions, type NavContext } from "./navigation";
+import { askModelForSuggestions, mergeModelSuggestions, type Suggestion as EngineSuggestion } from "@circuit-nova/nova-core/nova-cli/suggestions";
+import type { ModelUsage } from "@circuit-nova/nova-core/providers/model";
 import { NovaSessionDaemon, type DaemonApprovalRequest, type DaemonNotification, type NovaDaemonClient } from "@circuit-nova/nova-core/nova-cli/daemon";
 import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
@@ -2136,6 +2138,21 @@ async function main(): Promise<number> {
   const usage = new CommandUsage();
   /** Findings the last `/scan` reported, so defender work can be offered when there is some. */
   let lastScanFindings: number | undefined;
+  /**
+   * How the last turn went wrong, if it did — kept apart from `lastTurnStatus`, which starts at
+   * "failed" so that a process that dies before its first turn exits non-zero. Reading that for a
+   * *suggestion* would open every session by offering a way out of a failure that never happened.
+   */
+  let lastFailure: { status: NavContext["lastStatus"]; message: string } | null = null;
+  /**
+   * The runtime's stop reason as the protocol's turn status.
+   *
+   * They agree on every value but one — the runtime calls a paused approval "needs_approval" — and
+   * the suggestion rules speak the protocol's vocabulary, since the desktop reaches them through
+   * the same names.
+   */
+  const failureStatus = (status: AgentRuntimeResult["status"]): NavContext["lastStatus"] =>
+    status === "needs_approval" ? "waiting_approval" : status;
 
   /**
    * Where this session actually is, for anything that has to decide what to offer.
@@ -2156,8 +2173,66 @@ async function main(): Promise<number> {
     providerConfigured: true,
     hasSpend: Boolean(ledger.displayTotal?.micros),
     ...(lastScanFindings === undefined ? {} : { openFindings: lastScanFindings }),
+    ...(ledger.budgetFraction === undefined ? {} : { budgetFraction: ledger.budgetFraction }),
+    ...(lastFailure ? { lastStatus: lastFailure.status, lastError: lastFailure.message } : {}),
     recent: usage.recent,
   });
+  /**
+   * One ambient line, printed where a command had nothing of its own to say.
+   *
+   * Interactive only, and silent when the rules have nothing left to teach — a session that has
+   * already reached for everything relevant gets its empty result back unadorned, which is the
+   * point at which a hint would have become a tic.
+   */
+  const writeHint = (): void => {
+    if (!interactive) return;
+    const hint = renderHint(navContext(), sectionStyle());
+    if (hint) out.write(`${hint}\n`);
+  };
+  /** Whether the extra model pass is on. A setting, read once, defaulting to off. */
+  const suggestModel = (environment.NOVA_SUGGEST_MODEL ?? "").trim().toLowerCase() === "on";
+
+  /** Two usages as one, so a turn's cost line covers everything that turn actually spent. */
+  const addModelUsage = (left: ModelUsage, right: ModelUsage): ModelUsage => ({
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    reasoningTokens: left.reasoningTokens + right.reasoningTokens,
+  });
+
+  /**
+   * One small, tool-less call to the session's own model for a couple of extra suggestions.
+   *
+   * Never throws and never blocks the transcript on a failure: a suggestion is the least important
+   * thing on screen, and a session must not see an error because the hint line could not think of
+   * anything. The usage comes back with them so the caller can bill it to the turn it belongs to.
+   */
+  const modelSuggestions = async (
+    request: string,
+    summary: string,
+  ): Promise<{ suggestions: EngineSuggestion[]; usage?: ModelUsage }> => {
+    let usage: ModelUsage | undefined;
+    const suggestions = await askModelForSuggestions(
+      {
+        complete: async ({ messages, maxOutputTokens }) => {
+          const turn = await model.complete({
+            messages: messages.map((message) => ({ role: message.role, content: message.content })),
+            tools: [],
+            maxOutputTokens,
+            safetyIdentifier: agent.sessionId,
+          });
+          usage = turn.usage;
+          return { content: turn.content };
+        },
+      },
+      navSignals(navContext()),
+      { lastRequest: request, lastSummary: summary },
+    );
+    return usage ? { suggestions, usage } : { suggestions };
+  };
+
   let streamedAnswer = false;
   /** The last turn's terminal status, which headless mode turns into the process exit code. */
   let lastTurnStatus: AgentRuntimeResult["status"] = "failed";
@@ -2362,10 +2437,24 @@ async function main(): Promise<number> {
       })}\n`);
       const warning = ledger.budgetWarning();
       if (warning) out.write(`  ${style.yellow(warning)}\n`);
-      // One line, at the one moment a person is deciding what to do next, naming the reason as well
-      // as the command. Suppressed once they have used it: a hint you have taken is not a hint.
-      const next = renderNextStep(navContext(), sectionStyle());
+      // A turn ending is the one moment a person is deciding what to do next, so this is where the
+      // suggestions go: what the situation calls for, with the reason attached, plus — only when
+      // the situation was quiet enough to leave room — one thing about Nova worth knowing.
+      // Suppressed once they have used it: a hint you have taken is not a hint.
+      lastFailure = result.status === "completed" ? null : { status: failureStatus(result.status), message: result.summary };
+      // The optional model pass, off unless someone turned it on. Its cost is folded into *this*
+      // turn's usage rather than recorded as a turn of its own: it is part of what answering this
+      // request cost, and a phantom turn in `/cost` would misreport both the count and the shape of
+      // the session's spend. It can only ever propose things to ask for, never actions to run.
+      const asks: { suggestions: EngineSuggestion[]; usage?: ModelUsage } =
+        suggestModel ? await modelSuggestions(request, result.summary) : { suggestions: [] };
+      if (asks.usage) result.usage = addModelUsage(result.usage, asks.usage);
+      const next = renderSuggestions(navContext(), sectionStyle(), { limit: 2, hints: true });
       if (next && interactive) out.write(`${next}\n`);
+      if (asks.suggestions.length > 0 && interactive) {
+        const rendered = renderAsks(mergeModelSuggestions([], asks.suggestions, { maxModel: 2 }), sectionStyle());
+        if (rendered) out.write(`${rendered}\n`);
+      }
       lastTurnStatus = result.status;
       headless?.turnEnd({
         status: result.status,
@@ -2389,6 +2478,9 @@ async function main(): Promise<number> {
         out.write(`\n${style.yellow(`Stopped at the ${formatMoney(fromUnits(args.budget, display))} cap for this request.`)}\n`);
         out.write(style.dim(`  Raise it with --budget, or ask for something smaller.\n`));
         lastTurnStatus = "iteration_limit";
+        lastFailure = { status: "iteration_limit", message };
+        const recovery = renderRecovery(navContext(), sectionStyle());
+        if (recovery && interactive) out.write(`${recovery}\n`);
         headless?.error(`Stopped at the approved cap for this request.`, { status: "iteration_limit" });
         return false;
       }
@@ -2405,6 +2497,12 @@ async function main(): Promise<number> {
       } else {
         out.write(`${style.red("error")} ${message}\n`);
       }
+      // An error says what broke; this says what to do about it. The rules only speak when they
+      // recognise the failure — an invented next step after a real error costs a detour to
+      // discover it was a guess, which is worse than the silence it replaced.
+      lastFailure = { status: "failed", message };
+      const recovery = renderRecovery(navContext(), sectionStyle());
+      if (recovery && interactive) out.write(`${recovery}\n`);
       lastTurnStatus = "failed";
       headless?.error(message, { status: "failed" });
       return false;
@@ -2496,6 +2594,13 @@ async function main(): Promise<number> {
   if (!prices) {
     out.write(`${style.yellow(`  No price configured for ${resolvedModelId} ${glyphs.middot} costs will show as unknown.`)}\n`);
     out.write(`${style.dim(`  Set ${PRICE_ENVIRONMENT_HINT}, or run nova --providers.`)}\n`);
+  }
+  // An empty prompt under a banner says the tool is ready without saying what it is ready for.
+  // Only for a session someone is about to type into: a `--prompt` run already knows what it wants,
+  // and a pipe has nobody to read them.
+  if (interactive && !args.prompt) {
+    const starters = renderStarters(navContext(), sectionStyle(), path.basename(args.root));
+    if (starters) out.write(`\n${starters}\n`);
   }
 
   /**
@@ -3484,7 +3589,7 @@ async function main(): Promise<number> {
 
     if (input === "/todos") {
       const todos = agent.todos;
-      if (todos.length === 0) { out.write(style.dim("  no plan yet\n")); continue; }
+      if (todos.length === 0) { out.write(style.dim("  no plan yet\n")); writeHint(); continue; }
       const mark = { pending: glyphs.circleEmpty, in_progress: glyphs.circleHalf, done: glyphs.circleFull } as const;
       out.write(`${box(todos.map((todo) => `${mark[todo.status]} ${todo.text}`), { depth, title: "todos", glyphs })}\n`);
       continue;
@@ -3494,11 +3599,12 @@ async function main(): Promise<number> {
       // just not the one `/diff` was being asked.
       if (input === "/diff stat") {
         const stat = await agent.diffStat();
-        out.write(stat ? `${box(stat.split("\n"), { depth, title: "diff", glyphs })}\n` : style.dim("  nothing changed since the last checkpoint\n"));
+        if (stat) out.write(`${box(stat.split("\n"), { depth, title: "diff", glyphs })}\n`);
+        else { out.write(style.dim("  nothing changed since the last checkpoint\n")); writeHint(); }
         continue;
       }
       const patch = await agent.diffPatch();
-      if (!patch.trim()) { out.write(style.dim("  nothing changed since the last checkpoint\n")); continue; }
+      if (!patch.trim()) { out.write(style.dim("  nothing changed since the last checkpoint\n")); writeHint(); continue; }
       const rendered = renderPatch(patch, sectionStyle(), { maxLinesPerFile: FOLD_AFTER_LINES * 2 });
       out.write(`${rendered.text}\n`);
       // The whole patch stays addressable: a folded file is the common case on a real change, and

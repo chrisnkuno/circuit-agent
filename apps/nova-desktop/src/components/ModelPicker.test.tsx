@@ -64,6 +64,20 @@ describe("the model picker", () => {
     expect(screen.getAllByText(/Anthropic/).length).toBeGreaterThan(0);
   });
 
+  it("renders the menu outside the trigger's own subtree", () => {
+    // The reason this picker moved to Radix. The menu used to be a child of the toolbar, and the
+    // toolbar carried a `backdrop-filter` — which makes a backdrop root, so everything inside it
+    // composites against the page behind rather than against the toolbar. The menu came out
+    // see-through, and no amount of `background` or `z-index` on the menu could fix it, because
+    // the cause was an ancestor. Portalling is the fix: if the menu is not a descendant of the
+    // trigger's container, no filter or transform up that tree can reach it again.
+    open();
+    const trigger = screen.getByTitle(/Switch model/);
+    const menu = screen.getByRole("listbox", { name: "Models" });
+    expect(trigger.parentElement!.contains(menu)).toBe(false);
+    expect(document.body.contains(menu)).toBe(true);
+  });
+
   it("cannot be opened while the tab is busy", () => {
     // Busy means a request for this tab is already in flight; switching model mid-flight would
     // rebuild the session underneath it.

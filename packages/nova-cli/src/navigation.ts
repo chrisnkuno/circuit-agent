@@ -1,3 +1,12 @@
+import type { Suggestion as EngineSuggestion } from "@circuit-nova/nova-core/nova-cli/suggestions";
+import {
+  defaultSignals,
+  shouldOfferStarters,
+  starterSuggestions,
+  suggest as suggestFromSignals,
+  type SessionSignals,
+  type SuggestionCategory,
+} from "@circuit-nova/nova-core/nova-cli/suggestions";
 import { COMMANDS, type Command } from "./commands";
 import { heading, note, type SectionStyle } from "./sections";
 import { clipTo } from "./chooser";
@@ -59,7 +68,14 @@ export const COMMAND_GROUP: Readonly<Record<string, NavGroupId>> = {
   "/settings": "setup", "/providers": "setup", "/theme": "setup",
 };
 
-/** Everything the suggester is allowed to know. Plain data, so a test can pose any situation. */
+/**
+ * Everything the suggester is allowed to know, in the CLI's own vocabulary.
+ *
+ * A projection of `SessionSignals` from the core package rather than a second set of rules: the
+ * rules now live in one place and the desktop reads the same ones. What stays here is the mapping —
+ * this is where a terminal's idea of "what happened" becomes the surface-neutral signals the engine
+ * takes, and where a suggestion comes back as the slash command a reader can actually type.
+ */
 export type NavContext = {
   mode: "plan" | "build" | "auto" | "defender";
   /** Turns completed in this session. Zero means nothing has happened yet. */
@@ -75,9 +91,35 @@ export type NavContext = {
   hasSpend: boolean;
   /** Findings the last scan reported, if one has run. */
   openFindings?: number;
+  /** How the last turn ended, if one has — what makes a hint after a failure a way out of *that* failure. */
+  lastStatus?: SessionSignals["lastStatus"];
+  /** The error text from the last failure, so recovery can be specific rather than "try again". */
+  lastError?: string | null;
+  /** Fraction of a session budget spent, when one is set. */
+  budgetFraction?: number;
   /** Commands used this session, most recent first. */
   recent: readonly string[];
 };
+
+/** The CLI context as the engine's signals. Commands used count as suggestions taken. */
+export function navSignals(context: NavContext): SessionSignals {
+  return defaultSignals({
+    mode: context.mode,
+    turns: context.turns,
+    changedFiles: context.changedFiles,
+    openTodos: context.openTodos,
+    runningJobs: context.runningJobs,
+    tabs: context.tabs,
+    sandbox: context.sandbox,
+    providerConfigured: context.providerConfigured,
+    hasSpend: context.hasSpend,
+    taken: context.recent,
+    ...(context.openFindings !== undefined ? { openFindings: context.openFindings } : {}),
+    ...(context.lastStatus !== undefined ? { lastStatus: context.lastStatus } : {}),
+    ...(context.lastError !== undefined ? { lastError: context.lastError } : {}),
+    ...(context.budgetFraction !== undefined ? { budgetFraction: context.budgetFraction } : {}),
+  });
+}
 
 export type Suggestion = {
   command: string;
@@ -86,54 +128,34 @@ export type Suggestion = {
 };
 
 /**
- * What to do next, given where the session actually is.
+ * What to do next, given where the session actually is — as commands this terminal can run.
  *
- * Ordered by how much the situation demands it rather than by how clever the suggestion is: an
- * unconfigured provider outranks everything because nothing else can happen, and unreviewed changes
- * outrank a cost breakdown because one of them is about correctness and the other is about
- * curiosity. Anything the user has already run this session is dropped — a suggestion they have
- * taken is no longer a suggestion, and repeating it is how a hint bar becomes noise.
+ * A thin projection of the shared engine: it asks for the categories a prompt should carry (a
+ * blocking setup problem, a way out of a failure, the next ordinary step) and drops the ambient
+ * teaching hints, which have their own quieter moment in `suggestHints`. Anything without a slash
+ * command — "open a project", "try that again" — is filtered out by the engine itself, because it
+ * has no desktop-free spelling here.
  */
 export function suggestNext(context: NavContext, limit = 3): Suggestion[] {
-  const used = new Set(context.recent);
-  const candidates: Suggestion[] = [];
+  return fromEngine(context, ["blocked", "recovery", "next"], limit);
+}
 
-  if (!context.providerConfigured) {
-    // The only blocking one, and the only one worth showing on its own.
-    return [{ command: "/settings", reason: "no model provider is configured yet" }];
-  }
-  if (context.turns === 0) {
-    candidates.push({ command: "/guide", reason: "a short tour, if this is your first session" });
-    candidates.push({ command: "/palette", reason: "search every command by what it does" });
-  }
-  if (context.openFindings !== undefined && context.openFindings > 0 && context.mode !== "defender") {
-    candidates.push({ command: "/defender", reason: `${context.openFindings} security finding${context.openFindings === 1 ? "" : "s"} to work through` });
-  }
-  if (context.changedFiles > 0) {
-    candidates.push({ command: "/diff", reason: `${context.changedFiles} file${context.changedFiles === 1 ? "" : "s"} changed and not looked at yet` });
-    candidates.push({ command: "/undo", reason: "put the last turn back if it went the wrong way" });
-  }
-  if (context.mode === "plan" && context.turns > 0) {
-    candidates.push({ command: "/build", reason: "the plan is in context — switch to build to apply it" });
-  }
-  if (context.openTodos > 0) {
-    candidates.push({ command: "/todos", reason: `${context.openTodos} item${context.openTodos === 1 ? "" : "s"} still open on the agent's plan` });
-  }
-  if (context.runningJobs > 0) {
-    candidates.push({ command: "/jobs", reason: `${context.runningJobs} job${context.runningJobs === 1 ? "" : "s"} running in the background` });
-    if (context.tabs > 1 || context.runningJobs > 1) candidates.push({ command: "/workspace", reason: "watch everything at once on one screen" });
-  }
-  if (context.sandbox) {
-    candidates.push({ command: "/pull", reason: "the work is in a sandbox — copy it here when it is right" });
-  }
-  if (context.hasSpend && context.turns >= 3) {
-    candidates.push({ command: "/cost", reason: "what this session has spent, per turn" });
-  }
-  if (context.turns >= 2 && context.changedFiles === 0 && context.runningJobs === 0) {
-    candidates.push({ command: "/detach", reason: "send long work to the background and keep the prompt" });
-  }
+/**
+ * The ambient half: a capability this session has not used that now applies.
+ *
+ * Kept apart from `suggestNext` on purpose. A next step is about the work in front of the reader
+ * and is worth interrupting for; a teaching hint is not, and mixing the two would push the thing
+ * they need under the thing they might one day like.
+ */
+export function suggestHints(context: NavContext, limit = 1): Suggestion[] {
+  return fromEngine(context, ["discover"], limit);
+}
 
-  return candidates.filter((suggestion) => !used.has(suggestion.command)).slice(0, Math.max(0, limit));
+function fromEngine(context: NavContext, categories: readonly SuggestionCategory[], limit: number): Suggestion[] {
+  return suggestFromSignals(navSignals(context), { surface: "cli", limit, categories })
+    .flatMap((suggestion) =>
+      suggestion.action.kind === "command" ? [{ command: suggestion.action.command, reason: suggestion.reason }] : [],
+    );
 }
 
 /**
@@ -294,10 +316,101 @@ export function renderGroupedHelp(context: NavContext, style: SectionStyle, opti
   return lines.join("\n");
 }
 
-/** One dim line under the prompt: the single most useful thing to do next, and why. */
-export function renderNextStep(context: NavContext, style: SectionStyle): string {
-  const [next] = suggestNext(context, 1);
-  if (!next) return "";
+/**
+ * The suggestion block printed where a turn ends: what to do next, and one thing worth knowing.
+ *
+ * Two rows at most for the work itself, because a third is where a hint stops being read — and one
+ * ambient row beneath it only when the situation was quiet enough not to need two. The ambient row
+ * is the "everywhere" half of being suggestive: it is how `/memory`, `/files` and `/tab` get found
+ * by someone who never opens `/help`, and it is deliberately the first thing dropped when the
+ * session has something more urgent to say.
+ */
+export function renderSuggestions(
+  context: NavContext,
+  style: SectionStyle,
+  options: { limit?: number; hints?: boolean } = {},
+): string {
   const glyphs = style.glyphs ?? UNICODE_GLYPHS;
-  return note(clipTo(`${next.command} ${glyphs.middot} ${next.reason}`, Math.max(16, style.width - 4), glyphs), style);
+  const width = Math.max(16, style.width - 4);
+  const limit = Math.max(0, options.limit ?? 2);
+  const next = suggestNext(context, limit);
+  // Ambient teaching only in the space a next step did not need. A hint printed *under* two things
+  // the reader has to decide about is a third thing to skip past, and the row people learn to skip
+  // is the row nothing can ever be taught in again.
+  const hints = options.hints && next.length < limit ? suggestHints(context, 1) : [];
+  const rows = [...next, ...hints];
+  if (rows.length === 0) return "";
+  return rows
+    .map((suggestion) => note(clipTo(`${suggestion.command} ${glyphs.middot} ${suggestion.reason}`, width, glyphs), style))
+    .join("\n");
+}
+
+/**
+ * One quiet teaching line, for a moment when a command had nothing of its own to say.
+ *
+ * An empty result — no plan yet, nothing changed since the checkpoint — is a whole screen of
+ * attention spent on a single dim sentence. It is the cheapest place in the product to teach
+ * something, and the only cost of doing it there is a line nobody was reading anyway.
+ */
+export function renderHint(context: NavContext, style: SectionStyle): string {
+  const glyphs = style.glyphs ?? UNICODE_GLYPHS;
+  const [hint] = suggestHints(context, 1);
+  if (!hint) return "";
+  return note(clipTo(`${hint.command} ${glyphs.middot} ${hint.reason}`, Math.max(16, style.width - 4), glyphs), style);
+}
+
+/**
+ * The way out of a failure, printed under the error that caused it.
+ *
+ * An error message says what broke; this says what to do about it, which is a different sentence
+ * and the one a reader actually needs. Nothing is printed when the failure is not one the rules
+ * recognise — a made-up next step after a real error is worse than silence, because it costs a
+ * detour to find out it was a guess.
+ */
+export function renderRecovery(context: NavContext, style: SectionStyle, limit = 2): string {
+  const glyphs = style.glyphs ?? UNICODE_GLYPHS;
+  const width = Math.max(16, style.width - 4);
+  const rows = suggestNext(context, limit);
+  if (rows.length === 0) return "";
+  return rows
+    .map((suggestion) => note(clipTo(`${suggestion.command} ${glyphs.middot} ${suggestion.reason}`, width, glyphs), style, "warn"))
+    .join("\n");
+}
+
+/**
+ * What to ask for at all, printed into a session that has not been asked anything yet.
+ *
+ * An empty prompt under a banner is the least suggestive thing a terminal can show: it says the
+ * tool is ready without saying what it is ready *for*. These are three requests that are true of
+ * any project and change nothing in it — the first thing a new reader types should not be an edit,
+ * because nothing has yet taught them that the mode decides what Nova may do without asking.
+ */
+export function renderStarters(context: NavContext, style: SectionStyle, projectName?: string): string {
+  const signals = { ...navSignals(context), ...(projectName ? { projectName } : {}) };
+  if (!shouldOfferStarters(signals)) return "";
+  const glyphs = style.glyphs ?? UNICODE_GLYPHS;
+  const width = Math.max(16, style.width - 4);
+  const rows = starterSuggestions(signals).map((starter) =>
+    note(clipTo(`${glyphs.middot} ${starter.label}`, width, glyphs), style),
+  );
+  return [heading("Try asking", 3, style), ...rows].join("\n");
+}
+
+/**
+ * The model's extra suggestions, printed under the rules' own.
+ *
+ * Rendered differently on purpose: these are requests to *make*, not commands to run, and they are
+ * guesses. The quote marks say the first thing and the mark says the second — a generated line that
+ * looks exactly like a rule borrows credibility the rules earned by being checkable.
+ */
+export function renderAsks(suggestions: readonly EngineSuggestion[], style: SectionStyle): string {
+  const glyphs = style.glyphs ?? UNICODE_GLYPHS;
+  const width = Math.max(16, style.width - 4);
+  return suggestions
+    .flatMap((suggestion) =>
+      suggestion.action.kind === "prompt"
+        ? [note(clipTo(`~ "${suggestion.label}" ${glyphs.middot} ${suggestion.reason}`, width, glyphs), style)]
+        : [],
+    )
+    .join("\n");
 }

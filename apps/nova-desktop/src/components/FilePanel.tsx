@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { listFiles, readFile, type FileContents } from "../lib/ipc";
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { ancestorsOf, buildFileTree, describeFolder, searchFiles, type FileNode } from "../lib/files";
 
 /**
@@ -71,19 +72,10 @@ export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (
     setContentsError(null);
   }, [props.open]);
 
-  useEffect(() => {
-    if (!props.open) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") props.onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props]);
-
   // Rebuilding the tree on every keystroke would re-walk the whole project to render a filter that
   // does not use the tree at all.
   const tree = useMemo(() => buildFileTree(paths ?? []), [paths]);
   const matches = useMemo(() => searchFiles(tree, query), [tree, query]);
-
-  if (!props.open) return null;
 
   /** Inserts `@path` into the composer and leaves — the panel's original and still-primary act. */
   const mention = (path: string): void => {
@@ -148,12 +140,12 @@ export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (
     });
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
-      <div className="modal diff-modal file-explorer" role="dialog" aria-modal="true" aria-labelledby="files-title">
-        <div className="approval-head">
-          <h2 id="files-title">Project files</h2>
-          <button className="btn ghost" type="button" onClick={props.onClose}>Close</button>
-        </div>
+    <Dialog open={props.open} onOpenChange={(next) => { if (!next) props.onClose(); }}>
+      <DialogContent className="diff-modal file-explorer" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle>Project files</DialogTitle>
+          <DialogClose asChild><button className="btn ghost" type="button">Close</button></DialogClose>
+        </DialogHeader>
 
         <div className="file-explorer-panes">
         <div className="file-explorer-tree">
@@ -232,7 +224,7 @@ export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (
           )}
         </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

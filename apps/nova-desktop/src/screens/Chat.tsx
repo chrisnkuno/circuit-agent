@@ -11,7 +11,20 @@ import { ScanPanel } from "../components/ScanPanel";
 import { GuidePanel } from "../components/GuidePanel";
 import { FilePanel } from "../components/FilePanel";
 import { sendsOnKey } from "../lib/composer";
-import { STARTERS, projectName, shouldShowStarters } from "../lib/starters";
+import { projectName } from "../lib/starters";
+import { SuggestionBar } from "../components/SuggestionBar";
+import { ThemeToggle } from "../components/ThemeToggle";
+import { Button } from "../components/ui/button";
+import { ScrollArea } from "../components/ui/scroll-area";
+import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
+import { Separator } from "../components/ui/separator";
+import {
+  composerSuggestions,
+  recoverySuggestions,
+  starters,
+  type DesktopSessionState,
+  type Suggestion,
+} from "../lib/suggestions";
 import { DESKTOP_PROVIDERS } from "../lib/models";
 import { shouldFollow } from "../lib/transcript";
 import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
@@ -60,6 +73,7 @@ import {
   type WindowTab,
 } from "../lib/tabs";
 import { TabStrip } from "../components/TabStrip";
+import { Tooltip } from "../components/ui/tooltip";
 import { providerIsConfigured } from "../lib/settings";
 import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../lib/settings";
 
@@ -112,6 +126,15 @@ export function ChatScreen(props: {
   const [showFiles, setShowFiles] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  /**
+   * Suggestions this session has already acted on.
+   *
+   * Window-scoped and never persisted, for the same reason the CLI's command history is: a row
+   * whose contents depend on work you have since forgotten is a row you cannot learn. What it buys
+   * is the one property that separates advice from noise — a suggestion you have taken stops being
+   * offered.
+   */
+  const [takenSuggestions, setTakenSuggestions] = useState<readonly string[]>([]);
 
   // The tab in front, and its fields under the names the rest of this screen already used. Reading
   // them out once here is what kept the render below unchanged: the screen draws "the session", and
@@ -628,27 +651,114 @@ export function ChatScreen(props: {
     if (target) await closeSidecarTab(target).catch(() => undefined);
   }
 
+  /** Copying a sandbox back down, shared by the mode bar's button and the suggestion that offers it. */
+  async function handlePull() {
+    try {
+      const result = await pullSandbox(undefined, sidecarTabId(tabId));
+      addSystemMessage(`Pulled sandbox to ${result.dest}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Where this window is, as the signals the shared rules take.
+   *
+   * Assembled at render rather than kept in state, for the reason the CLI gives for the same
+   * decision: every field here already lives somewhere that owns it, and a second copy is one more
+   * thing to keep in step — which is how a "smart" suggestion starts describing a session that
+   * ended two turns ago.
+   */
+  const sessionState: DesktopSessionState = {
+    chat,
+    root,
+    mode,
+    tabs: tabsState.tabs.length,
+    sandbox,
+    openTodos: todos.filter((todo) => todo.status !== "done").length,
+    providerConfigured: Boolean(props.settings.apiKey),
+    busy,
+    taken: takenSuggestions,
+  };
+
+  /**
+   * Taking a suggestion.
+   *
+   * A prompt fills the composer and never sends: the suggestion is an offer to say something, and
+   * turning it into a sent message would be a decision made on the reader's behalf — including for
+   * "try that again", where the whole question is whether the same request is still what they want.
+   * Everything else is a thing the window can do directly, mapped from the closed set of action ids
+   * the engine is allowed to name, so a rule pointing somewhere this app cannot go is a type error
+   * rather than a dead button.
+   */
+  async function takeSuggestion(suggestion: Suggestion) {
+    setTakenSuggestions((taken) => [suggestion.id, ...taken.filter((id) => id !== suggestion.id)]);
+    if (suggestion.action.kind === "prompt") {
+      setDraft(suggestion.action.text);
+      composerRef.current?.focus();
+      return;
+    }
+    // Slash commands belong to the terminal. A rule with only a command has no desktop action and
+    // is filtered out before it reaches here; this keeps that true if one ever slips through.
+    if (suggestion.action.kind === "command") return;
+    switch (suggestion.action.id) {
+      case "open-settings": props.onOpenSettings(); return;
+      case "open-project": await chooseProject(); return;
+      case "open-diff": setShowDiff(true); return;
+      case "open-scan": setShowScan(true); return;
+      case "open-files": setShowFiles(true); return;
+      case "open-guide": setShowGuide(true); return;
+      case "open-models": setModelMenuOpen(true); return;
+      case "open-sessions": if (root) await refreshSessions(root); return;
+      case "undo-turn": await handleUndo(); return;
+      case "pull-sandbox": await handlePull(); return;
+      case "new-tab": handleNewTab(); return;
+      case "mode-plan": await handleMode("plan"); return;
+      case "mode-build": await handleMode("build"); return;
+      case "mode-auto": await handleMode("auto"); return;
+      case "mode-defender": await handleMode("defender"); return;
+      case "retry-turn": {
+        // The last thing asked, back in the composer for a second look. What failed was the
+        // attempt, not necessarily the request — and the reader is the one who knows which.
+        const lastAsked = [...messages].reverse().find((message) => message.role === "user");
+        if (lastAsked) {
+          setDraft(lastAsked.content);
+          composerRef.current?.focus();
+        }
+        return;
+      }
+      case "dismiss-error": setError(null); return;
+    }
+  }
+
+  const nextSuggestions = composerSuggestions(sessionState);
+  const recovery = recoverySuggestions(sessionState);
+  const openingStarters = starters(sessionState);
+
   return (
     <div className="app-shell">
+      {/*
+        * One line, three zones, and the verticals of the layout start here.
+        *
+        * The wordmark occupies exactly the width of the left rail below it, so the rail's edge is a
+        * line that runs the full height of the window rather than starting under the header. The
+        * middle zone is the *address* — where this session is working — and it is given the slack,
+        * because it is the only part whose content has no fixed length. The right zone is the
+        * cluster of things you go to rather than look at, in order of how often: model, then the
+        * three that open something, then appearance.
+        */}
       <header className="topbar">
-        <div className="brand">
+        <div className="wordmark">
           <strong>Nova</strong>
-          <span>
-            <span className={`status-dot ${busy ? "busy" : "live"}`} />{" "}
-            {root ? root : "No project open"}
-            {sessionId ? ` · ${sessionId}` : ""}
-          </span>
         </div>
-        <div className="topbar-actions">
-          {/* In the header rather than only in the strip, because the strip hides itself until there
-              are two tabs — and the first new tab has to be openable from a window that has one. */}
-          <button className="btn ghost" type="button" onClick={handleNewTab} title="New tab — a second piece of work, running at the same time (Ctrl T)">
-            + Tab
-          </button>
+
+        <div className="locus">
+          <span className={`status-dot ${busy ? "busy" : "live"}`} aria-hidden="true" />
           <input
             className="path-input"
             value={pathDraft}
-            placeholder="/path/to/project"
+            aria-label="Project folder"
+            placeholder={root ?? "/path/to/project"}
             disabled={busy}
             onChange={(e) => setPathDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -658,12 +768,21 @@ export function ChatScreen(props: {
               }
             }}
           />
-          <button className="btn" type="button" onClick={() => void openProjectAt(pathDraft)} disabled={busy || !pathDraft.trim()}>
+          <Button onClick={() => void openProjectAt(pathDraft)} disabled={busy || !pathDraft.trim()}>
             Open
-          </button>
-          <button className="btn" type="button" onClick={() => void chooseProject()} disabled={busy}>
-            Browse…
-          </button>
+          </Button>
+          <Tooltip label="Pick a folder with the system dialog">
+            <Button variant="ghost" onClick={() => void chooseProject()} disabled={busy}>
+              Browse…
+            </Button>
+          </Tooltip>
+          {/* The session id, in the type it is: an identifier you copy into a bug report, never a
+              phrase you read. Mono and dim keeps it available without letting it compete with the
+              path, which is the thing a person is actually reading this line for. */}
+          {sessionId ? <code className="locus-id" title={sessionId}>{sessionId}</code> : null}
+        </div>
+
+        <div className="topbar-actions">
           <ModelPicker
             provider={active.provider}
             model={active.model}
@@ -674,15 +793,22 @@ export function ChatScreen(props: {
             open={modelMenuOpen}
             onOpenChange={setModelMenuOpen}
           />
+          <Separator orientation="vertical" className="topbar-rule" />
+          <Tooltip label="A second piece of work, running at the same time (Ctrl T)">
+            <Button variant="ghost" onClick={handleNewTab} aria-label="New tab">
+              + Tab
+            </Button>
+          </Tooltip>
           {/* Beside Settings rather than buried in a panel: the two questions a new window raises
               are "where do I put my key" and "how does this work", and they should be equally
               easy to find. */}
-          <button className="btn ghost" type="button" onClick={() => setShowGuide(true)} title="How Nova works — modes, approvals, tabs, sandboxes (F1)">
-            Guide
-          </button>
-          <button className="btn ghost" type="button" onClick={props.onOpenSettings} title="API key, budget, sandbox (Ctrl ,)">
-            Settings
-          </button>
+          <Tooltip label="How Nova works — modes, approvals, tabs, sandboxes (F1)">
+            <Button variant="ghost" onClick={() => setShowGuide(true)}>Guide</Button>
+          </Tooltip>
+          <Tooltip label="API key, budget, sandbox (Ctrl ,)">
+            <Button variant="ghost" onClick={props.onOpenSettings}>Settings</Button>
+          </Tooltip>
+          <ThemeToggle />
         </div>
       </header>
 
@@ -737,36 +863,31 @@ export function ChatScreen(props: {
           <ModeBar
             mode={mode}
             busy={busy}
-            sandbox={sandbox}
             onMode={handleMode}
             onUndo={handleUndo}
             onCancel={() => cancelTurn(sidecarTabId(tabId))}
             onShowDiff={() => setShowDiff(true)}
             onScan={() => setShowScan(true)}
             onFiles={() => setShowFiles(true)}
-            onToggleSandbox={() => {
-              setSandbox(!sandbox);
-              setUpload(true);
-            }}
-            onPull={async () => {
-              try {
-                const result = await pullSandbox(undefined, sidecarTabId(tabId));
-                addSystemMessage(`Pulled sandbox to ${result.dest}`);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : String(err));
-              }
-            }}
           />
 
           <div className="transcript-wrap">
-            <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
+            {/* Radix's viewport is the element that actually scrolls, so the ref and the scroll
+                handler go there: "follow new output only while the reader is at the bottom" is a
+                question about the viewport, not about the frame around it. */}
+            <ScrollArea
+              className="transcript-scroll"
+              viewportRef={transcriptRef}
+              onViewportScroll={handleTranscriptScroll}
+            >
+              <div className="transcript">
               {!root ? (
                 <div className="empty-state">
                   <h2>No project open</h2>
                   <p>Nova works inside a folder on this machine. Choose one to start a session.</p>
-                  <button className="btn primary" type="button" onClick={() => void chooseProject()} disabled={busy}>
+                  <Button variant="primary" onClick={() => void chooseProject()} disabled={busy}>
                     Browse for a folder…
-                  </button>
+                  </Button>
                 </div>
               ) : null}
               {messages.map((message) => (
@@ -781,47 +902,64 @@ export function ChatScreen(props: {
                 * in front of them rather than generic prompts, and they fill the composer instead
                 * of sending, so the first message is still theirs to edit.
                 */}
-              {root && shouldShowStarters({ root, messageCount: messages.length, busy }) ? (
+              {openingStarters.length > 0 ? (
                 <div className="empty-state starters">
-                  <h2>Ready in {projectName(root)}</h2>
+                  <h2>Ready in {root ? projectName(root) : "Nova"}</h2>
                   <p>Ask for a change, or for an explanation. Nova reads the project before it answers.</p>
                   <div className="starter-list">
-                    {STARTERS.map((starter) => (
-                      <button
-                        key={starter}
-                        className="btn ghost starter"
-                        type="button"
-                        onClick={() => { setDraft(starter); composerRef.current?.focus(); }}
+                    {openingStarters.map((starter) => (
+                      <Button
+                        key={starter.id}
+                        variant="ghost"
+                        className="starter"
+                        title={starter.reason}
+                        onClick={() => void takeSuggestion(starter)}
                       >
-                        {starter}
-                      </button>
+                        {starter.label}
+                      </Button>
                     ))}
                   </div>
                   <p className="starter-foot">
                     Every edit and command asks first in Build mode.{" "}
-                    <button className="btn ghost tiny" type="button" onClick={() => setShowGuide(true)}>Read the guide</button>
+                    <Button variant="ghost" size="sm" onClick={() => setShowGuide(true)}>Read the guide</Button>
                   </p>
                 </div>
               ) : null}
               {error ? (
                 <div className="notice danger" role="alert">
                   <strong>Something went wrong</strong>
+                  {/* Dismiss sits on the title's own row, at the end of it: it is the least
+                      important control in the notice and should not be the last word in it. */}
+                  <Button variant="ghost" size="sm" className="notice-dismiss" onClick={() => setError(null)}>
+                    Dismiss
+                  </Button>
                   <span>{error}</span>
-                  <button className="btn ghost" type="button" onClick={() => setError(null)}>Dismiss</button>
+                  {/* An error says what broke; these say what to do about it, which is the sentence
+                      the reader actually needs. They appear only for a failure the rules recognise —
+                      a "try again" under an unrecognised error is a guess dressed as a diagnosis. */}
+                  {recovery.length > 0 ? (
+                    <SuggestionBar suggestions={recovery} onTake={(suggestion) => void takeSuggestion(suggestion)} label="Try this" />
+                  ) : null}
                 </div>
               ) : null}
-            </div>
+              </div>
+            </ScrollArea>
 
             {/* Announced to assistive tech without being shown twice: the transcript itself is not a
                 live region, because re-announcing the whole thing on every streamed token is noise. */}
             <p className="sr-only" aria-live="polite">{busy ? "Nova is working." : "Ready."}</p>
 
             {pinned ? (
-              <button className="btn jump-latest" type="button" onClick={jumpToLatest}>
+              <Button className="jump-latest" onClick={jumpToLatest}>
                 Jump to latest ↓
-              </button>
+              </Button>
             ) : null}
           </div>
+
+          {/* The one place the reader's attention already is when "what now?" arrives: the instant a
+              turn ends and the cursor is back. The same question answered in a side panel is
+              answered where nobody is looking. */}
+          <SuggestionBar suggestions={nextSuggestions} onTake={(suggestion) => void takeSuggestion(suggestion)} />
 
           <div className="composer">
             <textarea
@@ -838,15 +976,25 @@ export function ChatScreen(props: {
               }}
             />
             <div className="composer-side">
-              <button className="btn primary" type="button" disabled={busy || !draft.trim()} onClick={handleSend}>
+              <Button variant="primary" disabled={busy || !draft.trim()} onClick={handleSend}>
                 {busy ? "Working…" : "Send"}
-              </button>
+              </Button>
               <kbd className="composer-hint">↵ send · ⇧↵ newline</kbd>
             </div>
           </div>
         </section>
 
+        {/*
+          * One column, one scrollbar.
+          *
+          * Each region used to flex for height against its neighbours, so with four of them open
+          * every one was clipped mid-row: the activity log lost its last line to the plan's header,
+          * and the cost report ended in the middle of a figure. Regions are now the height of their
+          * contents and the column scrolls as a whole — with the activity list capped, since it is
+          * the only one that grows without bound.
+          */}
         <aside className="side-panel">
+          <ScrollArea className="inspector-scroll">
           {/* What it is doing right now, above what it intends to do next. Both were previously
               answerable only by reading the transcript, which is where the answer scrolls away. */}
           <ActivityPanel entries={activity} busy={busy} />
@@ -872,15 +1020,50 @@ export function ChatScreen(props: {
                   ))}
                 </ol>
               )}
+            </div>
+          </div>
+
+          {/*
+            * Where the work runs.
+            *
+            * It used to be a toggle in the toolbar above the transcript, next to actions you take on
+            * a turn. It is not one of those: it is a property of the session, changed perhaps once a
+            * day, and it belongs beside the status it decides. Here the choice and its consequences
+            * — uploaded or empty, and how to get the files back — are one region instead of three
+            * controls in two places.
+            */}
+          <div className="panel">
+            <div className="panel-header">Machine</div>
+            <div className="panel-body">
+              <ToggleGroup
+                type="single"
+                value={sandbox ? "sandbox" : "local"}
+                aria-label="Where the work runs"
+                disabled={busy}
+                onValueChange={(next) => {
+                  if (!next) return;
+                  setSandbox(next === "sandbox");
+                  setUpload(true);
+                }}
+              >
+                <ToggleGroupItem value="local">This machine</ToggleGroupItem>
+                <ToggleGroupItem value="sandbox">Sandbox</ToggleGroupItem>
+              </ToggleGroup>
               {sandbox ? (
                 <div className="sandbox-note">
-                  <strong>Sandbox</strong>
-                  <span>{upload ? "Project uploaded to a remote machine." : "Starting empty — nothing uploaded."}</span>
-                  <button className="btn ghost" type="button" onClick={() => setUpload((v) => !v)}>
-                    {upload ? "Start empty instead" : "Upload the project"}
-                  </button>
+                  <span>{upload ? "The project is uploaded to a remote machine." : "Starting empty — nothing uploaded."}</span>
+                  <div className="btn-group">
+                    <Button variant="ghost" size="sm" onClick={() => setUpload((v) => !v)}>
+                      {upload ? "Start empty instead" : "Upload the project"}
+                    </Button>
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => void handlePull()}>
+                      Pull files
+                    </Button>
+                  </div>
                 </div>
-              ) : null}
+              ) : (
+                <p className="panel-empty">Files are read and written here, in {root ? projectName(root) : "the open project"}.</p>
+              )}
             </div>
           </div>
           <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} turns={costTurns} />
@@ -898,6 +1081,7 @@ export function ChatScreen(props: {
               ))}
             </dl>
           </details>
+          </ScrollArea>
         </aside>
       </div>
 

@@ -103,3 +103,27 @@ export {
 export { definePrices, selectPrice, tokenPricesAt, tokenPricesFor, validatePriceRecord } from "./pricing";
 export type { BillingUnit, PriceModality, PriceQuery, PriceRecord } from "./pricing";
 export { PRICE_CATALOG } from "./providers/price-catalog";
+
+// The suggestion engine both front ends read: what to do next, why now, and the ambient hints that
+// teach the rest of the product. Exported because a suggestion that exists only in the CLI is the
+// exact failure the shared rules were written to end.
+export {
+  CATEGORY_ORDER,
+  classifyFailure,
+  defaultSignals,
+  mergeModelSuggestions,
+  shouldOfferStarters,
+  starterSuggestions,
+  suggest,
+  suggestionIds,
+} from "./nova-cli/suggestions";
+export type {
+  DesktopActionId,
+  FailureKind,
+  SessionSignals,
+  Suggestion,
+  SuggestionAction,
+  SuggestionCategory,
+  SuggestionSurface,
+  SuggestOptions,
+} from "./nova-cli/suggestions";

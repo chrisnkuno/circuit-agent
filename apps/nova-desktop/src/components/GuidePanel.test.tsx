@@ -48,7 +48,9 @@ describe("the guide panel", () => {
   it("closes on Escape, like every other panel in the window", () => {
     const onClose = vi.fn();
     render(<GuidePanel open onClose={onClose} />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    // Fired at the dialog, which is where a real Escape starts: focus is trapped inside the panel
+    // while it is open, and the event bubbles from there to the document listener that closes it.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
   });
 

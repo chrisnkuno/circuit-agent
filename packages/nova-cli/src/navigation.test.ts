@@ -9,7 +9,11 @@ import {
   NAV_GROUPS,
   rankWithContext,
   renderGroupedHelp,
-  renderNextStep,
+  renderHint,
+  renderRecovery,
+  renderStarters,
+  renderSuggestions,
+  suggestHints,
   suggestNext,
   type NavContext,
 } from "./navigation";
@@ -155,10 +159,10 @@ describe("rendering", () => {
   });
 
   it("writes one line, or none at all when there is nothing worth saying", () => {
-    const line = renderNextStep({ ...base, turns: 1, changedFiles: 2 }, style);
+    const line = renderSuggestions({ ...base, turns: 1, changedFiles: 2 }, style, { limit: 1 });
     expect(line.split("\n")).toHaveLength(1);
     expect(line).toContain("/diff");
-    expect(renderNextStep({ ...base, turns: 1, recent: ["/detach"] }, style)).toBe("");
+    expect(renderSuggestions({ ...base, turns: 1, recent: ["/detach"] }, style, { limit: 1 })).toBe("");
   });
 });
 
@@ -182,5 +186,53 @@ describe("session usage", () => {
     const log = new CommandUsage(3);
     for (const command of ["/a", "/b", "/c", "/d"]) log.record(command);
     expect(log.recent).toEqual(["/d", "/c", "/b"]);
+  });
+});
+
+describe("the suggestive prompt", () => {
+  it("shows what to do next, and one thing worth knowing when there is room", () => {
+    const block = renderSuggestions({ ...base, turns: 5, hasSpend: true }, style, { limit: 2, hints: true });
+    const lines = block.split("\n");
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.length).toBeLessThanOrEqual(2);
+  });
+
+  it("drops the teaching line first when the session has real work to report", () => {
+    // Two next steps fill the block; an ambient hint printed under them would be a third thing to
+    // skip past, and the row people learn to skip is the row nothing can be taught in again.
+    const busy = { ...base, turns: 5, changedFiles: 3, hasSpend: true };
+    const block = renderSuggestions(busy, style, { limit: 2, hints: true });
+    const lines = block.split("\n");
+    expect(lines).toHaveLength(2);
+    for (const hint of suggestHints(busy, 3)) expect(block).not.toContain(hint.reason);
+  });
+
+  it("says nothing at all when there is nothing to say", () => {
+    expect(renderSuggestions({ ...base, turns: 1, recent: ["/detach"] }, style, { limit: 2 })).toBe("");
+  });
+
+  it("teaches something in an empty result, and stops once it has been taken", () => {
+    const quiet = { ...base, turns: 4 };
+    const hint = renderHint(quiet, style);
+    expect(hint).not.toBe("");
+    const taken = suggestHints(quiet, 9).map((suggestion) => suggestion.command);
+    expect(renderHint({ ...quiet, recent: taken }, style)).toBe("");
+  });
+
+  it("offers a way out of a failure, naming the failure", () => {
+    const recovery = renderRecovery({ ...base, turns: 1, lastStatus: "failed", lastError: "401 invalid api key" }, style);
+    expect(recovery).toContain("/settings");
+    expect(recovery).toContain("key");
+  });
+
+  it("offers no way out when nothing failed", () => {
+    expect(renderRecovery({ ...base, turns: 1, lastStatus: "completed" }, style)).toBe("");
+  });
+
+  it("says what to ask for into an empty session, and gets out of the way after the first turn", () => {
+    const starters = renderStarters(base, style, "api");
+    expect(starters).toContain("api");
+    expect(starters.split("\n").length).toBeGreaterThan(1);
+    expect(renderStarters({ ...base, turns: 1 }, style, "api")).toBe("");
   });
 });

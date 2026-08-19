@@ -37,6 +37,11 @@ const CURRENCY_CHOICES: readonly SettingChoice[] = [...new Set(SUPPORTED_COUNTRI
   .sort()
   .map((value) => ({ value, label: value }));
 
+const ON_OFF_CHOICES: readonly SettingChoice[] = [
+  { value: "off", label: "Off — rule-based suggestions only" },
+  { value: "on", label: "On — the model may add up to two more" },
+];
+
 const PROVIDER_CHOICES: readonly SettingChoice[] = [
   { value: "anthropic", label: "Anthropic" },
   { value: "openai", label: "OpenAI" },
@@ -82,6 +87,11 @@ export const SETTING_FIELDS = [
   { key: "MODEL_PRICE_CURRENCY", label: "Model price currency" },
   { key: "MODEL_PRICE_MODEL", label: "Model the price override applies to" },
   { key: "NOVA_KEYS", label: "Key bindings, e.g. /diff=alt+d,/wander=off" },
+  // Off by default, and the label says what it costs: the deterministic suggestions are free and
+  // instant, and this buys two extra project-specific ones for a small model call per turn. A
+  // feature that quietly bills a person for a hint is a feature they turn off once and distrust
+  // afterwards.
+  { key: "NOVA_SUGGEST_MODEL", label: "Ask the model for extra suggestions (a small extra call per turn)", choices: ON_OFF_CHOICES },
 ] as const;
 
 export type SettingKey = typeof SETTING_FIELDS[number]["key"];
