@@ -21,6 +21,14 @@
   --danger-dim: rgba(255, 107, 107, 0.12);
   --ok: #6dd39a;
   --code-bg: rgba(4, 8, 13, 0.55);
+  /*
+   * Chart ink. One hue for one series, at the step that passes the validator against *this* mode's
+   * surface — the dark step is chosen, not an automatic lightening of the light one: the accent
+   * used everywhere else (#3dd6c6) sits at L 0.79, outside the 0.48–0.67 band a fill has to stay
+   * inside on a dark surface.
+   */
+  --chart-mark: #1fa596;
+  --chart-axis: rgba(214, 228, 242, 0.18);
   --accent-edge: rgba(61, 214, 198, 0.25);
   --accent-edge-strong: rgba(61, 214, 198, 0.55);
   --warn-edge: rgba(240, 180, 41, 0.45);
@@ -91,6 +99,8 @@
     --danger-dim: rgba(192, 57, 43, 0.09);
     --ok: #1f8a53;
     --code-bg: rgba(15, 34, 56, 0.05);
+    --chart-mark: #0f9c8d;
+    --chart-axis: rgba(15, 34, 56, 0.16);
     --accent-edge: rgba(15, 156, 141, 0.28);
     --accent-edge-strong: rgba(15, 156, 141, 0.6);
     --warn-edge: rgba(168, 106, 0, 0.45);
@@ -1865,3 +1875,37 @@ button {
   font-size: 0.78rem;
   margin-top: var(--s3);
 }
+
+/* Which providers already have a key — see screens/Settings.tsx. */
+.provider-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+  margin: 0 0 var(--s3);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.provider-state .ready { color: var(--ok); }
+.provider-state .unset { color: var(--muted); }
+
+/* Cost charts — see components/CostChart.tsx. Two single-series charts, never one with two scales:
+   cost per turn and cumulative spend are different measures, and a shared axis would make their
+   crossings look meaningful when they are an artefact of the scaling. */
+.cost-charts { display: flex; flex-direction: column; gap: var(--s3); margin-bottom: var(--s3); }
+.chart { margin: 0; }
+.chart-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--s1);
+}
+.chart-svg { width: 100%; height: 56px; display: block; overflow: visible; }
+.chart-axis { stroke: var(--chart-axis); stroke-width: 1; }
+.chart-bar { fill: var(--chart-mark); stroke: none; }
+/* The peak carries a direct label rather than a colour of its own: colouring a bar by its value
+   re-encodes what its length already shows. */
+.chart-bar.peak { fill: var(--chart-mark); }
+.chart-line { fill: none; stroke: var(--chart-mark); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-end { fill: var(--chart-mark); stroke: var(--panel-bg); stroke-width: 2; }
+.chart-note { margin: var(--s1) 0 0; font-size: 0.7rem; color: var(--muted); }

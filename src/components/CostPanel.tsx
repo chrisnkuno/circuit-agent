@@ -1,8 +1,13 @@
+import { CostChart } from "./CostChart";
+import type { TurnCostPoint } from "../lib/cost-chart";
+
 export function CostPanel(props: {
   report: string;
   displayTotal?: string;
   budgetFraction?: number;
   warning?: string;
+  /** Per turn. The charts answer "which turn cost that", which a running total cannot. */
+  turns?: readonly TurnCostPoint[];
 }) {
   return (
     <div className="panel">
@@ -23,6 +28,9 @@ export function CostPanel(props: {
             </small>
           ) : null}
         </div>
+        {props.turns && props.turns.length > 0 ? <CostChart turns={props.turns} /> : null}
+        {/* The written report stays: it is the table view the charts are read against, and the one
+            place an unpriced model or a non-model expense is spelled out rather than drawn. */}
         <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "var(--mono)", fontSize: "0.78rem", color: "var(--muted)" }}>
           {props.report || "No turns yet."}
         </pre>

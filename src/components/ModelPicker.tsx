@@ -13,7 +13,11 @@ export function ModelPicker(props: {
   provider: ProviderId;
   model: string;
   busy: boolean;
+  /** Providers that actually have a key. Rows for the others say so and lead to Settings. */
+  configured?: ReadonlySet<ProviderId>;
   onPick: (provider: ProviderId, model: string) => void;
+  /** Where a row with no key sends you — choosing it should fix the problem, not report it. */
+  onNeedsKey?: (provider: ProviderId) => void;
   /** Controlled by the parent so a keyboard shortcut can open it too. */
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -26,7 +30,10 @@ export function ModelPicker(props: {
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const options = useMemo(() => buildModelOptions(props.provider), [props.provider]);
+  const options = useMemo(
+    () => buildModelOptions(props.configured ?? props.provider),
+    [props.configured, props.provider],
+  );
   const visible = useMemo(() => filterModels(options, query), [options, query]);
 
   useEffect(() => {
@@ -60,6 +67,7 @@ export function ModelPicker(props: {
       const chosen = visible[cursor];
       if (!chosen) return;
       setOpen(false);
+      if (chosen.needsKey) { props.onNeedsKey?.(chosen.provider); return; }
       if (chosen.provider !== props.provider || chosen.model !== props.model) props.onPick(chosen.provider, chosen.model);
     }
   }
@@ -104,6 +112,7 @@ export function ModelPicker(props: {
                   onMouseEnter={() => setCursor(index)}
                   onClick={() => {
                     setOpen(false);
+                    if (option.needsKey) { props.onNeedsKey?.(option.provider); return; }
                     if (!current) props.onPick(option.provider, option.model);
                   }}
                 >
@@ -112,6 +121,7 @@ export function ModelPicker(props: {
                     {option.providerLabel}
                     {option.price ? ` · ${option.price}` : " · unpriced"}
                     {current ? " · current" : ""}
+                    {option.needsKey ? " · needs a key" : ""}
                   </span>
                 </button>
               );

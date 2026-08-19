@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { verifyCredentials } from "../lib/ipc";
 import { buildModelOptions } from "../lib/models";
-import { defaultBaseUrl, defaultSettings, DEFAULT_MODELS, type NovaSettings, type ProviderId } from "../lib/settings";
+import { DESKTOP_PROVIDERS } from "../lib/models";
+import { defaultBaseUrl, defaultSettings, providerIsConfigured, withProvider, DEFAULT_MODELS, type NovaSettings, type ProviderId } from "../lib/settings";
 
 /**
  * First run, and everything after it.
@@ -14,6 +15,12 @@ import { defaultBaseUrl, defaultSettings, DEFAULT_MODELS, type NovaSettings, typ
  * The other change is that you can now find out whether the key works *here*, instead of saving,
  * opening a project, sending a message and reading the failure.
  */
+
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+  circuitnotion: "CircuitNotion",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+};
 
 type Verification =
   | { state: "idle" }
@@ -46,8 +53,16 @@ export function SettingsScreen(props: {
     setVerification({ state: "idle" });
   }
 
+  /**
+   * Switching provider keeps the key you already pasted for the previous one.
+   *
+   * It used to overwrite it: the form held one key, so choosing OpenAI to try a model and switching
+   * back meant pasting your CircuitNotion key again. Keys are per provider now, and this is the
+   * one place that has to know it.
+   */
   function setProvider(provider: ProviderId) {
-    edit({ provider, baseUrl: defaultBaseUrl(provider), model: DEFAULT_MODELS[provider] });
+    setSettings((prev) => withProvider(prev, provider, DEFAULT_MODELS[provider]));
+    setVerification({ state: "idle" });
   }
 
   async function check() {
@@ -101,8 +116,18 @@ export function SettingsScreen(props: {
           </select>
         </div>
 
+        {/* Which providers are already usable, so switching between them is an informed choice
+            rather than a discovery made one turn later. */}
+        <p className="provider-state">
+          {DESKTOP_PROVIDERS.map((provider) => (
+            <span key={provider} className={providerIsConfigured(settings, provider) ? "ready" : "unset"}>
+              {PROVIDER_LABELS[provider]}: {providerIsConfigured(settings, provider) ? "key saved" : "no key"}
+            </span>
+          ))}
+        </p>
+
         <div className="field">
-          <label htmlFor="apiKey">API key</label>
+          <label htmlFor="apiKey">API key for {PROVIDER_LABELS[settings.provider]}</label>
           <input
             id="apiKey"
             type="password"

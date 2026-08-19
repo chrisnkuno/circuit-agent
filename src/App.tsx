@@ -8,7 +8,7 @@ import {
   savePersistedSettings,
   setSettings as pushSettings,
 } from "./lib/ipc";
-import { defaultSettings, type IpcEvent, type NovaSettings } from "./lib/settings";
+import { withProvider, defaultSettings, type IpcEvent, type NovaSettings } from "./lib/settings";
 import { ChatScreen } from "./screens/Chat";
 import { SettingsScreen } from "./screens/Settings";
 
@@ -212,6 +212,13 @@ export default function App() {
       <ChatScreen
         settings={settings}
         onOpenSettings={() => setShowSettings(true)}
+        onDefaultModel={(provider, model) => {
+          // Saved to the same store the settings form writes, so the next launch and every new tab
+          // open on the model last chosen rather than on whatever was last typed into Settings.
+          const next = withProvider(settings, provider, model);
+          setSettings(next);
+          void savePersistedSettings(next);
+        }}
         eventTick={eventTick}
         takeEvents={takeEvents}
       />
