@@ -20,9 +20,26 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
 
 export type NovaSettings = {
   provider: ProviderId;
+  /**
+   * The active provider's key, and the one every earlier version stored.
+   *
+   * Kept as the single source for the provider in `provider`, so settings written by an older build
+   * keep working untouched; `credentials` is where the *other* providers' keys live.
+   */
   apiKey: string;
   baseUrl: string;
   model: string;
+  /**
+   * What each provider's key and base URL are, so switching provider does not send one provider's
+   * credentials to another.
+   *
+   * The window held exactly one key and one base URL while offering three providers to switch
+   * between. Choosing an Anthropic model with a CircuitNotion key configured did not fail at the
+   * moment of choosing — the switch only checks that *a* key is present — it failed on the next
+   * turn, and until then the base URL still pointed at CircuitNotion, so Anthropic requests were
+   * addressed to a host that had never heard of them.
+   */
+  credentials?: Partial<Record<ProviderId, { apiKey?: string; baseUrl?: string }>>;
   e2bApiKey?: string;
   relaySecret?: string;
   budget?: number;

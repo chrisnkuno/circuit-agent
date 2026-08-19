@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { PlacedSecretFinding } from "./scan";
+import type { TurnCostPoint } from "./cost-chart";
 import type { IpcEvent, NovaMode, NovaSettings, PermissionDecision, ProviderId } from "./settings";
 
 type RequestPayload = Record<string, unknown> & { type: string };
@@ -130,6 +131,8 @@ export async function getCost(tabId?: string) {
     budgetFraction?: number;
     warning?: string;
     exhausted?: boolean;
+    /** Per turn, for the charts — see lib/cost-chart.ts. */
+    turns?: TurnCostPoint[];
   }>({ type: "cost.get", ...(tabId ? { tabId } : {}) });
 }
 

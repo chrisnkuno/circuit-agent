@@ -19,6 +19,8 @@ export type ModelOption = {
   provider: ProviderId;
   providerLabel: string;
   model: string;
+  /** True when this provider has no key yet, so choosing it has to send you to Settings first. */
+  needsKey?: boolean;
   /** What this provider uses when no model is named. */
   isDefault: boolean;
   /** Per-million input/output, already formatted, or undefined when the catalog has no rate. */
@@ -64,7 +66,12 @@ export const DESKTOP_PROVIDERS: readonly ProviderId[] = ["circuitnotion", "opena
  * unusable ones are listed and marked rather than omitted. Hiding them would make the menu look
  * like the app only supports one provider.
  */
-export function buildModelOptions(configured: ProviderId, asOf?: string): ModelOption[] {
+export function buildModelOptions(configured: ProviderId | ReadonlySet<ProviderId>, asOf?: string): ModelOption[] {
+  // Accepts either the single selected provider (what every earlier caller passed) or the set that
+  // actually has keys. The set is what lets a row say "needs a key" instead of letting someone
+  // choose a model that cannot run — the switch itself succeeds, and the failure arrives a turn
+  // later as a 401 with no obvious cause.
+  const ready = typeof configured === "string" ? new Set<ProviderId>([configured]) : configured;
   const options: ModelOption[] = [];
   for (const provider of DESKTOP_PROVIDERS) {
     const spec = PROVIDERS[provider];
@@ -74,11 +81,11 @@ export function buildModelOptions(configured: ProviderId, asOf?: string): ModelO
         providerLabel: spec.label,
         model,
         isDefault: model === spec.defaultModel,
+        ...(ready.has(provider) ? {} : { needsKey: true }),
         ...(describePrice(provider, model, asOf) ? { price: describePrice(provider, model, asOf)! } : {}),
       });
     }
   }
-  void configured;
   return options;
 }
 

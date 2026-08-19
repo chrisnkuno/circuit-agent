@@ -1,3 +1,4 @@
+import type { TurnCostPoint } from "./cost-chart";
 import type { IpcEvent } from "./settings";
 
 /**
@@ -35,6 +36,8 @@ export type ChatState = {
   costReport: string;
   displayTotal?: string;
   budgetFraction?: number;
+  /** Per-turn spend, for the charts. Empty until a turn has finished. */
+  costTurns?: TurnCostPoint[];
   error: string | null;
 };
 

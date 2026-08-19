@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalModal, type ApprovalState } from "../components/ApprovalModal";
 import { CostPanel } from "../components/CostPanel";
 import { ModeBar } from "../components/ModeBar";
@@ -11,6 +11,7 @@ import { GuidePanel } from "../components/GuidePanel";
 import { FilePanel } from "../components/FilePanel";
 import { sendsOnKey } from "../lib/composer";
 import { STARTERS, projectName, shouldShowStarters } from "../lib/starters";
+import { DESKTOP_PROVIDERS } from "../lib/models";
 import { shouldFollow } from "../lib/transcript";
 import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
 import {
@@ -58,6 +59,7 @@ import {
   type WindowTab,
 } from "../lib/tabs";
 import { TabStrip } from "../components/TabStrip";
+import { providerIsConfigured } from "../lib/settings";
 import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../lib/settings";
 
 /**
@@ -74,6 +76,14 @@ const LOCAL_TAB_ID = "local";
 export function ChatScreen(props: {
   settings: NovaSettings;
   onOpenSettings: () => void;
+  /**
+   * Remembers the model chosen from the picker as the one to open with next time.
+   *
+   * Without this the picker changed the tab in front and nothing else: the next launch, and every
+   * new tab, went back to whatever Settings last saved. The CLI has always remembered the last
+   * model chosen, and "the model I want" is not a per-session preference.
+   */
+  onDefaultModel: (provider: ProviderId, model: string) => void;
   /** Bumped whenever the sidecar delivers an event; the value itself carries no meaning. */
   eventTick: number;
   /** Atomically removes and returns everything queued. Safe to call twice — the second call is empty. */
@@ -123,7 +133,7 @@ export function ChatScreen(props: {
   // in flight. Deliberately *this* tab's business — a turn in another tab must not grey out the
   // composer here, which was the whole complaint that tabs answer.
   const busy = (current?.busy ?? false) || current?.status === "running";
-  const { messages, approval, costReport, displayTotal, budgetFraction, error } = chat;
+  const { messages, approval, costReport, displayTotal, budgetFraction, costTurns, error } = chat;
 
   /** Patches the tab in front. Every old `setSomething` became one of these. */
   // Resolved through `findTab` rather than keyed straight into `updateTab`, for the same reason
@@ -152,6 +162,12 @@ export function ChatScreen(props: {
   const addSystemMessage = (content: string, id?: string) =>
     patchChat((chat) => ({ ...chat, messages: [...chat.messages, { id: `sys-${Date.now()}`, role: "system", content }] }), id ?? tabId);
   const setBusy = (value: boolean, id?: string) => patchTab({ busy: value }, id ?? tabId);
+
+  /** Which providers have a key, so the picker can say "needs a key" rather than fail a turn later. */
+  const configuredProviders = useMemo(
+    () => new Set(DESKTOP_PROVIDERS.filter((provider) => providerIsConfigured(props.settings, provider))),
+    [props.settings],
+  );
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   /**
@@ -488,6 +504,7 @@ export function ChatScreen(props: {
           costReport: cost.report,
           displayTotal: cost.displayTotal,
           budgetFraction: cost.budgetFraction,
+          costTurns: cost.turns ?? [],
         },
       }));
       await refreshSessions(opened.root);
@@ -519,6 +536,9 @@ export function ChatScreen(props: {
       // expensive one for the tab doing the thinking is a reasonable way to spend a budget.
       await setModel(model, provider, sidecarTabId(target));
       patchTab({ provider, model }, target);
+      // Recorded only after the engine accepted it, so a rejected switch cannot become the default
+      // that greets you next launch.
+      props.onDefaultModel(provider, model);
       // Said in the transcript rather than only in the header: a model change alters what every
       // later answer costs and how it reasons, so it belongs in the record of the conversation.
       addSystemMessage(`Model → ${provider}/${model}`);
@@ -643,7 +663,16 @@ export function ChatScreen(props: {
           <button className="btn" type="button" onClick={() => void chooseProject()} disabled={busy}>
             Browse…
           </button>
-          <ModelPicker provider={active.provider} model={active.model} busy={busy} onPick={handleModel} open={modelMenuOpen} onOpenChange={setModelMenuOpen} />
+          <ModelPicker
+            provider={active.provider}
+            model={active.model}
+            busy={busy}
+            configured={configuredProviders}
+            onPick={handleModel}
+            onNeedsKey={() => props.onOpenSettings()}
+            open={modelMenuOpen}
+            onOpenChange={setModelMenuOpen}
+          />
           {/* Beside Settings rather than buried in a panel: the two questions a new window raises
               are "where do I put my key" and "how does this work", and they should be equally
               easy to find. */}
@@ -849,7 +878,7 @@ export function ChatScreen(props: {
               ) : null}
             </div>
           </div>
-          <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} />
+          <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} turns={costTurns} />
 
           {/* Shortcuts that exist but are undocumented are shortcuts nobody finds. Collapsed, so
               they teach without taking room from the panels people actually watch. */}

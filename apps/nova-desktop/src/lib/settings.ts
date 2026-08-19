@@ -19,9 +19,26 @@ export const DEFAULT_MODELS: Record<ProviderId, string> = {
 
 export type NovaSettings = {
   provider: ProviderId;
+  /**
+   * The active provider's key, and the one every earlier version stored.
+   *
+   * Kept as the single source for the provider in `provider`, so settings written by an older build
+   * keep working untouched; `credentials` is where the *other* providers' keys live.
+   */
   apiKey: string;
   baseUrl: string;
   model: string;
+  /**
+   * What each provider's key and base URL are, so switching provider does not send one provider's
+   * credentials to another.
+   *
+   * The window held exactly one key and one base URL while offering three providers to switch
+   * between. Choosing an Anthropic model with a CircuitNotion key configured did not fail at the
+   * moment of choosing — the switch only checks that *a* key is present — it failed on the next
+   * turn, and until then the base URL still pointed at CircuitNotion, so Anthropic requests were
+   * addressed to a host that had never heard of them.
+   */
+  credentials?: Partial<Record<ProviderId, { apiKey?: string; baseUrl?: string }>>;
   e2bApiKey?: string;
   relaySecret?: string;
   budget?: number;
@@ -74,4 +91,49 @@ export function defaultBaseUrl(provider: ProviderId): string {
   if (provider === "circuitnotion") return CIRCUITNOTION_DEFAULT_BASE_URL;
   if (provider === "openai") return "https://api.openai.com/v1";
   return "";
+}
+
+/**
+ * The key and base URL for one provider — the window's copy of the sidecar's `credentialsFor`.
+ *
+ * Deliberately duplicated rather than imported: `src/lib/settings.ts` and `sidecar/src/protocol.ts`
+ * are parallel files by design (the window cannot import from the sidecar's build), and this rule
+ * is short enough that a copy is safer than a shared module neither side owns. Both are tested.
+ */
+export function credentialsFor(settings: NovaSettings, provider: ProviderId): { apiKey: string; baseUrl: string } {
+  const stored = settings.credentials?.[provider];
+  const selected = provider === settings.provider;
+  return {
+    apiKey: (stored?.apiKey ?? (selected ? settings.apiKey : "")).trim(),
+    baseUrl: (stored?.baseUrl ?? (selected ? settings.baseUrl : "")).trim(),
+  };
+}
+
+/** Whether a provider can be used at all — what the model picker needs in order to be honest. */
+export function providerIsConfigured(settings: NovaSettings, provider: ProviderId): boolean {
+  return credentialsFor(settings, provider).apiKey.length > 0;
+}
+
+/**
+ * Settings with `provider`'s credentials promoted to the flat fields, and the previous provider's
+ * preserved in `credentials`.
+ *
+ * This is what "switch provider" means in one place: the flat pair always describes the selected
+ * provider, so nothing downstream has to remember that rule.
+ */
+export function withProvider(settings: NovaSettings, provider: ProviderId, model: string): NovaSettings {
+  const previous = settings.provider;
+  const credentials = {
+    ...settings.credentials,
+    [previous]: { apiKey: settings.apiKey, baseUrl: settings.baseUrl },
+  };
+  const next = credentialsFor({ ...settings, credentials }, provider);
+  return {
+    ...settings,
+    credentials,
+    provider,
+    model,
+    apiKey: next.apiKey,
+    baseUrl: next.baseUrl || defaultBaseUrl(provider),
+  };
 }

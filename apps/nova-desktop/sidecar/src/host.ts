@@ -31,7 +31,7 @@ import { verifyCredentials } from "./verify.js";
 import { TabRegistry } from "./tabs.js";
 import type { IpcEvent, IpcRequest, NovaSettings, ProviderId } from "./protocol.js";
 import { DEFAULT_MODELS } from "./protocol.js";
-import { settingsToEnvironment } from "./settings.js";
+import { credentialsFor, settingsToEnvironment } from "./settings.js";
 
 type Emit = (event: IpcEvent) => void;
 
@@ -247,10 +247,17 @@ export class NovaHost {
   }
 
   private async resolveModel(settings: NovaSettings, provider?: ProviderId, model?: string) {
+    const chosen = provider ?? settings.provider;
+    // The flat `apiKey`/`baseUrl` describe whichever provider is selected, so switching provider has
+    // to move them too. Leaving them alone is how choosing an Anthropic model used to keep sending
+    // the CircuitNotion key — to the CircuitNotion base URL, under Anthropic's name.
+    const credentials = credentialsFor(settings, chosen);
     const next: NovaSettings = {
       ...settings,
-      provider: provider ?? settings.provider,
-      model: model?.trim() || settings.model || DEFAULT_MODELS[provider ?? settings.provider],
+      provider: chosen,
+      apiKey: credentials.apiKey,
+      baseUrl: credentials.baseUrl,
+      model: model?.trim() || (chosen === settings.provider ? settings.model : "") || DEFAULT_MODELS[chosen],
     };
     const env = settingsToEnvironment(next);
     const resolved = resolveProvider(env, { provider: next.provider, model: next.model });
@@ -634,6 +641,25 @@ export class NovaHost {
       budgetFraction: slot.ledger.budgetFraction,
       warning: slot.ledger.budgetWarning(),
       exhausted: slot.ledger.exhausted,
+      /**
+       * Per turn, for the charts.
+       *
+       * The ledger has always kept this; the window only ever asked for the formatted paragraph,
+       * so "which turn cost that much" — the one question a running total cannot answer — had no
+       * answer here. Money is sent as a number plus its currency rather than pre-formatted, because
+       * a chart has to compare values and cannot compare "RWF 1,610".
+       */
+      turns: slot.ledger.history.map((turn) => ({
+        turnNumber: turn.turnNumber,
+        cost: turn.cost ? { micros: turn.cost.micros, currency: turn.cost.currency } : undefined,
+        display: turn.cost ? formatMoney(turn.cost) : undefined,
+        inputTokens: turn.usage.inputTokens,
+        outputTokens: turn.usage.outputTokens,
+        cachedInputTokens: turn.usage.cachedInputTokens,
+        toolCalls: turn.toolCalls,
+        iterations: turn.iterations,
+        elapsedMs: turn.elapsedMs,
+      })),
     };
   }
 
