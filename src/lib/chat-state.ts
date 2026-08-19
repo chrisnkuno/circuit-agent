@@ -60,6 +60,16 @@ export type ChatState = {
   /** Per-turn spend, for the charts. Empty until a turn has finished. */
   costTurns?: TurnCostPoint[];
   error: string | null;
+  /**
+   * How the last turn ended.
+   *
+   * Kept because "what should I do now" has a different answer after a cancelled turn than after a
+   * failed one, and the transcript cannot be asked: a status with no summary writes no message at
+   * all, so by the time the suggestions are computed the distinction has been thrown away.
+   */
+  lastStatus?: string;
+  /** Turns that have ended, whatever they ended as. What "this is your first session" is read from. */
+  turns?: number;
 };
 
 /** The id the in-progress answer is held under, so successive deltas rewrite one message. */
@@ -133,36 +143,40 @@ export function applyChatEvent(state: ChatState, event: IpcEvent, now: () => num
 
     case "turn_status": {
       if (event.status === "running") return state;
+      // How the turn ended, and that it ended, recorded before anything is done with its text: the
+      // suggestions read both, and a status carrying no summary writes no message, so this is the
+      // only place either fact exists.
+      const ended: ChatState = { ...state, lastStatus: event.status, turns: (state.turns ?? 0) + 1 };
       // The turn is over, so whatever was streaming is now final: it is re-filed under a stable id
       // so the next turn's deltas cannot append to it. Text already produced survives a cancelled
       // or failed turn — losing a half-written answer because it was interrupted is the worst
       // possible reading of "stop".
-      if (state.streaming) {
+      if (ended.streaming) {
         // Settled *in place* — only the id changes. Lifting it out and re-appending would move the
         // answer to the bottom of the transcript on the very last event of the turn: text streamed
         // before a tool call would jump below it, so a turn that read a file and then explained
         // what it found would read as though it explained first and looked afterwards.
         const settledId = `assistant-${now()}`;
         let replaced = false;
-        const messages = state.messages.map((message) => {
+        const messages = ended.messages.map((message) => {
           if (message.id !== STREAMING_ID) return message;
           replaced = true;
           return { ...message, id: settledId };
         });
         return {
-          ...state,
+          ...ended,
           streaming: "",
           messages: replaced
             ? messages
-            : [...messages, { id: settledId, role: "assistant" as const, content: state.streaming }],
+            : [...messages, { id: settledId, role: "assistant" as const, content: ended.streaming }],
         };
       }
       // Nothing was streamed. A summary is worth saying — "cancelled", "budget spent" — but a bare
       // status with no summary is not a transcript entry.
       if (event.summary) {
-        return { ...state, messages: [...state.messages, { id: `status-${now()}`, role: "system", content: event.summary }] };
+        return { ...ended, messages: [...ended.messages, { id: `status-${now()}`, role: "system", content: event.summary }] };
       }
-      return state;
+      return ended;
     }
 
     default:

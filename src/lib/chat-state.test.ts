@@ -196,9 +196,21 @@ describe("turn status without a streamed answer", () => {
     expect(state.messages[0].content).toBe("Stopped before the first token.");
   });
 
-  it("adds nothing for a bare status with no summary and nothing streamed", () => {
+  it("adds no message for a bare status with no summary and nothing streamed", () => {
     const before = fresh();
-    expect(applyChatEvent(before, status("completed"), clock)).toBe(before);
+    const after = applyChatEvent(before, status("completed"), clock);
+    expect(after.messages).toEqual(before.messages);
+    expect(after.activity).toEqual(before.activity);
+  });
+
+  it("still records that a turn ended, and how", () => {
+    // Not a transcript entry, but not nothing either: the suggestions read both, and a status
+    // carrying no summary writes no message — so this is the only place either fact exists.
+    const after = applyChatEvent(fresh(), status("failed"), clock);
+    expect(after.lastStatus).toBe("failed");
+    expect(after.turns).toBe(1);
+    // A turn still running has not ended, and must not be counted as one.
+    expect(applyChatEvent(after, status("running"), clock).turns).toBe(1);
   });
 });
 

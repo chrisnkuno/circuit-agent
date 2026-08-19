@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { GUIDE, keysFor, searchGuide } from "../lib/guide";
 import { SHORTCUTS, type ShortcutAction } from "../lib/shortcuts";
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 
 /**
  * The guide, as a screen you can read beside your work.
@@ -16,22 +17,13 @@ export function GuidePanel(props: { open: boolean; onClose: () => void }) {
   const matches = useMemo(() => searchGuide(query), [query]);
   const topic = useMemo(() => GUIDE.find((entry) => entry.id === topicId) ?? GUIDE[0], [topicId]);
 
-  useEffect(() => {
-    if (!props.open) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") props.onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props]);
-
-  if (!props.open) return null;
-
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
-      <div className="modal guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-title">
-        <div className="approval-head">
-          <h2 id="guide-title">Guide</h2>
-          <button className="btn ghost" type="button" onClick={props.onClose}>Close</button>
-        </div>
+    <Dialog open={props.open} onOpenChange={(next) => { if (!next) props.onClose(); }}>
+      <DialogContent className="guide-modal" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle>Guide</DialogTitle>
+          <DialogClose asChild><button className="btn ghost" type="button">Close</button></DialogClose>
+        </DialogHeader>
 
         <div className="guide-panes">
           <div className="guide-index">
@@ -80,8 +72,8 @@ export function GuidePanel(props: { open: boolean; onClose: () => void }) {
             ) : null}
           </article>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
