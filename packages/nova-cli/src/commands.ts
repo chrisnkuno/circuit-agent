@@ -58,6 +58,7 @@ export const COMMANDS = defineCommands({
   "/keys": { description: "Every shortcut in full, plus line-editing keys and which chords this terminal may not deliver — /help lists them inline, next to each command" },
   "/guide": { args: "[topic|search <text>|all]", description: "The user guide, as a screen you can browse — or print one topic with /guide <topic>" },
   "/files": { description: "Browse the project tree — expand folders, preview a file, pick one to @mention" },
+  "/edit": { args: "<path>", description: "Open a file in the built-in editor — through the workspace, so it works in a sandbox too" },
   "/help": { description: "This list" },
   "/exit": { description: "Leave" },
 });
