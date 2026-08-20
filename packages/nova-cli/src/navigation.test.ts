@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { COMMANDS } from "./commands";
 import { paletteEntries } from "./palette";
+import { UNICODE_GLYPHS } from "./glyphs";
 import {
   COMMAND_GROUP,
   CommandUsage,
+  ESSENTIAL_COMMANDS,
   GROUP_PREVIEW,
   groupedCommands,
+  isEssential,
+  renderEssentials,
   NAV_GROUPS,
   rankWithContext,
   renderGroupedHelp,
@@ -234,5 +238,86 @@ describe("the suggestive prompt", () => {
     expect(starters).toContain("api");
     expect(starters.split("\n").length).toBeGreaterThan(1);
     expect(renderStarters({ ...base, turns: 1 }, style, "api")).toBe("");
+  });
+});
+
+/**
+ * The few commands a first session actually needs.
+ *
+ * Grouping answers "what is this for", which is the wrong question on day one: forty rows in six
+ * honest categories still reads as forty rows. These tests pin the shorter answer — that a small
+ * marked set exists, that it survives every filter and truncation between the catalog and the
+ * screen, and that it stays small.
+ */
+describe("the commands worth learning first", () => {
+  const fresh = (over: Partial<NavContext> = {}): NavContext => ({ ...base, turns: 0, ...over });
+
+  it("names commands that actually exist", () => {
+    // A marked command that no longer exists is a star beside nothing, and the mark quietly stops
+    // meaning anything the moment one entry is wrong.
+    const known = new Set<string>(COMMANDS.map((command) => command.name));
+    for (const name of ESSENTIAL_COMMANDS) expect(known.has(name), `${name} is not a command`).toBe(true);
+  });
+
+  it("stays short enough to be a shortlist", () => {
+    // A list where the eighth item is "essential" is a list whose first item is not. Additions
+    // should have to displace something rather than accumulate.
+    expect(ESSENTIAL_COMMANDS.length).toBeLessThanOrEqual(7);
+    expect(new Set(ESSENTIAL_COMMANDS).size).toBe(ESSENTIAL_COMMANDS.length);
+  });
+
+  it("covers the four questions a newcomer cannot answer any other way", () => {
+    // Not a popularity ranking: each of these answers a question that will come up in a first
+    // session and that nothing else in the interface answers.
+    expect(isEssential("/help")).toBe(true);   // where is everything
+    expect(isEssential("/diff")).toBe(true);   // what did it change
+    expect(isEssential("/undo")).toBe(true);   // take that back
+    expect(isEssential("/mode")).toBe(true);   // may it write to my files
+    expect(isEssential("/tab")).toBe(false);   // real, useful, and not a day-one question
+  });
+
+  it("survives a group's preview truncation, which is the whole point", () => {
+    // `/undo` sits in a group with several other commands and would otherwise be a candidate for
+    // the "… N more" line — hiding the safety net from exactly the person most likely to need it.
+    const groups = groupedCommands(fresh({ turns: 3, changedFiles: 2 }));
+    const shown = groups.flatMap((group) => group.commands.map((command) => command.name));
+    for (const name of ESSENTIAL_COMMANDS) {
+      // `/mode` is suppressed when you are already in that mode, which is a statement not a
+      // command; everything else must be on screen without expanding anything.
+      if (name === `/${fresh().mode}`) continue;
+      expect(shown, `${name} was truncated out of grouped help`).toContain(name);
+    }
+  });
+
+  it("marks them on screen, and says what the mark means", () => {
+    const rendered = renderGroupedHelp(fresh({ turns: 3, changedFiles: 1 }), style);
+    // The *catalog* row, not the contextual "Where you are" row above it — both mention `/undo`,
+    // and it is the catalog listing that has to carry the mark.
+    const line = rendered.split("\n").find((row) => row.includes("/undo") && row.includes("Revert the last turn"));
+    expect(line, "no catalog row for /undo").toBeDefined();
+    expect(line).toContain(UNICODE_GLYPHS.star);
+    // A mark nobody can decode is decoration. The legend travels with it.
+    expect(rendered).toContain("start with these");
+  });
+
+  it("leaves ordinary commands unmarked, so the mark still means something", () => {
+    const rendered = renderGroupedHelp(fresh({ turns: 3 }), style);
+    const line = rendered.split("\n").find((row) => row.includes("/theme"));
+    expect(line).toBeDefined();
+    expect(line).not.toContain(UNICODE_GLYPHS.star);
+  });
+
+  it("offers the one-line reminder to a new session and to nobody else", () => {
+    // Once, at the top of a first session. A permanent tip bar is something people learn to look
+    // past within a day, and by the second session these are known or findable.
+    expect(renderEssentials(fresh(), style)).toContain("/undo");
+    expect(renderEssentials(fresh({ turns: 1 }), style)).toBe("");
+  });
+
+  it("keeps the way out of being lost when the terminal is too narrow for the rest", () => {
+    // Dropped whole rather than clipped: half a command name teaches nothing, and `/help` is the
+    // one that leads to every other, so it is the last to go.
+    const narrow = renderEssentials(fresh(), { ...style, width: 28 });
+    expect(narrow).toContain("/help");
   });
 });

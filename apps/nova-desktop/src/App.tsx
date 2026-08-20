@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { checkForUpdate, installUpdate, describeStatus, isBusy, tauriUpdater, type UpdateStatus } from "./lib/updates";
 import {
   ensureSidecar,
   loadPersistedSettings,
@@ -12,32 +12,24 @@ import { withProvider, defaultSettings, type IpcEvent, type NovaSettings } from 
 import { ChatScreen } from "./screens/Chat";
 import { SettingsScreen } from "./screens/Settings";
 
-function UpdateBanner({
-  update,
-  busy,
-  error,
-  onInstall,
-}: {
-  update: Update | null;
-  busy: boolean;
-  error: string | null;
-  onInstall: () => void;
-}) {
-  if (!update) return null;
+/**
+ * The one thing worth interrupting someone for: a version that is ready to install.
+ *
+ * Shown only while there is something to act on or something going wrong. "You are up to date"
+ * belongs in Settings beside the button that asked the question, not across the top of a
+ * conversation nobody wanted interrupted.
+ */
+function UpdateBanner({ status, onInstall }: { status: UpdateStatus; onInstall: () => void }) {
+  const showing = status.kind === "available" || isBusy(status) || (status.kind === "failed" && status.while === "installing");
+  if (!showing) return null;
   return (
     <div className="update-banner">
-      <span className="update-banner-text">
-        Nova {update.version} is available
-        {error ? <span className="update-banner-error"> — {error}</span> : null}
-      </span>
-      <button
-        className="btn primary"
-        type="button"
-        disabled={busy}
-        onClick={onInstall}
-      >
-        {busy ? "Installing…" : "Restart & install"}
-      </button>
+      <span className="update-banner-text">{describeStatus(status)}</span>
+      {status.kind === "available" ? (
+        <button className="btn primary" type="button" onClick={onInstall}>
+          Update &amp; restart
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -68,39 +60,41 @@ export default function App() {
    */
   const eventQueue = useRef<IpcEvent[]>([]);
   const [eventTick, setEventTick] = useState(0);
-  const [update, setUpdate] = useState<Update | null>(null);
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ kind: "idle" });
 
   const takeEvents = useCallback(() => eventQueue.current.splice(0), []);
 
+  /**
+   * The check that happens without being asked, once, at startup.
+   *
+   * Silent about its result: a banner is worth an interruption only when there is something to
+   * act on. The "you are up to date" half of the answer lives in Settings, next to the button
+   * that asks the question on purpose.
+   */
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const next = await checkForUpdate();
-        if (!cancelled && next) setUpdate(next);
-      } catch {
-        // No update server reachable (offline / dev) — ignore silently.
-      }
+    void (async () => {
+      const status = await checkForUpdate(tauriUpdater, __APP_VERSION__);
+      // A failed automatic check is not shown. Nobody asked, there is nothing to do about it, and
+      // a scary banner on every offline launch teaches people to ignore the one that matters.
+      if (!cancelled && status.kind === "available") setUpdateStatus(status);
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
+  /** The deliberate check, from the button in Settings — this one reports whatever it finds. */
+  async function handleCheckForUpdate() {
+    if (isBusy(updateStatus)) return;
+    setUpdateStatus({ kind: "checking" });
+    setUpdateStatus(await checkForUpdate(tauriUpdater, __APP_VERSION__));
+  }
+
   async function handleInstallUpdate() {
-    if (!update || updateBusy) return;
-    setUpdateBusy(true);
-    setUpdateError(null);
-    try {
-      await update.downloadAndInstall();
-      setUpdate(null);
-    } catch (error) {
-      setUpdateError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setUpdateBusy(false);
-    }
+    if (updateStatus.kind !== "available" || isBusy(updateStatus)) return;
+    // `installUpdate` reports its own progress and ends by relaunching, so there is no success
+    // branch to write here: on every platform but Windows the process this code is running in has
+    // been replaced by the time it would run.
+    await installUpdate(tauriUpdater, updateStatus.update, setUpdateStatus);
   }
 
   useEffect(() => {
@@ -189,8 +183,18 @@ export default function App() {
     // scrolled out of sight is worse than no message.
     return (
       <>
-        <UpdateBanner update={update} busy={updateBusy} error={updateError} onInstall={handleInstallUpdate} />
-        <SettingsScreen initial={settings} onSave={handleSave} notice={bootError} />
+        <UpdateBanner status={updateStatus} onInstall={handleInstallUpdate} />
+        <SettingsScreen
+          initial={settings}
+          onSave={handleSave}
+          notice={bootError}
+          update={{
+            currentVersion: __APP_VERSION__,
+            status: updateStatus,
+            onCheck: handleCheckForUpdate,
+            onInstall: handleInstallUpdate,
+          }}
+        />
       </>
     );
   }
@@ -198,7 +202,7 @@ export default function App() {
   if (bootError && !sidecarReady) {
     return (
       <div className="settings-hero">
-        <UpdateBanner update={update} busy={updateBusy} error={updateError} onInstall={handleInstallUpdate} />
+        <UpdateBanner status={updateStatus} onInstall={handleInstallUpdate} />
         <div className="settings-card">
           <h1>Nova</h1>
           <p className="error-banner">{bootError}</p>
@@ -212,7 +216,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <UpdateBanner update={update} busy={updateBusy} error={updateError} onInstall={handleInstallUpdate} />
+      <UpdateBanner status={updateStatus} onInstall={handleInstallUpdate} />
       <ChatScreen
         settings={settings}
         onOpenSettings={() => setShowSettings(true)}

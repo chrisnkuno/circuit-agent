@@ -11,6 +11,30 @@ import type { NovaMode } from "@circuit-nova/nova-core/nova-cli/permissions";
 export type { NovaMode };
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
 
+/**
+ * The providers this app offers, in the order the picker shows them.
+ *
+ * Narrower than the core's `PROVIDER_IDS`, which also carries providers the desktop has no
+ * settings UI for. Asking one of those what models it has would populate a menu with rows the app
+ * cannot select.
+ */
+export const DESKTOP_PROVIDER_IDS: readonly ProviderId[] = ["circuitnotion", "openai", "anthropic"];
+
+/** One provider's answer to "what do you have", as `models.list` returns it. */
+export type ProviderModels = {
+  provider: ProviderId;
+  /** Ids the provider listed, conversational ones only. Empty when it could not be asked. */
+  models: string[];
+  /** Why the list is empty or stale, in a sentence — absent when the fetch worked. */
+  error?: string;
+};
+
+export type ModelsListResult = {
+  providers: ProviderModels[];
+  /** True when nothing was asked over the network because a fresh cache answered. */
+  fromCache: boolean;
+};
+
 export const CIRCUITNOTION_DEFAULT_BASE_URL = "https://api.circuitnotion.com/v1";
 export const DEFAULT_MODELS: Record<ProviderId, string> = {
   circuitnotion: "gpt-5.6-luna",
@@ -63,6 +87,14 @@ export type IpcRequest =
   | { id: string; type: "settings.set"; settings: NovaSettings }
   | { id: string; type: "providers.describe" }
   | { id: string; type: "providers.verify"; settings: NovaSettings }
+  /**
+   * What each configured provider will actually accept today.
+   *
+   * A separate request from `providers.describe` because it can reach the network, and the picker
+   * has to be able to open instantly on what is already known and widen when the answer arrives.
+   * `refresh` skips the cache, for the "I just pasted a new key" case.
+   */
+  | { id: string; type: "models.list"; refresh?: boolean }
   /**
    * Opens a project.
    *

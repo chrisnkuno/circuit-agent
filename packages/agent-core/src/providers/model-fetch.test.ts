@@ -18,6 +18,7 @@ import {
   writeModelCache,
   type FetchLike,
 } from "./model-fetch";
+import { PROVIDER_IDS } from "./agent-matrix";
 
 let home: string;
 let environment: Record<string, string | undefined>;
@@ -44,6 +45,31 @@ describe("where a provider's list lives", () => {
 
     const openai = modelsEndpoint("openai", { ...environment, OPENAI_API_KEY: "k" })!;
     expect(openai.headers.authorization).toBe("Bearer k");
+  });
+
+  it("asks Ollama, which has no key to present", () => {
+    // Left out of the switch, Ollama was not merely unasked: `PROVIDERS.ollama.requires` is empty,
+    // so it counts as configured and was asked on every refresh — then answered "no key
+    // configured" about a provider that has never had a key. Meanwhile the models that most need
+    // asking about, because no catalog will ever list a local `llama3.3:70b-instruct-q5_K_M`,
+    // were the ones nobody could see.
+    const ollama = modelsEndpoint("ollama", environment)!;
+    expect(ollama.url).toBe("http://localhost:11434/v1/models");
+    expect(ollama.headers).toEqual({});
+    expect(modelsEndpoint("ollama", { ...environment, OLLAMA_BASE_URL: "http://nas.local:11434/v1" })!.url)
+      .toBe("http://nas.local:11434/v1/models");
+  });
+
+  it("has an endpoint for every provider Nova can be configured to use", () => {
+    // The failure this replaces was silent: a provider with no case here reports "no key
+    // configured" forever, which reads like the user's mistake rather than a missing branch.
+    const withKeys = {
+      ...environment,
+      ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k", CIRCUITNOTION_API_KEY: "k",
+    };
+    for (const provider of PROVIDER_IDS) {
+      expect(modelsEndpoint(provider, withKeys), `no models endpoint for ${provider}`).toBeDefined();
+    }
   });
 
   it("honours a custom base url, which is how proxies and gateways are reached", () => {

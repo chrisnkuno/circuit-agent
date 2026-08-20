@@ -50,6 +50,36 @@ export const NAV_GROUPS: ReadonlyArray<{ id: NavGroupId; title: string }> = [
 ];
 
 /**
+ * The handful worth learning first.
+ *
+ * Every other command in this file is grouped by *what it is for*, which is the right question
+ * once you know your way around and the wrong one on day one: forty rows sorted into six honest
+ * categories still reads as forty rows. What a newcomer needs is not a better taxonomy, it is a
+ * much shorter list — the few commands they will actually reach for before they have a reason to
+ * look for any of the others.
+ *
+ * Chosen by necessity rather than by popularity. Each of these answers a question that *will* come
+ * up in a first session and that nothing else in the interface answers:
+ *
+ * - `/help` — where is everything (the way back out of being lost)
+ * - `/mode` — may it write to my files, or only read (the question people ask before trusting it)
+ * - `/diff` — what did it just change
+ * - `/undo` — take that back (the safety net; without it, nothing above is safe to try)
+ * - `/model` — run this on something else
+ * - `/cost` — what is this costing me
+ * - `/exit` — leave, knowing the session is saved
+ *
+ * Deliberately not a ranking of everything: a list where the seventh item is "essential" is a list
+ * whose first item is not. Additions should have to displace something.
+ */
+export const ESSENTIAL_COMMANDS: readonly string[] = ["/help", "/mode", "/diff", "/undo", "/model", "/cost", "/exit"];
+
+/** Whether a command is one of the few a first session actually needs. */
+export function isEssential(command: string): boolean {
+  return ESSENTIAL_COMMANDS.includes(command);
+}
+
+/**
  * Which group each command belongs to.
  *
  * Exhaustive by test rather than by type: a command added without a group would otherwise quietly
@@ -186,6 +216,9 @@ export function groupedCommands(context: NavContext, all = false): Array<{ id: N
   // preview that always shows the same four rows is a shorter wall, not a smaller problem.
   const rank = (command: Command): number => {
     if (suggested.has(command.name)) return 0;
+    // Ahead of merely-recent commands, because a preview that truncates `/undo` out of sight is a
+    // preview that hides the safety net from the person most likely to need it.
+    if (isEssential(command.name)) return 0.5;
     const recency = context.recent.indexOf(command.name);
     return recency >= 0 ? 1 + recency / 100 : 2;
   };
@@ -295,20 +328,28 @@ export function renderGroupedHelp(context: NavContext, style: SectionStyle, opti
     lines.push("");
   }
 
+  // A leading column for the mark rather than a suffix: the eye scans the left edge of a list, so
+  // a marker on the right is one the reader finds only after reading the row it was meant to save
+  // them from reading.
+  const markCell = (command: Command) => (isEssential(command.name) ? `${glyphs.star} ` : "  ");
+
   for (const group of groups) {
     lines.push(heading(group.title, 2, style));
     for (const command of group.commands) {
-      lines.push(note(clipTo(`${nameCell(command)}  ${command.description}`, width - 4, glyphs), style));
+      const row = clipTo(`${markCell(command)}${nameCell(command)}  ${command.description}`, width - 4, glyphs);
+      // Essentials are painted, not merely marked. In a list this long a symbol alone is easy to
+      // read past, and the whole point is that these should be the rows you cannot miss.
+      lines.push(note(row, style, isEssential(command.name) ? "accent" : "neutral"));
     }
-    if (group.hidden > 0) lines.push(note(`${" ".repeat(nameWidth)}  ${glyphs.ellipsis} ${group.hidden} more`, style));
+    if (group.hidden > 0) lines.push(note(`${" ".repeat(nameWidth + 2)}  ${glyphs.ellipsis} ${group.hidden} more`, style));
     lines.push("");
   }
 
   // Trimmed to fit rather than clipped: a footer that ends in an ellipsis mid-sentence teaches
   // nothing, so the least important hint is dropped whole and the rest stays readable.
   const hints = options.all
-    ? ["/palette searches all of these by what they do"]
-    : ["/help all shows every command", "/palette searches them by what they do", "/keys for shortcuts"];
+    ? [`${glyphs.star} start with these`, "/palette searches all of these by what they do"]
+    : [`${glyphs.star} start with these`, "/help all shows every command", "/palette searches them by what they do", "/keys for shortcuts"];
   const separator = ` ${glyphs.middot} `;
   const kept = [...hints];
   while (kept.length > 1 && visibleWidth(`${glyphs.middot} ${kept.join(separator)}`) > width - 4) kept.pop();
@@ -394,6 +435,34 @@ export function renderStarters(context: NavContext, style: SectionStyle, project
     note(clipTo(`${glyphs.middot} ${starter.label}`, width, glyphs), style),
   );
   return [heading("Try asking", 3, style), ...rows].join("\n");
+}
+
+/**
+ * The three controls a first session needs, on one line, under the opening prompt.
+ *
+ * The starters above say what to *ask for*. This says how to stay in control of the answer, which
+ * is the part a newcomer has no way to guess and the part that decides whether they are willing to
+ * let the agent touch anything: what it changed, how to take it back, and where the rest is.
+ *
+ * One line, once, and only for a session with no turns behind it. A permanent banner of tips is
+ * something people learn to look past within a day, and by the second session these are either
+ * known or findable — the row has done its job and stops appearing.
+ */
+export function renderEssentials(context: NavContext, style: SectionStyle): string {
+  if (context.turns > 0) return "";
+  const glyphs = style.glyphs ?? UNICODE_GLYPHS;
+  const width = Math.max(24, style.width - 4);
+  const parts = [
+    `${glyphs.star} /help all of this`,
+    "/diff what changed",
+    "/undo take it back",
+  ];
+  const separator = ` ${glyphs.middot} `;
+  const kept = [...parts];
+  // Dropped whole rather than clipped: half a command name teaches nothing, and the first item is
+  // the one that leads to every other, so it is the last to go.
+  while (kept.length > 1 && visibleWidth(kept.join(separator)) > width) kept.pop();
+  return note(clipTo(kept.join(separator), width, glyphs), style, "accent");
 }
 
 /**

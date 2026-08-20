@@ -123,8 +123,44 @@ const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0
 export class CostLedger {
   private readonly turns: TurnCost[] = [];
   private readonly expenses: PricedExpense[] = [];
+  /**
+   * What resumed sessions had already spent before this process opened them, by session id.
+   *
+   * A ledger that starts at zero every time a session is resumed makes `--budget` a per-process
+   * cap wearing a per-session label: approve five dollars, resume four times, spend twenty. The
+   * spend is not lost — it is on the session record — so it is carried in here rather than
+   * re-derived, and the budget is checked against what the *session* has cost.
+   *
+   * Keyed by session id, not summed on arrival, because resuming is repeatable: `/history resume`
+   * on a session already resumed this process must restate that session's total, not add a second
+   * copy of it. Two different sessions resumed in one process do both count.
+   */
+  private readonly carried = new Map<string, Money>();
 
   constructor(private readonly options: CostLedgerOptions) {}
+
+  /**
+   * Records what a resumed session had already spent, in the display currency.
+   *
+   * Display currency rather than the provider's, for the same reason `expenseTotal` is: a session
+   * resumed after a model switch has spent in two currencies, and there is no provider currency
+   * the pair share. Display is the one denominator every component of a total already agrees on.
+   */
+  carryForward(sessionId: string, spent: Money): void {
+    if (!Number.isSafeInteger(spent.micros) || spent.micros < 0) {
+      throw new Error("carried spend must be a non-negative integer amount");
+    }
+    if (spent.currency !== this.options.display) {
+      throw new Error(`carried spend must be in the display currency (${this.options.display}), got ${spent.currency}`);
+    }
+    this.carried.set(sessionId, spent);
+  }
+
+  /** Spend inherited from resumed sessions, in the display currency; undefined when there is none. */
+  get carriedTotal(): Money | undefined {
+    if (this.carried.size === 0) return undefined;
+    return [...this.carried.values()].reduce((sum, value) => addMoney(sum, value), zero(this.options.display));
+  }
 
   /**
    * Records something the task spent outside the model, priced from the catalog.
@@ -204,9 +240,9 @@ export class CostLedger {
   get displayTotal(): Money | undefined {
     const total = this.total;
     const models = total ? convertTo(total, this.options.display, this.options.rates ?? []) : undefined;
-    const expenses = this.expenseTotal;
-    if (!models) return expenses;
-    return expenses ? addMoney(models, expenses) : models;
+    const parts = [models, this.expenseTotal, this.carriedTotal].filter((part): part is Money => part !== undefined);
+    if (parts.length === 0) return undefined;
+    return parts.reduce((sum, part) => addMoney(sum, part), zero(this.options.display));
   }
 
   get totalUsage(): ModelUsage {
@@ -263,7 +299,14 @@ export class CostLedger {
     if (!budget || budget.micros <= 0 || !spent || this.turns.length === 0) return undefined;
     const remaining = budget.micros - spent.micros;
     if (remaining <= 0) return 0;
-    const averagePerTurn = spent.micros / this.turns.length;
+    // Averaged over what *this* process observed, not over everything the budget is checked
+    // against: spend carried in from a resumed session has no turn count here to divide by, and
+    // folding it into the numerator alone would inflate the per-turn rate by however long the
+    // session ran before this one — turning "you have twenty turns left" into "you have two".
+    const observed = this.displayTotal && this.carriedTotal
+      ? { micros: spent.micros - this.carriedTotal.micros, currency: spent.currency }
+      : spent;
+    const averagePerTurn = observed.micros / this.turns.length;
     if (averagePerTurn <= 0) return undefined; // every priced turn cost nothing — no rate to project
     return Math.floor(remaining / averagePerTurn);
   }
@@ -275,7 +318,10 @@ export class CostLedger {
     parts.push(shown ? formatMoney(shown) : "cost unknown");
     parts.push(`${(turn.elapsedMs / 1_000).toFixed(1)}s`);
     const sessionTotal = this.displayTotal;
-    if (this.turns.length > 1 && sessionTotal) parts.push(`session ${formatMoney(sessionTotal)}`);
+    // From the first turn when spend was carried in: on a resumed session the running total is
+    // already the interesting number, and withholding it until turn two reads as if the earlier
+    // conversation cost nothing.
+    if ((this.turns.length > 1 || this.carried.size > 0) && sessionTotal) parts.push(`session ${formatMoney(sessionTotal)}`);
     return parts.join(" · ");
   }
 
@@ -305,6 +351,11 @@ export class CostLedger {
       `  input   ${usage.inputTokens.toLocaleString()} tokens${usage.cachedInputTokens > 0 ? ` (${usage.cachedInputTokens.toLocaleString()} cached${shownSavings ? `, saving ${formatMoney(shownSavings)}` : ""})` : ""}`,
       `  output  ${usage.outputTokens.toLocaleString()} tokens${usage.reasoningTokens > 0 ? ` (${usage.reasoningTokens.toLocaleString()} reasoning)` : ""}`,
     ];
+    // Named rather than folded in silently: the request count and the token lines above describe
+    // only what this process did, so without this line a resumed session reads as one that spent
+    // far more per token than it did.
+    const carried = this.carriedTotal;
+    if (carried) lines.push(`  carried ${formatMoney(carried)} spent before this session was resumed`);
 
     const { prices } = this.options;
     if (prices) {
