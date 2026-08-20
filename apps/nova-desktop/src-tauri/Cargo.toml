@@ -1,6 +1,6 @@
 [package]
 name = "nova-desktop"
-version = "0.1.7"
+version = "0.1.8"
 description = "Nova coding agent desktop app"
 authors = ["CircuitNotion"]
 edition = "2021"

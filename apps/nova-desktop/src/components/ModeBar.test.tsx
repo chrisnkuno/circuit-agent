@@ -46,7 +46,7 @@ describe("the mode bar", () => {
     // pushing "" into state would leave the session in a mode that does not exist.
     const props = renderBar({ mode: "build" });
     fireEvent.click(screen.getByRole("radio", { name: "Build" }));
-    for (const call of props.onMode.mock.calls) expect(call[0]).not.toBe("");
+    for (const call of (props.onMode as ReturnType<typeof vi.fn>).mock.calls) expect(call[0]).not.toBe("");
   });
 
   it("says in words what the current mode allows", () => {
