@@ -15,6 +15,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# Relaunching after an update installs. Without it the app can download and stage a new version
+# and then go on running the old one, which looks exactly like the update having failed.
+tauri-plugin-process = "2"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }

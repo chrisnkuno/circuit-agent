@@ -54,6 +54,48 @@ export function settingsToEnvironment(settings: NovaSettings): Record<string, st
   return env;
 }
 
+/**
+ * An environment naming *every* provider the user has a key for, not just the selected one.
+ *
+ * `settingsToEnvironment` deliberately describes one provider, because that is what running a turn
+ * needs and mixing them is how one provider's key used to be sent to another. Asking each provider
+ * what models it has is the opposite question: the model picker offers all three, and a provider
+ * left out of the environment is one that silently shows only the models this build was compiled
+ * knowing about. Built from `credentialsFor`, so a key still only ever appears under its own
+ * provider's variable.
+ */
+export function settingsToCatalogEnvironment(
+  settings: NovaSettings,
+  processEnvironment: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  // Where Nova keeps its configuration, carried through from the real environment. The fetched
+  // model list is cached there and is deliberately shared with the CLI — same key, same answer,
+  // one six-hour fetch between them. Built from settings alone, this environment would name no
+  // config directory at all, and `novaConfigDirectory` would fall back to the home directory:
+  // the desktop would then quietly keep a second cache, and no test could point either at a
+  // temporary one, which is how a suite ends up writing stub models into a developer's real cache.
+  const env: Record<string, string> = {};
+  for (const name of ["NOVA_CONFIG_DIR", "XDG_CONFIG_HOME", "APPDATA"]) {
+    const value = processEnvironment[name]?.trim();
+    if (value) env[name] = value;
+  }
+  for (const provider of ["anthropic", "openai", "circuitnotion"] as const) {
+    const { apiKey, baseUrl } = credentialsFor(settings, provider);
+    if (!apiKey) continue;
+    if (provider === "anthropic") {
+      env.ANTHROPIC_API_KEY = apiKey;
+      if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl;
+    } else if (provider === "openai") {
+      env.OPENAI_API_KEY = apiKey;
+      if (baseUrl) env.OPENAI_BASE_URL = baseUrl;
+    } else {
+      env.CIRCUITNOTION_API_KEY = apiKey;
+      if (baseUrl) env.CIRCUITNOTION_BASE_URL = baseUrl;
+    }
+  }
+  return env;
+}
+
 export function defaultBaseUrl(provider: ProviderId): string {
   if (provider === "circuitnotion") return CIRCUITNOTION_DEFAULT_BASE_URL;
   if (provider === "openai") return "https://api.openai.com/v1";
