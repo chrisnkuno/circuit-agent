@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toUnits, priceUsage } from "./money";
-import { definePrices, selectPrice, tokenPricesAt, tokenPricesFor, validatePriceRecord, type PriceRecord } from "./pricing";
+import { definePrices, priceAliases, selectPrice, tokenPricesAt, tokenPricesFor, validatePriceRecord, type PriceRecord } from "./pricing";
 
 function record(overrides: Partial<PriceRecord> = {}): PriceRecord {
   return {
@@ -93,5 +93,51 @@ describe("converting records to token prices", () => {
     // 10k uncached at $2/M + 90k cached at $0.20/M + 2k output at $10/M.
     const expected = (10_000 * 2 + 90_000 * 0.2 + 2_000 * 10) / 1_000_000;
     expect(toUnits(priceUsage({ inputTokens: 100_000, outputTokens: 2_000, cachedInputTokens: 90_000 }, prices))).toBeCloseTo(expected, 6);
+  });
+});
+
+describe("version aliases", () => {
+  it("reduces a version marker and nothing else", () => {
+    // The invariant: every alias after the first is a strict prefix of the id it came from, and the
+    // only thing removed is a date or a pointer word — never a segment that names a other model.
+    for (const model of ["claude-sonnet-5-20260514", "gpt-4.1-mini-2025-04-14", "claude-opus-5-latest", "gpt-5.6-luna", "o3-mini", "llama3.1:8b"]) {
+      const aliases = priceAliases(model);
+      expect(aliases[0]).toBe(model);
+      for (const alias of aliases.slice(1)) {
+        expect(model.startsWith(alias)).toBe(true);
+        expect(model.slice(alias.length)).toMatch(/^-(?:\d{8}|\d{4}-\d{2}-\d{2}|latest|preview)$/i);
+      }
+    }
+  });
+
+  it("leaves an id with no version marker alone", () => {
+    for (const model of ["gpt-5-mini", "claude-opus-5", "deepseek-v4-pro"]) expect(priceAliases(model)).toEqual([model]);
+  });
+});
+
+describe("pricing a dated snapshot", () => {
+  const catalog = definePrices([
+    record({ model: "claude-sonnet-5", rates: { input: 3, output: 15 }, effectiveFrom: "2026-01-01" }),
+    record({ model: "gpt-5-mini", provider: "openai", rates: { input: 1, output: 4 }, effectiveFrom: "2026-01-01" }),
+  ]);
+
+  it("prices a snapshot id at its family's published rate", () => {
+    // What `/v1/models` actually lists. Pricing only the exact string reported "unpriced" for every
+    // id the live model list hands the user.
+    for (const model of ["claude-sonnet-5-20260514", "claude-sonnet-5-latest", "claude-sonnet-5"]) {
+      expect(selectPrice(catalog, { provider: "anthropic", model, asOf: "2026-08-10" })?.rates.input).toBe(3);
+    }
+  });
+
+  it("still refuses to price a different model that merely shares a prefix", () => {
+    // `gpt-5-mini` must never fall back to `gpt-5`: a cheaper model priced at a dearer one's rate is
+    // exactly the confident-but-wrong number the catalog exists to prevent.
+    expect(selectPrice(catalog, { provider: "openai", model: "gpt-5-mini-turbo", asOf: "2026-08-10" })).toBeUndefined();
+    expect(selectPrice(catalog, { provider: "anthropic", model: "claude-sonnet-5-fast", asOf: "2026-08-10" })).toBeUndefined();
+  });
+
+  it("prefers a snapshot's own rate over the family rate when one is recorded", () => {
+    const pinned = definePrices([...catalog, record({ model: "claude-sonnet-5-20260514", rates: { input: 9, output: 40 }, effectiveFrom: "2026-01-01" })]);
+    expect(selectPrice(pinned, { provider: "anthropic", model: "claude-sonnet-5-20260514", asOf: "2026-08-10" })?.rates.input).toBe(9);
   });
 });

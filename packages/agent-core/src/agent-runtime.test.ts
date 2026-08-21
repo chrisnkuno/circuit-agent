@@ -34,6 +34,35 @@ function turn(overrides: Partial<AgentModelTurn>): AgentModelTurn {
 }
 
 describe("bounded agent runtime", () => {
+  it("resumes a turn that stopped at the output limit instead of failing the run", async () => {
+    // `finish_reason: "length"` is a successful, incomplete reply — the tokens are spent and the
+    // text is real. Failing here threw away a paid-for partial answer and told the user their
+    // model was unsupported.
+    const value = harness([
+      turn({ finishReason: "length", content: "Here is the plan, step one" }),
+      turn({ finishReason: "stop", content: "…step two, and done." }),
+    ], []);
+
+    const result = await value.runtime.execute(baseRequest);
+    expect(result.status).toBe("completed");
+    // The partial text stays in the transcript, so "continue" has something to continue from, and
+    // the model is told what happened rather than left to guess why it is being prompted again.
+    const resumed = value.requests[1].messages.slice(-2);
+    expect(resumed[0]).toEqual({ role: "assistant", content: "Here is the plan, step one" });
+    expect(resumed[1].role).toBe("user");
+    expect(resumed[1].content).toContain("output token limit");
+  });
+
+  it("gives up after a bounded number of continuations rather than spending the whole budget on one answer", async () => {
+    const truncated = Array.from({ length: 6 }, () => turn({ finishReason: "length", content: "still going" }));
+    const value = harness(truncated, []);
+    const result = await value.runtime.execute({ ...baseRequest, maxIterations: 6, modelReservationRwf: 10_000 });
+    expect(result.status).toBe("iteration_limit");
+    expect(result.summary).toContain("output limit");
+    // Three continuations means four model calls in total, not the six the loop would have allowed.
+    expect(value.executed()).toBe(4);
+  });
+
   it("preserves native structured history and refuses orphaned tool results", async () => {
     const value = harness([turn({ finishReason: "stop", content: "continued" })], []);
     const history = [

@@ -91,7 +91,14 @@ export const DEFAULT_NOVA_BUDGETS: NovaBudgets = {
   maxToolCallsPerTurn: 8,
   maxToolResultChars: 40_000,
   maxTotalToolResultChars: 400_000,
-  maxOutputTokens: 8_000,
+  // Raised from 8,000 because that ceiling was being hit in ordinary work — a long file written in
+  // one go, a full plan, or a thinking model whose hidden reasoning shares this same budget. Hitting
+  // it is now recoverable (the runtime resumes a `length` turn rather than failing it), but each
+  // resumption costs a round trip and re-sends the whole transcript, so the cheaper fix is to let
+  // the common case finish in one reply. Well inside every current model's own output limit, and
+  // costed only when actually used: the runtime clamps each call to what the remaining budget can
+  // afford, so a higher ceiling spends nothing on a short answer.
+  maxOutputTokens: 16_000,
   maxRwf: 20_000,
   contextLimit: 200_000,
 };

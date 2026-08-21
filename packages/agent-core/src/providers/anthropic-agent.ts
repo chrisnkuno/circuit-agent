@@ -314,15 +314,18 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
       };
     }
 
-    const finishReason = toolCalls.length > 0 ? "tool_calls" : response.stop_reason === "max_tokens" ? undefined : "stop";
-    if (!finishReason) throw new Error(`Model response ended with stop reason ${response.stop_reason}`);
+    // `max_tokens` is Anthropic's name for the Chat Completions `length`: a successful response
+    // that stopped early because the output budget ran out. It is checked before the tool calls
+    // because a `tool_use` block that was still being written has a half-received `input`, and the
+    // runtime must ask for that call again rather than execute a guess at what it would have been.
+    const finishReason = response.stop_reason === "max_tokens" ? "length" : toolCalls.length > 0 ? "tool_calls" : "stop";
 
     return {
       responseId: response.id,
       model: response.model,
       finishReason,
       content: text,
-      toolCalls,
+      toolCalls: finishReason === "length" ? [] : toolCalls,
       usage: usageOf(response),
     };
   }

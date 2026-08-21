@@ -100,7 +100,7 @@ export {
   withJobs,
 } from "./nova-cli/job-store";
 
-export { definePrices, selectPrice, tokenPricesAt, tokenPricesFor, validatePriceRecord } from "./pricing";
+export { definePrices, priceAliases, selectPrice, tokenPricesAt, tokenPricesFor, validatePriceRecord } from "./pricing";
 export type { BillingUnit, PriceModality, PriceQuery, PriceRecord } from "./pricing";
 export { PRICE_CATALOG } from "./providers/price-catalog";
 

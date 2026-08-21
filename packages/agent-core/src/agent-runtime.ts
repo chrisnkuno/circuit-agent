@@ -11,7 +11,16 @@ export type AgentToolCall = { id: string; name: string; arguments: unknown };
 export type AgentModelTurn = {
   responseId: string;
   model: string;
-  finishReason: "stop" | "tool_calls" | "refusal";
+  /**
+   * Why the model stopped generating.
+   *
+   * `length` is the one that is easy to mistake for an error: the request succeeded, the model
+   * simply ran out of the output budget it was given (`finish_reason: "length"` on the Chat
+   * Completions wire, `stop_reason: "max_tokens"` on Anthropic's). The text that arrived is real
+   * and already paid for — it is just unfinished, so the runtime continues the turn instead of
+   * failing it.
+   */
+  finishReason: "stop" | "tool_calls" | "refusal" | "length";
   content: string;
   refusal?: string;
   toolCalls: AgentToolCall[];
@@ -177,6 +186,27 @@ export type AgentRuntimeResult = {
 
 /** How many times a turn is sent back to the model to verify before the gate gives up and stops. */
 const MAX_VERIFICATION_NUDGES = 2;
+
+/**
+ * How many times a truncated turn is resumed before the run gives up.
+ *
+ * Bounded because "continue" is not guaranteed to converge: a model that answers every
+ * continuation with another full budget of output would otherwise spend the whole task cap on one
+ * unfinishable answer. Three is enough for the ordinary case — a long file, a long plan — and few
+ * enough that a runaway is caught while there is still budget left to report it.
+ */
+const MAX_LENGTH_CONTINUATIONS = 3;
+
+/**
+ * Sent after a turn that stopped at the output cap.
+ *
+ * The partial text stays in the transcript above this message, so "continue" is literal: the model
+ * reads what it already wrote and picks up from there. It is also told what happened, because the
+ * useful correction is usually the model's own — answer more briefly, or read the file in pieces —
+ * and a model that does not know it was cut off cannot make it.
+ */
+const LENGTH_CONTINUATION_NUDGE =
+  "Your previous message hit the output token limit and was cut off mid-answer. Continue from exactly where it stopped — do not repeat what you already wrote, and do not restart. If you were part-way through a tool call, send that tool call again from the beginning, since the truncated one was discarded. If the remaining work does not fit in one reply, do the part that fits and keep each reply shorter.";
 
 const VERIFICATION_NUDGE =
   "You changed the workspace but ended the turn without running anything that verifies it. Write tests that assert the invariants your change must satisfy — the properties that hold for every valid input, not one happy-path example — then run them and report the real result. If this project genuinely has nothing to run, say so explicitly instead of stopping silently.";
@@ -380,6 +410,8 @@ export class BoundedAgentRuntime {
     let totalToolResultChars = 0;
     let workspaceNeedsVerification = false;
     let verificationNudges = 0;
+    // Truncated turns resumed so far in this run, capped by `MAX_LENGTH_CONTINUATIONS`.
+    let lengthContinuations = 0;
     // Strongest evidence seen for the workspace changes in this run, as a rung on `EVIDENCE_RANK`,
     // and which escalations the model has already been asked for. Each is asked at most once: a
     // model that answers "this change has nothing to assert" must be able to finish.
@@ -426,6 +458,20 @@ export class BoundedAgentRuntime {
       await this.dependencies.control.persistEvent({ type: "model_turn", iteration, responseId: turn.responseId, model: turn.model, toolCallCount: turn.toolCalls.length, usage: turn.usage });
 
       if (turn.finishReason === "refusal") return stop("blocked", turn.refusal?.trim() || "Model refused the task.", iteration);
+      if (turn.finishReason === "length") {
+        // Not a failure: the provider answered, the tokens were spent, and the text that arrived is
+        // as real as any other. What is missing is the rest of it — so the partial answer is kept in
+        // the transcript and the model is asked to carry on, rather than the turn being thrown away
+        // along with everything it already paid for.
+        const partial = turn.content.trim();
+        if (lengthContinuations >= MAX_LENGTH_CONTINUATIONS) {
+          return stop("iteration_limit", `Model kept exceeding its output limit: ${MAX_LENGTH_CONTINUATIONS} continuations were not enough to finish the answer.`, iteration);
+        }
+        lengthContinuations += 1;
+        messages.push({ role: "assistant", content: partial || "(no output before the limit was reached)" });
+        messages.push({ role: "user", content: LENGTH_CONTINUATION_NUDGE });
+        continue;
+      }
       if (turn.finishReason === "stop") {
         const summary = turn.content.trim() || "Model completed without a summary.";
         messages.push({ role: "assistant", content: summary });

@@ -336,11 +336,13 @@ describe("Anthropic adapter", () => {
     expect(turn.refusal).toContain("cyber");
   });
 
-  it("fails closed on a truncated response and on missing accounting", async () => {
+  it("reports a truncated response as unfinished and fails closed on missing accounting", async () => {
     const truncated = new AnthropicAgentTurnProvider({ apiKey: "sk-ant", model: "claude-opus-5" }, async () => ({
       id: "m", model: "claude-opus-5", stop_reason: "max_tokens", content: [{ type: "text", text: "half" }], usage,
     }));
-    await expect(truncated.complete(request)).rejects.toThrow(/max_tokens/);
+    // `max_tokens` is a successful reply that stopped early, not a failure: the half that arrived
+    // is kept and reported as `length` so the runtime can carry the turn on.
+    expect(await truncated.complete(request)).toMatchObject({ finishReason: "length", content: "half" });
 
     const noUsage = new AnthropicAgentTurnProvider({ apiKey: "sk-ant", model: "claude-opus-5" }, async () => ({
       id: "m", model: "claude-opus-5", stop_reason: "end_turn", content: [{ type: "text", text: "ok" }], usage: null,

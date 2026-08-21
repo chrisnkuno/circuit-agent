@@ -1,6 +1,7 @@
 import type { AgentTurnProvider } from "../agent-runtime";
 import { PROVIDER_IDS, PROVIDER_INFO, catalogPrices, isProviderId, type ProviderEnvironment, type ProviderId, type ProviderInfo } from "./provider-specs";
 import { tokenPrices, type Currency, type TokenPrices } from "../money";
+import { priceAliases } from "../pricing";
 import { AnthropicAgentTurnProvider } from "./anthropic-agent";
 import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import { OpenAIAgentTurnProvider } from "./openai-agent";
@@ -160,9 +161,13 @@ export function resolveProvider(
  * when they set them; switching away from that model correctly drops back to the catalog.
  */
 function overrideApplies(spec: ProviderSpec, model: string, environment: ProviderEnvironment): boolean {
+  // Compared against the model's version aliases, the same way the catalog is looked up: someone
+  // who wrote down a rate for `claude-sonnet-5` means it for the dated snapshot of it they are
+  // actually served, and an exact-string test silently drops their rate the moment they pin one.
+  const aliases = priceAliases(model);
   const named = environment.MODEL_PRICE_MODEL?.trim();
-  if (named) return named === model;
-  return (environment[`${spec.id.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel) === model;
+  if (named) return aliases.includes(named);
+  return aliases.includes(environment[`${spec.id.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel);
 }
 
 /**

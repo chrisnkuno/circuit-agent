@@ -170,6 +170,14 @@ describe("buildNovaSystemPrompt", () => {
     expect(buildNovaSystemPrompt(context, "defender", [])).toContain("every effectful call is approved by the user");
   });
 
+  it("permits contained credential workflows without permitting disclosure", () => {
+    const prompt = buildNovaSystemPrompt(context, "auto", ["read_file", "write_file"]);
+    expect(prompt).toContain("Do not refuse ordinary, authorized development work merely because it involves a credential");
+    expect(prompt).toContain("read a project-local .env file");
+    expect(prompt).toContain("secret pasted into chat is explicit authorization");
+    expect(prompt).toContain("Never send, upload, publish, or paste a secret to an external destination");
+  });
+
   it("appends the security playbooks only in defender mode, not the others", () => {
     const defenderPrompt = buildNovaSystemPrompt(context, "defender", []);
     expect(defenderPrompt).toContain("## Injection");

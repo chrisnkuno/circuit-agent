@@ -76,7 +76,9 @@ describe("CircuitNotion coding model provider", () => {
 
   it("fails closed on truncated responses or missing accounting", async () => {
     const provider = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: JSON.stringify(plan), finish: "length", usage }));
-    await expect(provider.generateCodingPlan(request)).rejects.toThrow("length");
+    // Still fails closed — half a JSON object is not a smaller plan — but the message now names the
+    // limit that was hit, since "length" reads like a network fault rather than an output budget.
+    await expect(provider.generateCodingPlan(request)).rejects.toThrow(/ran out of output budget/);
 
     const missingUsage = new CircuitNotionCodingModelProvider({ apiKey: "cn_test", model: "circuit-3" }, async () => streamOf({ content: JSON.stringify(plan), usage: null }));
     await expect(missingUsage.generateCodingPlan(request)).rejects.toThrow("usage accounting");

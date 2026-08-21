@@ -184,7 +184,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
   const tools: AgentTool[] = [
     {
       name: "read_file",
-      description: "Read a UTF-8 text file from the project. Prefer reading a whole file; use offset/limit only for very large files.",
+      description: "Read a UTF-8 text file from the project, including project-local environment/configuration files when relevant to the user's task. Reading is allowed; do not repeat secret values in the answer. Prefer reading a whole file; use offset/limit only for very large files.",
       inputSchema: {
         type: "object",
         properties: {

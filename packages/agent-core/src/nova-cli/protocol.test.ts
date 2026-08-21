@@ -39,6 +39,28 @@ describe("event journal", () => {
     expect(String(event.arguments.body).length).toBeLessThan(4_200);
   });
 
+  it("keeps env reads useful to the live model without persisting their secret values", () => {
+    const event = runtimeEventForJournal({
+      type: "tool_result",
+      toolCallId: "call_env",
+      toolName: "read_file",
+      effect: "none",
+      isError: false,
+      content: [
+        "NODE_ENV=development",
+        "AWS_ACCESS_KEY_ID=AKIAEXAMPLEVALUE",
+        "DATABASE_URL=postgres://admin:database-password@example.test/app",
+        "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----",
+      ].join("\n"),
+    });
+    expect(event.type).toBe("tool_result");
+    if (event.type !== "tool_result") return;
+    expect(event.content).toContain("NODE_ENV=development");
+    expect(event.content).not.toContain("AKIAEXAMPLEVALUE");
+    expect(event.content).not.toContain("database-password");
+    expect(event.content).not.toContain("private-material");
+  });
+
   it("serializes concurrent appends into one verifiable hash chain", async () => {
     const journal = new EventJournal(root, "session_1");
     await Promise.all([

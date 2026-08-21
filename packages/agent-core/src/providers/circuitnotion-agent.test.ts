@@ -43,9 +43,11 @@ describe("CircuitNotion agent turn provider", () => {
     ]);
   });
 
-  it("fails closed on unsupported endings and missing usage", async () => {
+  it("reports a truncated ending as unfinished, and fails closed on an unknown one or missing usage", async () => {
     const truncated = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async () => ({ id: "chat-3", model: "gpt-5.6-luna", usage, choices: [{ finish_reason: "length", message: { content: "partial" } }] }));
-    await expect(truncated.complete({ messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org" })).rejects.toThrow("finish reason");
+    expect(await truncated.complete({ messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org" })).toMatchObject({ finishReason: "length", content: "partial" });
+    const unknown = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async () => ({ id: "chat-5", model: "gpt-5.6-luna", usage, choices: [{ finish_reason: "banana", message: { content: "?" } }] }));
+    await expect(unknown.complete({ messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org" })).rejects.toThrow("finish reason");
     const noUsage = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async () => ({ id: "chat-4", model: "gpt-5.6-luna", usage: null, choices: [{ finish_reason: "stop", message: { content: "done" } }] }));
     await expect(noUsage.complete({ messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org" })).rejects.toThrow("usage accounting");
   });

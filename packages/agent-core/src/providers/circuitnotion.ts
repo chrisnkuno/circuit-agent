@@ -159,6 +159,20 @@ function parsePlan(content: string | null) {
   }
 }
 
+/**
+ * Why a plan request ended without a plan.
+ *
+ * A plan is a single JSON object, so unlike a conversational turn there is nothing to salvage from
+ * a truncated one — half an object is not a smaller plan. What the caller can act on is *which*
+ * limit was hit, and the raw `finish_reason` does not say: "length" reads like a network word,
+ * while the actual fix is a larger output budget or a smaller objective.
+ */
+function planEndingError(reason: string | null, maxOutputTokens: number): string {
+  return reason === "length" || reason === "max_tokens"
+    ? `Model ran out of output budget (${maxOutputTokens} tokens) before finishing the plan JSON. Raise maxOutputTokens or narrow the objective.`
+    : `Model response ended with finish reason ${reason}`;
+}
+
 const RETRY_INSTRUCTION = "Your previous response was not valid JSON matching the required schema. Return ONLY a single JSON object matching the schema, with no commentary, code fences, or extra text.";
 
 /**
@@ -234,7 +248,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
     let choice = response.choices[0];
     if (!choice) throw new Error("Model response contained no choices");
     if (choice.message.refusal) return { status: "refused", refusal: choice.message.refusal, responseId: response.id, model: response.model, usage };
-    if (choice.finish_reason !== "stop") throw new Error(`Model response ended with finish reason ${choice.finish_reason}`);
+    if (choice.finish_reason !== "stop") throw new Error(planEndingError(choice.finish_reason, request.maxOutputTokens));
 
     let plan = parsePlan(choice.message.content);
     if (!plan) {
@@ -243,7 +257,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
       choice = response.choices[0];
       if (!choice) throw new Error("Model response contained no choices");
       if (choice.message.refusal) return { status: "refused", refusal: choice.message.refusal, responseId: response.id, model: response.model, usage };
-      if (choice.finish_reason !== "stop") throw new Error(`Model response ended with finish reason ${choice.finish_reason}`);
+      if (choice.finish_reason !== "stop") throw new Error(planEndingError(choice.finish_reason, request.maxOutputTokens));
       plan = parsePlan(choice.message.content);
       if (!plan) throw new Error("Model response did not contain a coding plan matching the required schema after one retry");
     }

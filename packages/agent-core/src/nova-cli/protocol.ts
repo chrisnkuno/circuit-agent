@@ -44,11 +44,21 @@ export function assertTurnTransition(from: TurnStatus, to: TurnStatus): void {
 type DurableRuntimeEvent = Exclude<AgentRuntimeEvent, { type: "assistant_delta" }>;
 
 const SENSITIVE_KEY = /(authorization|cookie|credential|password|private.?key|secret|token)/i;
+const SECRET_ASSIGNMENT = /((?:[A-Za-z0-9_]*(?:api[_-]?key|access[_-]?key(?:_id)?|authorization|credential|password|passwd|private[_-]?key|secret|token)[A-Za-z0-9_]*)\s*[:=]\s*)([^\s,;]+)/gi;
+const PRIVATE_KEY_BLOCK = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g;
+const AUTHENTICATED_URL = /([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^@\s/]+)@/gi;
+
+function redactJournalString(value: string): string {
+  return value
+    .replace(PRIVATE_KEY_BLOCK, "[REDACTED PRIVATE KEY]")
+    .replace(AUTHENTICATED_URL, "$1[REDACTED]@")
+    .replace(SECRET_ASSIGNMENT, "$1[REDACTED]");
+}
 
 function boundedJournalValue(value: unknown, key = ""): unknown {
   if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
   if (typeof value === "string") {
-    const redacted = value.replace(/((?:api[_-]?key|authorization|password|secret|token)\s*[:=]\s*)([^\s,;]+)/gi, "$1[REDACTED]");
+    const redacted = redactJournalString(value);
     if (redacted.length <= 4_000) return redacted;
     const digest = createHash("sha256").update(value).digest("hex");
     return `${redacted.slice(0, 4_000)}\n...[${redacted.length - 4_000} chars omitted; original sha256=${digest}]`;
