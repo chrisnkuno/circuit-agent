@@ -33,19 +33,37 @@ export const NOVA_CAPABILITIES = {
   planning: "reasoning.plan",
   /** Skill, MCP and plugin tools — code Nova did not ship, running with the user's approval. */
   external: "workspace.external",
+  /** Retrieving a security playbook. Defender mode only — nothing else has a use for one. */
+  playbooks: "security.playbooks",
 } as const;
+
+/**
+ * Everything a working session can call, which is every capability except the defender-only one.
+ *
+ * Spelled out rather than `Object.values`, because that spread silently handed each new capability
+ * to build and auto the moment it was declared — including one whose whole point is that only
+ * defender mode has it.
+ */
+const WORKING_CAPABILITIES = [
+  NOVA_CAPABILITIES.read,
+  NOVA_CAPABILITIES.write,
+  NOVA_CAPABILITIES.terminal,
+  NOVA_CAPABILITIES.research,
+  NOVA_CAPABILITIES.planning,
+  NOVA_CAPABILITIES.external,
+];
 
 const MODE_CAPABILITIES: Record<NovaMode, string[]> = {
   // No externally-sourced tool runs in plan mode: plan already permits nothing that changes
   // anything, and a skill/MCP/plugin tool is by definition not one of the effects plan already
   // reasoned about (it could shell out, write files, or call a network service under the hood).
   plan: [NOVA_CAPABILITIES.read, NOVA_CAPABILITIES.research, NOVA_CAPABILITIES.planning],
-  build: Object.values(NOVA_CAPABILITIES),
-  auto: Object.values(NOVA_CAPABILITIES),
+  build: [...WORKING_CAPABILITIES],
+  auto: [...WORKING_CAPABILITIES],
   // The full set, not a read-only subset: a scanner that cannot run `npm audit`, grep for a
   // pattern across the tree, or propose the one-line fix for a vulnerable dependency is a report
   // generator, not a defender. What keeps this safe is `decide()` below never auto-approving it.
-  defender: Object.values(NOVA_CAPABILITIES),
+  defender: [...WORKING_CAPABILITIES, NOVA_CAPABILITIES.playbooks],
 };
 
 export function capabilitiesForMode(mode: NovaMode): string[] {

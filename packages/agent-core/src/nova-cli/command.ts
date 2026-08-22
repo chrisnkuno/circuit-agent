@@ -22,6 +22,9 @@ export const NOVA_CREDENTIAL_ENV_NAMES = [
   "CIRCUITNOTION_API_KEY",
   "CIRCUITNOTION_RELAY_SECRET",
   "E2B_API_KEY",
+  // The billing key can move money. A spawned build script has even less business seeing it than
+  // a model key, and it arrived in the environment the same way every other one did.
+  "NOVA_BILLING_KEY",
   "EXA_API_KEY",
 ] as const;
 

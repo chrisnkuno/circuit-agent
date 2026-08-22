@@ -100,7 +100,10 @@ describe("auto mode", () => {
   it("gives auto mode the tools to actually work with", () => {
     // A mode that auto-approves writes but cannot call the write tools would be worse than useless.
     const auto = capabilitiesForMode("auto");
-    for (const capability of Object.values(NOVA_CAPABILITIES)) expect(auto).toContain(capability);
+    // Every working capability, which is all of them except the defender-only playbook retrieval:
+    // auto mode has no security review to run and no reason to carry that tool's schema.
+    const working = Object.values(NOVA_CAPABILITIES).filter((capability) => capability !== NOVA_CAPABILITIES.playbooks);
+    for (const capability of working) expect(auto).toContain(capability);
     // Plan mode is the opposite end and must stay that way: it changes nothing, so it holds neither
     // the write nor the terminal capability.
     const plan = capabilitiesForMode("plan");

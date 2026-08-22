@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { EnvironmentReport } from "./environment";
+import { DEFENDER_PLAYBOOK_CATALOG, playbookFor } from "./defender-playbooks";
 import { buildNovaSystemPrompt, collectProjectContext } from "./prompt";
 
 let root: string;
@@ -54,6 +56,17 @@ describe("collectProjectContext", () => {
     expect(context.instructions).toContain("CLI-specific rule.");
     expect(context.instructionSources).toHaveLength(2);
     expect(context.instructionSources?.every((source) => /^[0-9a-f]{64}$/.test(source.sha256))).toBe(true);
+  });
+
+  it("leaves generated directories out of the layout, so a build cannot rewrite the prompt", async () => {
+    // These appear and disappear as tests and builds run. In the listing they are noise the tools
+    // cannot even search; in the *cached prefix* they are a cache write bought by running a test.
+    await fs.mkdir(path.join(root, "src"));
+    for (const generated of ["node_modules", "dist", "coverage", "test-results", "tmp", "target"]) {
+      await fs.mkdir(path.join(root, generated));
+    }
+    const context = await collectProjectContext(root);
+    expect(context.layout).toEqual(["src/"]);
   });
 
   it("lists the top-level layout, hiding dotfiles except .github", async () => {
@@ -178,26 +191,34 @@ describe("buildNovaSystemPrompt", () => {
     expect(prompt).toContain("Never send, upload, publish, or paste a secret to an external destination");
   });
 
-  it("appends the security playbooks only in defender mode, not the others", () => {
-    const defenderPrompt = buildNovaSystemPrompt(context, "defender", []);
-    expect(defenderPrompt).toContain("## Injection");
-    expect(defenderPrompt).toContain("## Secrets & credential hygiene");
-    expect(defenderPrompt).toContain("## Input validation, fuzzing & invariant-based testing");
-    expect(defenderPrompt).toContain("## Logging, monitoring & deterrence");
-    // The 2025 OWASP-aligned additions: security misconfiguration (now OWASP's #2 risk), supply
-    // chain/CI integrity, client-side security, API security, SSRF, exceptional-condition handling,
-    // business logic, and LLM/AI application security.
-    expect(defenderPrompt).toContain("## Security misconfiguration");
-    expect(defenderPrompt).toContain("## Software supply chain & CI/CD integrity");
-    expect(defenderPrompt).toContain("## Client-side & browser security");
-    expect(defenderPrompt).toContain("## API security");
-    expect(defenderPrompt).toContain("## Server-side request forgery (SSRF)");
-    expect(defenderPrompt).toContain("## Mishandling of exceptional conditions");
-    expect(defenderPrompt).toContain("## Business logic & race conditions");
-    expect(defenderPrompt).toContain("## LLM & AI application security");
-    expect(defenderPrompt).toContain("## Threat intelligence & memory");
-    expect(defenderPrompt).toContain("## Hardening resources, cost & hosting guidance");
-    expect(buildNovaSystemPrompt(context, "build", [])).not.toContain("## Injection");
+  it("indexes every security playbook in defender mode, and none of them anywhere else", () => {
+    const defenderPrompt = buildNovaSystemPrompt(context, "defender", ["read_playbook"]);
+    // The index, not the text: every category is reachable by id, and the full 44,000 characters
+    // are one read_playbook call away instead of being on every request of every iteration.
+    for (const entry of DEFENDER_PLAYBOOK_CATALOG) {
+      expect(defenderPrompt, entry.id).toContain(entry.id);
+      expect(defenderPrompt, entry.title).toContain(entry.title);
+    }
+    expect(defenderPrompt).toContain("read_playbook");
+    expect(defenderPrompt).toContain("DEFENDER mode");
+
+    // The bodies stay out. This is the whole saving, so it is asserted rather than assumed.
+    const injection = DEFENDER_PLAYBOOK_CATALOG.find((entry) => entry.id === "injection")!;
+    expect(defenderPrompt).not.toContain(injection.text.split("\n")[2]);
+    expect(defenderPrompt.length).toBeLessThan(20_000);
+
+    const buildPrompt = buildNovaSystemPrompt(context, "build", []);
+    expect(buildPrompt).not.toContain("read_playbook");
+    expect(buildPrompt).not.toContain("access-control");
+  });
+
+  it("keeps every indexed playbook retrievable by the id it advertises", () => {
+    // An index entry the tool cannot resolve is worse than no index: the model spends a call
+    // finding out. Round-trip every id the prompt offers.
+    for (const entry of DEFENDER_PLAYBOOK_CATALOG) {
+      expect(playbookFor(entry.id)?.text, entry.id).toBe(entry.text);
+    }
+    expect(playbookFor("no-such-playbook")).toBeUndefined();
   });
 
   it("includes project signals only when they exist, rather than printing empty labels", () => {
@@ -227,5 +248,30 @@ describe("buildNovaSystemPrompt", () => {
   it("lists the tools actually offered, which changes with mode", () => {
     const prompt = buildNovaSystemPrompt(context, "plan", ["read_file", "grep_files"]);
     expect(prompt).toContain("Available tools: read_file, grep_files.");
+  });
+});
+
+describe("the environment section", () => {
+  const report: EnvironmentReport = {
+    backend: "local",
+    platform: "linux",
+    host: "Linux 6.18 x64 on linux",
+    execution: "Runs in a real shell, so pipes and redirection work.",
+    packageManager: { name: "bun", lockfile: "bun.lock" },
+    available: [{ name: "bun", version: "1.3.14" }, { name: "git", version: "2.43.0" }],
+    missing: ["npm", "pnpm"],
+  };
+
+  it("puts what is installed in front of the model before it writes a command", async () => {
+    const prompt = buildNovaSystemPrompt(await collectProjectContext(root), "build", ["run_command"], undefined, report);
+    expect(prompt).toContain("bun 1.3.14");
+    expect(prompt).toContain("NOT available");
+    expect(prompt).toContain("npm");
+  });
+
+  it("is absent, rather than guessed at, when nothing was probed", async () => {
+    const prompt = buildNovaSystemPrompt(await collectProjectContext(root), "build", ["run_command"]);
+    expect(prompt).not.toContain("NOT available");
+    expect(prompt).not.toContain("Environment (measured");
   });
 });

@@ -7,7 +7,7 @@ import { LocalWorkspace } from "./backends";
 import { HookRegistry } from "./hooks";
 import { NestedInstructionTracker } from "./nested-instructions";
 import type { ToolProvider } from "./tool-providers";
-import { classifyVerification, createNovaTools, isRefusedCommand, looksLikeVerification, TodoList } from "./tools";
+import { classifyVerification, createNovaTools, isRefusedCommand, looksLikeVerification, missingProgram, TodoList } from "./tools";
 
 let root: string;
 const context = { taskId: "t", runId: "r", stepId: "s" };
@@ -692,5 +692,35 @@ describe("hooks wired through the real tool wrapping", () => {
     const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList(), hooks: HookRegistry.local(new LocalWorkspace(root)) });
     const result = await toolNamed(tools, "read_file").execute({ path: "src/app.ts" }, context);
     expect(result.content).toBe("export const port = 3000;\n");
+  });
+});
+
+describe("a command that names a program this environment does not have", () => {
+  it("identifies the program from every shell's way of saying so", () => {
+    expect(missingProgram("npm test", { exitCode: 127, stdout: "", stderr: "spawn npm ENOENT" })).toBe("npm");
+    expect(missingProgram("pnpm install", { exitCode: 127, stdout: "", stderr: "sh: 1: pnpm: command not found" })).toBe("pnpm");
+    expect(missingProgram("yarn build", { exitCode: 1, stdout: "'yarn' is not recognized as an internal or external command", stderr: "" })).toBe("yarn");
+  });
+
+  it("does not mistake a program's own output for a missing program", () => {
+    // The failure is real, but it is a compile error, not an uninstalled toolchain — telling the
+    // model "do not retry" here would stop it fixing the thing it was asked to fix.
+    expect(missingProgram("bun run build", { exitCode: 1, stdout: "", stderr: "src/a.ts:3:10 - error TS2307: module not found" })).toBeNull();
+    expect(missingProgram("bun test", { exitCode: 1, stdout: "expected: fixture not found", stderr: "" })).toBeNull();
+    expect(missingProgram("npm test", { exitCode: 0, stdout: "command not found", stderr: "" })).toBeNull();
+  });
+
+  it("tells the model to stop retrying instead of surfacing a bare ENOENT", async () => {
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root, undefined, async () => ({ exitCode: 127, stdout: "", stderr: "spawn npm ENOENT" })),
+      todos: new TodoList(),
+    });
+    const result = await toolNamed(tools, "run_command").execute({ command: "npm test" }, context);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("not available in this environment");
+    expect(result.content).toContain("Do not retry");
+    expect((result.data as { missingProgram?: string }).missingProgram).toBe("npm");
+    // A missing program proves nothing about the code, so it must not count as verification.
+    expect(result.verification).toBeUndefined();
   });
 });

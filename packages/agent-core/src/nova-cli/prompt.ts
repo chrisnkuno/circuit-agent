@@ -3,7 +3,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { NovaWorkspace } from "./backends";
-import { DEFENDER_PLAYBOOKS } from "./defender-playbooks";
+import { DEFAULT_WORKSPACE_LIMITS } from "./workspace";
+import { defenderPlaybookIndex } from "./defender-playbooks";
+import { describeEnvironment, type EnvironmentReport } from "./environment";
 import type { NovaMode } from "./permissions";
 
 /**
@@ -89,8 +91,21 @@ export async function collectProjectContext(root: string, maxInstructionChars = 
 
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
+    /**
+     * The same directories the tools ignore are left out of the listing.
+     *
+     * Two reasons, and the second is the one that was costing money. `node_modules/` and `dist/` in
+     * a "top level" listing are noise the model has to read past on every request — they are not
+     * places it can search, because `glob_files` and `grep_files` skip them. And they *churn*: a
+     * build, a test run or a coverage pass makes `dist/`, `coverage/` or `test-results/` appear and
+     * disappear mid-session, which rewrites this line, which rewrites the system prompt, which
+     * invalidates the whole prompt-cache prefix beneath it. A listing that changes because a test
+     * ran is a listing that pays a cache write for saying nothing new.
+     */
+    const ignored = new Set([...(DEFAULT_WORKSPACE_LIMITS.ignoredDirectories ?? []), "coverage", "test-results", "tmp", ".turbo"]);
     context.layout = entries
       .filter((entry) => !entry.name.startsWith(".") || entry.name === ".github")
+      .filter((entry) => !(entry.isDirectory() && ignored.has(entry.name)))
       .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
       .sort()
       .slice(0, 60);
@@ -149,7 +164,13 @@ const MODE_GUIDANCE: Record<NovaMode, string> = {
  * agent is behavioural: editing before reading, claiming success without verifying, rewriting a
  * file to change a line, or narrating a plan it never carried out.
  */
-export function buildNovaSystemPrompt(context: ProjectContext, mode: NovaMode, toolNames: string[], workspace?: NovaWorkspace): string {
+export function buildNovaSystemPrompt(
+  context: ProjectContext,
+  mode: NovaMode,
+  toolNames: string[],
+  workspace?: NovaWorkspace,
+  environment?: EnvironmentReport,
+): string {
   const remote = workspace?.kind === "e2b";
   const sections: string[] = [
     remote
@@ -238,7 +259,22 @@ export function buildNovaSystemPrompt(context: ProjectContext, mode: NovaMode, t
   // Appended whole rather than summarized: these are the concrete triggers ("grep for `==` near a
   // token comparison", not "check authentication") that make a finding specific instead of generic,
   // and a summary would be exactly the abstraction that turns them back into a checklist recital.
-  if (mode === "defender") sections.push(`Security playbooks — work these against what this project actually is, skipping what plainly does not apply:\n\n${DEFENDER_PLAYBOOKS}`);
+  if (mode === "defender") {
+    sections.push(
+      [
+        "Security playbooks, by id. Each holds the concrete triggers for its category — what to grep for and why it matters.",
+        "Call read_playbook(id) for the two or three categories this project actually has a surface for, and skip the rest:",
+        "a database-free project has no SQL injection to check, and a project that calls no model has no LLM playbook to run.",
+        "Read them early, in one turn, before you start looking.",
+        "",
+        defenderPlaybookIndex(),
+      ].join(" ").replace(" \n ", "\n"),
+    );
+  }
+
+  // Before the project section, because it decides whether a command the model is about to write
+  // can run at all — a fact that is worth nothing after the command has already failed.
+  if (environment) sections.push(describeEnvironment(environment));
 
   const project: string[] = [workspace ? `Workspace (${workspace.kind}): ${workspace.label}` : `Project root: ${context.root}`];
   if (context.gitBranch) project.push(`Git branch: ${context.gitBranch}`);
