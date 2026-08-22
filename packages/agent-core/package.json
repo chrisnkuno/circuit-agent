@@ -1,6 +1,6 @@
 {
   "name": "@circuit-nova/nova-core",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Provider-neutral coding-agent core: a bounded tool-use runtime, local and sandboxed workspace backends, model adapters for Anthropic/OpenAI-compatible providers, and multi-currency cost accounting.",
   "keywords": [
     "agent",
