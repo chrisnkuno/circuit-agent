@@ -47,13 +47,13 @@
     "@termuijs/widgets": "0.1.7"
   },
   "optionalDependencies": {
-    "@circuit-nova/state-darwin-arm64": "0.1.0",
-    "@circuit-nova/state-darwin-x64": "0.1.0",
-    "@circuit-nova/state-linux-arm64-gnu": "0.1.0",
-    "@circuit-nova/state-linux-arm64-musl": "0.1.0",
-    "@circuit-nova/state-linux-x64-gnu": "0.1.0",
-    "@circuit-nova/state-linux-x64-musl": "0.1.0",
-    "@circuit-nova/state-win32-arm64": "0.1.0",
-    "@circuit-nova/state-win32-x64": "0.1.0"
+    "@circuit-nova/state-darwin-arm64": "0.2.0",
+    "@circuit-nova/state-darwin-x64": "0.2.0",
+    "@circuit-nova/state-linux-arm64-gnu": "0.2.0",
+    "@circuit-nova/state-linux-arm64-musl": "0.2.0",
+    "@circuit-nova/state-linux-x64-gnu": "0.2.0",
+    "@circuit-nova/state-linux-x64-musl": "0.2.0",
+    "@circuit-nova/state-win32-arm64": "0.2.0",
+    "@circuit-nova/state-win32-x64": "0.2.0"
   }
 }
