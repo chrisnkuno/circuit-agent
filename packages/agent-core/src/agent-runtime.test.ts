@@ -34,6 +34,35 @@ function turn(overrides: Partial<AgentModelTurn>): AgentModelTurn {
 }
 
 describe("bounded agent runtime", () => {
+  it("resumes a turn that stopped at the output limit instead of failing the run", async () => {
+    // `finish_reason: "length"` is a successful, incomplete reply — the tokens are spent and the
+    // text is real. Failing here threw away a paid-for partial answer and told the user their
+    // model was unsupported.
+    const value = harness([
+      turn({ finishReason: "length", content: "Here is the plan, step one" }),
+      turn({ finishReason: "stop", content: "…step two, and done." }),
+    ], []);
+
+    const result = await value.runtime.execute(baseRequest);
+    expect(result.status).toBe("completed");
+    // The partial text stays in the transcript, so "continue" has something to continue from, and
+    // the model is told what happened rather than left to guess why it is being prompted again.
+    const resumed = value.requests[1].messages.slice(-2);
+    expect(resumed[0]).toEqual({ role: "assistant", content: "Here is the plan, step one" });
+    expect(resumed[1].role).toBe("user");
+    expect(resumed[1].content).toContain("output token limit");
+  });
+
+  it("gives up after a bounded number of continuations rather than spending the whole budget on one answer", async () => {
+    const truncated = Array.from({ length: 6 }, () => turn({ finishReason: "length", content: "still going" }));
+    const value = harness(truncated, []);
+    const result = await value.runtime.execute({ ...baseRequest, maxIterations: 6, modelReservationRwf: 10_000 });
+    expect(result.status).toBe("iteration_limit");
+    expect(result.summary).toContain("output limit");
+    // Three continuations means four model calls in total, not the six the loop would have allowed.
+    expect(value.executed()).toBe(4);
+  });
+
   it("preserves native structured history and refuses orphaned tool results", async () => {
     const value = harness([turn({ finishReason: "stop", content: "continued" })], []);
     const history = [
@@ -448,5 +477,210 @@ describe("oversized tool results", () => {
 
     expect(result.messages.find((message) => message.role === "tool")?.content).toBe("2 passed");
     expect(spy.puts).toHaveLength(0);
+  });
+});
+
+/**
+ * What a tool result costs the transcript.
+ *
+ * These are the properties that decide whether an agent finishes a long task or dies of context
+ * exhaustion, and each one was measured wrong before: eviction that cost more than it saved, the
+ * same output paid for twice, and eight parallel calls appending a whole context window in one step.
+ */
+describe("what a tool result costs the transcript", () => {
+  function sizedTool(output: string, name = "run_command"): AgentTool[] {
+    return [{
+      name,
+      description: "Runs a command",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      // Read-only on purpose: this describes what a *result* costs, and a workspace effect would
+      // pull the verification nudges into every one of these runs and measure something else.
+      capabilityId: "workspace.files",
+      effect: "none",
+      requiresApproval: false,
+      parallelSafe: true,
+      async execute() { return { content: output }; },
+    }];
+  }
+
+  function callFor(name: string, id: string) {
+    return { id, name, arguments: {} };
+  }
+
+  function store() {
+    const puts: string[] = [];
+    return {
+      puts,
+      store: {
+        async put(input: { toolName: string; content: string }) {
+          puts.push(input.content);
+          return { path: `.nova/artifacts/${input.toolName}-abc123456789.txt`, bytes: input.content.length, lines: input.content.split("\n").length, elided: false };
+        },
+      } as ToolResultArtifactStore,
+    };
+  }
+
+  it("sends a result whole when evicting it would cost more than it saves", async () => {
+    // Just over the per-call budget: the excerpt would save a few hundred characters and then
+    // invite a read_file worth thousands. Measured at 40,000 that trade was 35x worse.
+    const output = "x".repeat(Math.floor(baseRequest.maxToolResultChars * 1.4));
+    const spy = store();
+    const value = harness(
+      [turn({ finishReason: "tool_calls", toolCalls: [callFor("run_command", "c1")] }), turn({ content: "done" }), turn({ content: "done" })],
+      sizedTool(output),
+      true,
+      spy.store,
+    );
+    const result = await value.runtime.execute(baseRequest);
+    const toolMessage = result.messages.find((message) => message.role === "tool");
+    expect(toolMessage?.content).toBe(output);
+    expect(spy.puts).toHaveLength(0);
+  });
+
+  it("still evicts when the result is genuinely large, and spends a fraction of the budget on the excerpt", async () => {
+    const output = ["START", ...Array(5_000).keys()].join("\n") + "\nEND";
+    const spy = store();
+    const value = harness(
+      [turn({ finishReason: "tool_calls", toolCalls: [callFor("run_command", "c1")] }), turn({ content: "done" }), turn({ content: "done" })],
+      sizedTool(output),
+      true,
+      spy.store,
+    );
+    const result = await value.runtime.execute(baseRequest);
+    const toolMessage = result.messages.find((message) => message.role === "tool");
+    expect(spy.puts[0]).toBe(output);
+    expect(toolMessage?.content).toContain(".nova/artifacts/run_command-abc123456789.txt");
+    // Head and tail both survive — the end is the half that says what failed.
+    expect(toolMessage?.content).toContain("START");
+    expect(toolMessage?.content).toContain("END");
+    expect(toolMessage!.content.length).toBeLessThanOrEqual(baseRequest.maxToolResultChars);
+  });
+
+  it("references an identical earlier result instead of paying for it twice", async () => {
+    const output = "y".repeat(6_000);
+    const spy = store();
+    const value = harness(
+      [
+        turn({ finishReason: "tool_calls", toolCalls: [callFor("run_command", "c1")] }),
+        turn({ finishReason: "tool_calls", toolCalls: [callFor("run_command", "c2")] }),
+        turn({ content: "done" }),
+        turn({ content: "done" }),
+      ],
+      sizedTool(output),
+      true,
+      spy.store,
+    );
+    const result = await value.runtime.execute({ ...baseRequest, maxTotalToolResultChars: 40_000 });
+    const toolMessages = result.messages.filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(2);
+    expect(toolMessages[1].content).toMatch(/identical to the earlier run_command result/i);
+    // The saving is the whole point: the second copy costs a line, not the payload.
+    expect(toolMessages[1].content.length).toBeLessThan(400);
+  });
+
+  it("bounds what a single iteration can append, however many calls it made", async () => {
+    const output = "z".repeat(3_000);
+    const tools = ["alpha", "beta", "gamma", "delta"].map((name) => sizedTool(output, name)[0]);
+    const value = harness(
+      [
+        turn({
+          finishReason: "tool_calls",
+          toolCalls: [callFor("alpha", "c1"), callFor("beta", "c2"), callFor("gamma", "c3"), callFor("delta", "c4")],
+        }),
+        turn({ content: "done" }),
+        turn({ content: "done" }),
+      ],
+      tools,
+      true,
+    );
+    const request = { ...baseRequest, maxToolResultChars: 4_000, maxTotalToolResultChars: 40_000 };
+    const result = await value.runtime.execute(request);
+    const appended = result.messages.filter((message) => message.role === "tool").reduce((sum, message) => sum + message.content.length, 0);
+    // A quarter of the total allowance is the per-iteration ceiling; four 3,000-char results would
+    // otherwise have landed 12,000 characters in one step.
+    expect(appended).toBeLessThanOrEqual(Math.max(request.maxToolResultChars, request.maxTotalToolResultChars / 4));
+  });
+});
+
+describe("effort", () => {
+  it("carries a run's effort into every model call, and sends nothing when unset", async () => {
+    // Reasoning tokens bill as output and share the output budget, so this is a spend control.
+    // It belongs to the run: a delegated sub-task is cheap work from its first call to its last.
+    const cheap = harness([turn({ content: "done" })], []);
+    await cheap.runtime.execute({ ...baseRequest, effort: "low" });
+    expect(cheap.requests.every((request) => request.effort === "low")).toBe(true);
+
+    const ordinary = harness([turn({ content: "done" })], []);
+    await ordinary.runtime.execute(baseRequest);
+    // Absent, not "high": the provider's own default is the right answer and second-guessing it
+    // would cost quality on exactly the requests that need it.
+    expect(ordinary.requests.every((request) => request.effort === undefined)).toBe(true);
+  });
+});
+
+describe("what a nudge costs", () => {
+  /**
+   * Every nudge re-sends the whole transcript, so the expensive part of a nudge is never its text —
+   * it is how many round trips deliver it. What the runtime must not do is walk up the evidence
+   * ladder one question per model call.
+   */
+  it("asks for tests and for an assembled-program check in one message, not two round trips", async () => {
+    const checkTool: AgentTool[] = [{
+      name: "run_command",
+      description: "Runs a command",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      capabilityId: "workspace.terminal",
+      effect: "workspace",
+      requiresApproval: false,
+      parallelSafe: false,
+      async execute() {
+        return { content: "exit 0", verification: { passed: true, kind: "check" as const, scope: "targeted" as const, summary: "tsc exited 0" } };
+      },
+    }];
+    const value = harness(
+      [
+        turn({ finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "run_command", arguments: {} }] }),
+        turn({ content: "Typecheck passes." }),
+        turn({ content: "Still just a typecheck." }),
+      ],
+      checkTool,
+      true,
+    );
+    const result = await value.runtime.execute(baseRequest);
+
+    const asks = result.messages.filter((message) => message.role === "user" && message.content.startsWith("That build/typecheck"));
+    expect(asks).toHaveLength(1);
+    // The behaviour rung rides along in the same message rather than costing a second model call.
+    expect(asks[0].content).toContain("Your unit tests pass");
+    const behaviourAlone = result.messages.filter((message) => message.role === "user" && message.content.startsWith("Your unit tests pass"));
+    expect(behaviourAlone).toHaveLength(0);
+  });
+
+  it("asks for verification at most twice, and never gives up on the run", async () => {
+    const writer: AgentTool[] = [{
+      name: "write_file",
+      description: "Writes a file",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      capabilityId: "workspace.files",
+      effect: "workspace",
+      requiresApproval: false,
+      parallelSafe: false,
+      async execute() { return { content: "written" }; },
+    }];
+    const value = harness(
+      [
+        turn({ finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "write_file", arguments: {} }] }),
+        turn({ content: "All done." }),
+        turn({ content: "Still done." }),
+        turn({ content: "Really done." }),
+      ],
+      writer,
+      true,
+    );
+    const result = await value.runtime.execute(baseRequest);
+    const asks = result.messages.filter((message) => message.role === "user" && message.content.startsWith("You changed the workspace"));
+    // A model that never verifies still terminates, and the gate reports what happened.
+    expect(asks).toHaveLength(2);
+    expect(result.status).toBe("needs_verification");
   });
 });

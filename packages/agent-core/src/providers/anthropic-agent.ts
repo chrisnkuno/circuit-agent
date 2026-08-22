@@ -1,5 +1,6 @@
 import type { AgentMessage, AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "../agent-runtime";
 import type { ModelUsage } from "./model";
+import { capabilitiesFor, type ModelCapabilities } from "./model-capabilities";
 
 /**
  * Anthropic Messages API adapter.
@@ -241,10 +242,13 @@ function withBlockBreakpoint(message: AnthropicMessage): AnthropicMessage {
 
 export class AnthropicAgentTurnProvider implements AgentTurnProvider {
   private readonly call: MessagesCall;
+  /** Read from the published table for this model id, so the session can size its own budgets. */
+  readonly capabilities: ModelCapabilities;
 
   constructor(private readonly options: AnthropicAgentOptions, call?: MessagesCall) {
     if (!options.apiKey.trim()) throw new Error("ANTHROPIC_API_KEY is required");
     if (!options.model.trim()) throw new Error("ANTHROPIC_MODEL is required");
+    this.capabilities = capabilitiesFor(options.model);
     if (call) this.call = call;
     else {
       // The SDK is loaded on first use, not at module load. It is an optional peer dependency, and
@@ -283,8 +287,17 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
       tools,
       // Deliberately no `temperature`: the current Opus and Sonnet models reject sampling
       // parameters outright, and prompting is the supported way to steer them.
+      // Sent only when the caller asked for a specific effort *and* this model accepts the field.
+      // `output_config` is not a header or an extra body property — it is a first-class request
+      // parameter, and effort lives inside it rather than at the top level.
+      ...(request.effort && this.capabilities.supportsEffort ? { output_config: { effort: request.effort } } : {}),
       metadata: { user_id: request.safetyIdentifier },
-      ...(request.onTextDelta ? { stream: true } : {}),
+      // Streaming is unconditional, not a rendering choice. `max_tokens` is now sized from what the
+      // model can actually write (64K on a current Opus or Sonnet), and an unstreamed reply that
+      // large hits the SDK's HTTP timeout before it finishes — the request is billed and the answer
+      // is lost. A caller that passes no `onTextDelta` simply gets the collected turn, exactly as
+      // before; nothing above this line can tell the difference.
+      stream: true,
     }, AbortSignal.timeout(this.options.timeoutMs ?? 180_000));
 
     const response = Symbol.asyncIterator in Object(raw)
@@ -314,15 +327,18 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
       };
     }
 
-    const finishReason = toolCalls.length > 0 ? "tool_calls" : response.stop_reason === "max_tokens" ? undefined : "stop";
-    if (!finishReason) throw new Error(`Model response ended with stop reason ${response.stop_reason}`);
+    // `max_tokens` is Anthropic's name for the Chat Completions `length`: a successful response
+    // that stopped early because the output budget ran out. It is checked before the tool calls
+    // because a `tool_use` block that was still being written has a half-received `input`, and the
+    // runtime must ask for that call again rather than execute a guess at what it would have been.
+    const finishReason = response.stop_reason === "max_tokens" ? "length" : toolCalls.length > 0 ? "tool_calls" : "stop";
 
     return {
       responseId: response.id,
       model: response.model,
       finishReason,
       content: text,
-      toolCalls,
+      toolCalls: finishReason === "length" ? [] : toolCalls,
       usage: usageOf(response),
     };
   }

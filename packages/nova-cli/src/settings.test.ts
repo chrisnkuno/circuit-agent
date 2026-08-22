@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SETTING_FIELDS, loadSettings, maskSetting, mergedEnvironment, runSettingsMenu, saveSettings, settingsDirectory, validateSetting, type SettingKey } from "./settings";
+import { PROVIDER_IDS } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { MODEL_FIELD_PROVIDER, SETTING_FIELDS, loadSettings, maskSetting, mergedEnvironment, runSettingsMenu, saveSettings, settingsDirectory, validateSetting, type SettingChoice, type SettingKey } from "./settings";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))); });
@@ -217,5 +218,137 @@ describe("the first run someone actually sees", () => {
     const { written, prompts } = scriptedPrompts(["q"]);
     await runSettingsMenu({}, prompts);
     expect(written.join("")).toContain("Microphone device override");
+  });
+});
+
+/**
+ * The one field whose valid answers Nova cannot know.
+ *
+ * A country code is a fact this build holds; a model id is not. It belongs to the provider, it
+ * changes with no release of Nova, and the key needed to ask for it has — by the time this field
+ * is opened — just been typed into the field above. These tests pin that the menu asks at that
+ * moment, asks with the unsaved values, and stays a working free-text field when it cannot.
+ */
+describe("picking a model in the settings menu", () => {
+  /**
+   * A chooser that walks a script.
+   *
+   * Passing `choose` at all turns the whole menu arrow-driven, field list included, so a test that
+   * wants to reach a model field has to answer the field list too. Each step either names a
+   * setting key (pick that field) or a model id (pick that model); `undefined` dismisses.
+   */
+  function scriptedChooser(steps: readonly (SettingKey | "done" | string)[]) {
+    const remaining = [...steps];
+    const opened: string[] = [];
+    const choose = async <T,>(request: { title: string; items: readonly { value: T; label: string }[] }): Promise<T | undefined> => {
+      opened.push(request.title);
+      const step = remaining.shift();
+      if (step === undefined) return undefined;
+      const match = request.items.find((item) => {
+        const value = item.value as unknown;
+        if (step === "done") return typeof value === "object" && value !== null && (value as { kind?: string }).kind === "done";
+        if (typeof value === "object" && value !== null && "key" in (value as object)) return (value as { key: string }).key === step;
+        return value === step;
+      });
+      return match?.value;
+    };
+    return { choose, opened };
+  }
+
+  it("offers what the provider reports, asked with the key still being typed", async () => {
+    let askedWith: string | undefined;
+    const { choose } = scriptedChooser(["ANTHROPIC_MODEL", "claude-vega-6-20270114", "done"]);
+    const result = await runSettingsMenu({ ANTHROPIC_API_KEY: "sk-pasted-just-now" }, {
+      ask: async () => "q",
+      askSecret: async () => "q",
+      write: () => undefined,
+      choose,
+    }, {
+      modelChoices: async (field, settings) => {
+        // The unsaved key is the point: "paste a key, then pick a model" has to work in one visit.
+        askedWith = settings.ANTHROPIC_API_KEY;
+        expect(field).toBe("ANTHROPIC_MODEL");
+        // An id no catalog knows — the only kind whose presence proves the list came from the
+        // provider rather than from what this build was compiled knowing.
+        return [{ value: "claude-vega-6-20270114", label: "claude-vega-6-20270114" }] satisfies SettingChoice[];
+      },
+    });
+
+    expect(askedWith).toBe("sk-pasted-just-now");
+    expect(result.ANTHROPIC_MODEL).toBe("claude-vega-6-20270114");
+  });
+
+  it("falls back to typing when the provider cannot be asked", async () => {
+    // No key yet, no network, a provider that is down — all arrive here as an empty list, and the
+    // field has to remain a complete way to set a model rather than a menu with nothing in it.
+    const answers = ["gpt-5.6-terra"];
+    const { choose, opened } = scriptedChooser(["OPENAI_MODEL", "done"]);
+    const result = await runSettingsMenu({}, {
+      ask: async () => answers.shift() ?? "q",
+      askSecret: async () => "q",
+      write: () => undefined,
+      choose,
+    }, { modelChoices: async () => [] });
+
+    expect(result.OPENAI_MODEL).toBe("gpt-5.6-terra");
+    // The field list opened; no second chooser was painted for the model itself.
+    expect(opened.filter((title) => title === "OpenAI model")).toHaveLength(0);
+  });
+
+  it("does not let a failed fetch take the menu down with it", async () => {
+    const answers = ["gpt-5.6-terra"];
+    const { choose } = scriptedChooser(["OPENAI_MODEL", "done"]);
+    const result = await runSettingsMenu({}, {
+      ask: async () => answers.shift() ?? "q",
+      askSecret: async () => "q",
+      write: () => undefined,
+      choose,
+    }, { modelChoices: async () => { throw new Error("provider unreachable"); } });
+
+    // Reaching the network is the one thing on this menu that can fail for reasons having nothing
+    // to do with the user; it must cost the list, not the settings session.
+    expect(result.OPENAI_MODEL).toBe("gpt-5.6-terra");
+  });
+
+  it("asks only for fields that actually hold a model id", async () => {
+    const answers = ["https://api.example.com/v1"];
+    let asked = 0;
+    const { choose } = scriptedChooser(["OPENAI_BASE_URL", "done"]);
+    await runSettingsMenu({}, {
+      ask: async () => answers.shift() ?? "q",
+      askSecret: async () => "q",
+      write: () => undefined,
+      choose,
+    }, { modelChoices: async () => { asked += 1; return []; } });
+
+    // A base URL is not a model. Reaching the network to open an unrelated field would make every
+    // visit to this menu pay for a request nobody asked for.
+    expect(asked).toBe(0);
+  });
+
+  it("covers every provider Nova can be configured to use", () => {
+    // A provider added with its own `*_MODEL` setting and left out of this map gets a free-text
+    // box and no explanation. The failure is silent, so it is pinned here rather than noticed
+    // later by whoever has to type an exact id from memory.
+    for (const provider of PROVIDER_IDS) {
+      const key = `${provider.toUpperCase()}_MODEL` as SettingKey;
+      if (!SETTING_FIELDS.some((field) => field.key === key)) continue;
+      expect(MODEL_FIELD_PROVIDER[key]).toBe(provider);
+    }
+    expect(Object.keys(MODEL_FIELD_PROVIDER).length).toBeGreaterThan(0);
+  });
+
+  it("leaves a fixed-choice field on its own list, which no fetch may replace", () => {
+    // `modelChoices` widens model fields only. A country list is a fact this build holds, and a
+    // provider has no business supplying it.
+    const fixed = SETTING_FIELDS.filter((field) => "choices" in field && field.choices);
+    for (const field of fixed) expect(MODEL_FIELD_PROVIDER[field.key]).toBeUndefined();
+  });
+
+  it("does not treat every setting whose name ends in _MODEL as a chat model", () => {
+    // `VOICE_MODEL` is a transcription model and `MODEL_PRICE_MODEL` names what a price override
+    // applies to. Offering a chat-model list for either would be a menu of wrong answers.
+    expect(MODEL_FIELD_PROVIDER.VOICE_MODEL).toBeUndefined();
+    expect(MODEL_FIELD_PROVIDER.MODEL_PRICE_MODEL).toBeUndefined();
   });
 });

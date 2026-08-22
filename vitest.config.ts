@@ -1,6 +1,9 @@
 import { configDefaults, defineConfig } from "vitest/config";
 import path from "node:path";
 
+/** The suites that drive a real terminal, kept out of the parallel pool. See `projects` below. */
+const PTY_TESTS = "packages/nova-cli/src/pty/**/*.test.ts";
+
 /**
  * Tests resolve the core package to its source, not its build output.
  *
@@ -22,6 +25,43 @@ export default defineConfig({
     // and an in-progress worktree's half-finished code shouldn't gate this checkout's own suite
     // anyway. Extends vitest's own defaults rather than replacing them — `exclude` is not merged.
     exclude: [...configDefaults.exclude, ".claude/worktrees/**"],
+    /**
+     * Terminal tests get the machine to themselves.
+     *
+     * The pty suites spawn a real `bun run nova.ts` per case — a 32,000-line transpile and a full
+     * agent boot behind a pseudo-terminal — and they assert by *waiting* for a prompt to be
+     * painted. Run alongside every other worker they lose the CPU race and time out, which reads
+     * as a broken feature when it is only a busy machine: the same case passes on its own every
+     * time. That made the whole suite fail intermittently at roughly one run in two, and a suite
+     * that cries wolf every other run is one people stop reading.
+     *
+     * Splitting them into their own project lets that project run its files one at a time while
+     * everything else stays fully parallel. It costs roughly a minute of wall time on the full
+     * run — measured, not guessed — and two forks instead of one was tried and is worse than
+     * either extreme: still contended enough to fail, and slower than serial when it retries.
+     * A suite that is a minute quicker and wrong every other run is not the better trade.
+     */
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "pty",
+          include: [PTY_TESTS],
+          // One worker for the whole project, so these files run one after another. `fileParallelism`
+          // is a root-level option and is ignored here; `singleFork` is the per-project form of the
+          // same idea and is the one that actually takes effect.
+          pool: "forks",
+          poolOptions: { forks: { singleFork: true } },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          exclude: [...configDefaults.exclude, ".claude/worktrees/**", PTY_TESTS],
+        },
+      },
+    ],
     coverage: {
       provider: "v8",
       thresholds: {

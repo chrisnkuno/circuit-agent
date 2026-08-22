@@ -1,10 +1,10 @@
 import type { AgentTurnProvider } from "../agent-runtime";
+import { PROVIDER_IDS, PROVIDER_INFO, catalogPrices, isProviderId, type ProviderEnvironment, type ProviderId, type ProviderInfo } from "./provider-specs";
 import { tokenPrices, type Currency, type TokenPrices } from "../money";
-import { selectPrice, tokenPricesFor } from "../pricing";
+import { priceAliases } from "../pricing";
 import { AnthropicAgentTurnProvider } from "./anthropic-agent";
 import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import { OpenAIAgentTurnProvider } from "./openai-agent";
-import { PRICE_CATALOG } from "./price-catalog";
 
 /**
  * Which model providers Nova can drive, and what their tokens cost.
@@ -16,44 +16,32 @@ import { PRICE_CATALOG } from "./price-catalog";
  * plainly that it cannot price it rather than inventing a number.
  */
 
-export type ProviderId = "anthropic" | "openai" | "circuitnotion" | "ollama";
+// Identity lives in `provider-specs.ts`, which imports no network client — see that file for why.
+// Re-exported here so every existing importer of this module is unaffected.
+export {
+  PROVIDER_IDS,
+  PROVIDER_INFO,
+  catalogPrices,
+  isProviderId,
+  type ProviderEnvironment,
+  type ProviderId,
+  type ProviderInfo,
+} from "./provider-specs";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["anthropic", "openai", "circuitnotion", "ollama"];
-
-export function isProviderId(value: string): value is ProviderId {
-  return (PROVIDER_IDS as readonly string[]).includes(value);
-}
-
-export type ProviderEnvironment = Record<string, string | undefined>;
-
-export type ProviderSpec = {
-  id: ProviderId;
-  label: string;
-  /** Environment variables that must be set for this provider to be usable. */
-  requires: readonly string[];
-  defaultModel: string;
+/** A provider's identity plus the one thing that needs a vendor SDK: constructing a client. */
+export type ProviderSpec = ProviderInfo & {
   create(environment: ProviderEnvironment, model: string): AgentTurnProvider;
 };
 
 /**
- * What the dated catalog says this provider's model costs on a given day.
+ * Every provider, ready to construct.
  *
- * Local inference has no per-model catalog entry — a homelab can pull any model it likes — but its
- * price is not unknown, it is zero: nothing is metered, nothing is billed. Reporting that as
- * "unpriced" would understate confidence in a fact this build is actually certain of.
+ * Spread from `PROVIDER_INFO` rather than restated, so a label or a default model has exactly one
+ * definition and the two halves cannot drift into disagreeing about what a provider is called.
  */
-export function catalogPrices(provider: ProviderId, model: string, asOf?: string): TokenPrices | undefined {
-  if (provider === "ollama") return tokenPrices("USD", 0, 0, 0);
-  const record = selectPrice(PRICE_CATALOG, { provider, model, asOf });
-  return record && record.billingUnit === "tokens" ? tokenPricesFor(record) : undefined;
-}
-
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
   anthropic: {
-    id: "anthropic",
-    label: "Anthropic",
-    requires: ["ANTHROPIC_API_KEY"],
-    defaultModel: "claude-sonnet-5",
+    ...PROVIDER_INFO.anthropic,
     create: (environment, model) =>
       new AnthropicAgentTurnProvider({
         apiKey: environment.ANTHROPIC_API_KEY!.trim(),
@@ -62,10 +50,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       }),
   },
   openai: {
-    id: "openai",
-    label: "OpenAI",
-    requires: ["OPENAI_API_KEY"],
-    defaultModel: "gpt-5.6-terra",
+    ...PROVIDER_INFO.openai,
     create: (environment, model) =>
       new OpenAIAgentTurnProvider({
         apiKey: environment.OPENAI_API_KEY!.trim(),
@@ -74,10 +59,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       }),
   },
   circuitnotion: {
-    id: "circuitnotion",
-    label: "CircuitNotion",
-    requires: ["CIRCUITNOTION_API_KEY"],
-    defaultModel: "gpt-5.6-luna",
+    ...PROVIDER_INFO.circuitnotion,
     create: (environment, model) =>
       new CircuitNotionAgentTurnProvider({
         apiKey: environment.CIRCUITNOTION_API_KEY!.trim(),
@@ -86,14 +68,8 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
         relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined,
       }),
   },
-  // No key required — an Ollama daemon accepts anything in the Authorization header — so this
-  // provider is always "configured" and only fails at call time if nothing is listening on the
-  // base URL, the same way a bad OPENAI_BASE_URL override would.
   ollama: {
-    id: "ollama",
-    label: "Ollama (local)",
-    requires: [],
-    defaultModel: "llama3.1",
+    ...PROVIDER_INFO.ollama,
     create: (environment, model) =>
       new OpenAIAgentTurnProvider({
         apiKey: "ollama",
@@ -185,9 +161,13 @@ export function resolveProvider(
  * when they set them; switching away from that model correctly drops back to the catalog.
  */
 function overrideApplies(spec: ProviderSpec, model: string, environment: ProviderEnvironment): boolean {
+  // Compared against the model's version aliases, the same way the catalog is looked up: someone
+  // who wrote down a rate for `claude-sonnet-5` means it for the dated snapshot of it they are
+  // actually served, and an exact-string test silently drops their rate the moment they pin one.
+  const aliases = priceAliases(model);
   const named = environment.MODEL_PRICE_MODEL?.trim();
-  if (named) return named === model;
-  return (environment[`${spec.id.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel) === model;
+  if (named) return aliases.includes(named);
+  return aliases.includes(environment[`${spec.id.toUpperCase()}_MODEL`]?.trim() || spec.defaultModel);
 }
 
 /**

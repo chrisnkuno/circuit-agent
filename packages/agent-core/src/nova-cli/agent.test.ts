@@ -171,18 +171,20 @@ describe("NovaAgent", () => {
     expect(system?.content).toContain("NOVA.md");
   });
 
-  it("carries the security playbooks in the system prompt when running in defender mode, and offers the write/terminal tools", async () => {
+  it("indexes the security playbooks in defender mode, and offers the write/terminal/playbook tools", async () => {
     const model = scriptedModel([{ finishReason: "stop", content: "No critical findings." }]);
     const agent = new NovaAgent({ root, model, prices, mode: "defender", approve: async () => "deny" });
     await agent.send("review this project for security issues");
 
     const system = model.requests[0].messages.find((message) => message.role === "system");
     expect(system?.content).toContain("DEFENDER mode");
-    expect(system?.content).toContain("## Injection");
-    expect(system?.content).toContain("## Secrets & credential hygiene");
+    // The playbook index rather than 44,000 characters of playbook, with the tool that fetches one.
+    expect(system?.content).toContain("injection");
+    expect(system?.content).toContain("secrets-credential-hygiene");
     const tools = model.requests[0].tools.map((tool) => tool.name);
     expect(tools).toContain("write_file");
     expect(tools).toContain("run_command");
+    expect(tools).toContain("read_playbook");
   });
 
   it("runs delegate_task as a real bounded sub-agent, and folds its cost into the turn total", async () => {
@@ -518,5 +520,124 @@ describe("NovaAgent", () => {
     expect(result).toMatchObject({ status: "iteration_limit", actualModelRwf: 0, iterations: 0 });
     expect(result.summary).toContain("approved model budget");
     expect(model.requests).toHaveLength(0);
+  });
+});
+
+describe("the budgets a session runs with", () => {
+  /** A provider that reports what its model can do, like the real ones now do. */
+  function providerWith(capabilities: { contextWindow: number; maxOutputTokens: number; supportsEffort: boolean } | undefined) {
+    return {
+      capabilities,
+      async complete() {
+        return { responseId: "r", model: "m", finishReason: "stop" as const, content: "done", toolCalls: [], usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, reasoningTokens: 0 } };
+      },
+    };
+  }
+
+  it("takes the model's real window instead of the 200K floor", async () => {
+    const agent = new NovaAgent({ root, model: providerWith({ contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true }) as never, prices, mode: "build", approve: async () => "allow" });
+    // Exposed through the same accessor the runtime reads, so this asserts what a turn actually uses.
+    expect(agent.budgetSnapshot.contextLimit).toBe(1_000_000);
+    // Capped well below the model's own ceiling: the output budget is reserved out of the context
+    // budget, so asking for all 128K would permanently spend an eighth of the window.
+    expect(agent.budgetSnapshot.maxOutputTokens).toBe(64_000);
+    await agent.dispose();
+  });
+
+  it("never asks a small model for more than it can write", async () => {
+    const agent = new NovaAgent({ root, model: providerWith({ contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false }) as never, prices, mode: "build", approve: async () => "allow" });
+    expect(agent.budgetSnapshot).toMatchObject({ contextLimit: 200_000, maxOutputTokens: 16_000 });
+    await agent.dispose();
+  });
+
+  it("falls back to the conservative default for a provider that cannot say", async () => {
+    const agent = new NovaAgent({ root, model: providerWith(undefined) as never, prices, mode: "build", approve: async () => "allow" });
+    expect(agent.budgetSnapshot).toMatchObject({ contextLimit: 200_000, maxOutputTokens: 16_000 });
+    await agent.dispose();
+  });
+
+  it("lets an explicit caller budget win over the model's own figures", async () => {
+    const agent = new NovaAgent({
+      root,
+      model: providerWith({ contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true }) as never,
+      prices,
+      mode: "build",
+      approve: async () => "allow",
+      budgets: { contextLimit: 50_000, maxOutputTokens: 4_000 },
+    });
+    expect(agent.budgetSnapshot).toMatchObject({ contextLimit: 50_000, maxOutputTokens: 4_000 });
+    await agent.dispose();
+  });
+});
+
+describe("the cached prompt prefix", () => {
+  it("stays byte-identical across turns while recalled memory rides with the objective", async () => {
+    // Prompt caching is a strict prefix match over tools → system → messages. Memory is selected by
+    // overlap with *this turn's* objective, so putting it in the system block re-wrote the prefix
+    // every turn and invalidated the cache for the whole transcript beneath it.
+    await fs.mkdir(path.join(root, ".nova"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, ".nova", "memory.md"),
+      "- the deployment pipeline runs on netlify\n- the database migrations live in convex\n",
+    );
+    const model = scriptedModel([{ content: "First." }, { content: "Second." }]);
+    const agent = new NovaAgent({
+      root, model, prices, mode: "build",
+      approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+
+    await agent.send("tell me about the netlify deployment pipeline");
+    await agent.send("tell me about the convex database migrations");
+
+    const systemOf = (request: (typeof model.requests)[number]) =>
+      request.messages.find((message) => message.role === "system")?.content ?? "";
+    expect(systemOf(model.requests[0])).toBe(systemOf(model.requests[1]));
+    expect(systemOf(model.requests[0])).not.toMatch(/durable memory/i);
+
+    // The memory still reaches the model — attached to the turn that asked for it.
+    const userMessages = model.requests[1].messages.filter((message) => message.role === "user").map((message) => message.content);
+    expect(userMessages.join("\n")).toMatch(/durable memory/i);
+    await agent.dispose();
+  });
+});
+
+describe("tool-result allowances", () => {
+  it("scale with the window, and reproduce the old fixed numbers at a 200K one", async () => {
+    const small = new NovaAgent({
+      root,
+      model: { capabilities: { contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false }, async complete() { throw new Error("unused"); } } as never,
+      prices, mode: "build", approve: async () => "allow",
+    });
+    expect(small.budgetSnapshot.maxToolResultChars).toBe(40_000);
+    expect(small.budgetSnapshot.maxTotalToolResultChars).toBe(400_000);
+    await small.dispose();
+
+    const large = new NovaAgent({
+      root,
+      model: { capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true }, async complete() { throw new Error("unused"); } } as never,
+      prices, mode: "build", approve: async () => "allow",
+    });
+    // A bigger model must not read less of a file than a smaller one, which a fixed cap guaranteed.
+    expect(large.budgetSnapshot.maxToolResultChars).toBe(200_000);
+    expect(large.budgetSnapshot.maxTotalToolResultChars).toBe(2_000_000);
+    await large.dispose();
+  });
+
+  it("actually runs a turn on a 1M-context model, budgets and all", async () => {
+    // The budgets travel into the runtime, which validates them. Asserting the numbers without
+    // executing a turn missed exactly that: the runtime's own ceiling rejected the figures a 1M
+    // model derives, so the session died on its first request with a bounds error.
+    const model = scriptedModel([{ content: "Done." }]);
+    const agent = new NovaAgent({
+      root,
+      model: Object.assign(model, { capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } }),
+      prices, mode: "build", approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+    const result = await agent.send("say hello");
+    expect(result.status).not.toBe("failed");
+    expect(model.requests[0].maxOutputTokens).toBeGreaterThan(16_000);
+    await agent.dispose();
   });
 });

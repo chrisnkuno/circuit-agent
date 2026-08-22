@@ -1,6 +1,6 @@
 # Installing Nova CLI
 
-Nova is a coding agent that runs in your terminal. It is published to the public npm registry as **`@circuit-nova/nova-cli`** (currently `0.9.4`) and installs a single `nova` binary.
+Nova is a coding agent that runs in your terminal. It is published to the public npm registry as **`@circuit-nova/nova-cli`** (currently `1.1.0`) and installs a single `nova` binary.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ If the shell reports `nova: command not found`, your package manager's global bi
 To try it once, or to pin a version inside CI:
 
 ```bash
-npx  @circuit-nova/nova-cli@0.9.4 --version
+npx  @circuit-nova/nova-cli@1.1.0 --version
 bunx @circuit-nova/nova-cli --providers
 ```
 

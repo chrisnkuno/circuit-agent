@@ -1,6 +1,6 @@
 import type { CodingPlan } from "../coding-prompt";
 
-export type ModelReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ModelReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type ModelUsage = {
   inputTokens: number;

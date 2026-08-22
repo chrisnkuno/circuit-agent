@@ -30,8 +30,16 @@ describe("mode capabilities", () => {
     expect(capabilitiesForMode("build")).toContain(NOVA_CAPABILITIES.terminal);
   });
 
-  it("gives defender mode the full tool set, since it has to be able to run a scanner and propose a fix", () => {
-    expect(capabilitiesForMode("defender")).toEqual(capabilitiesForMode("build"));
+  it("gives defender mode everything build has, plus the playbooks only it can read", () => {
+    // A scanner that cannot run `npm audit`, grep the tree, or propose the one-line fix is a report
+    // generator. What keeps that safe is `decide()` never auto-approving it, not a smaller tool set.
+    for (const capability of capabilitiesForMode("build")) {
+      expect(capabilitiesForMode("defender")).toContain(capability);
+    }
+    // The one capability build does not get: the playbooks left the system prompt and became a
+    // tool, and only the mode that reviews security has any use for it.
+    expect(capabilitiesForMode("defender")).toContain(NOVA_CAPABILITIES.playbooks);
+    expect(capabilitiesForMode("build")).not.toContain(NOVA_CAPABILITIES.playbooks);
   });
 });
 

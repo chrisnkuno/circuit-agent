@@ -28,13 +28,41 @@ export type StubToolCallTurn = {
 
 export type StubTurn = StubTextTurn | StubToolCallTurn;
 
+/** One request as the CLI actually sent it, for tests that assert on what the model was told. */
+export type StubRequest = {
+  model?: string;
+  system?: unknown;
+  messages: Array<{ role: string; content: unknown }>;
+};
+
 export type AnthropicStub = {
   readonly url: string;
   /** Queues one scripted response per incoming request, consumed in arrival order. */
   enqueue(turn: StubTurn): void;
   requestCount(): number;
+  /** Every request body received so far, in arrival order. */
+  requests(): StubRequest[];
+  /** Replaces what `GET /v1/models` lists. Empty means the endpoint answers with no models. */
+  setModels(ids: readonly string[]): void;
+  /** How many times the model list has been asked for. */
+  modelListCount(): number;
   close(): Promise<void>;
 };
+
+/**
+ * What `GET /v1/models` lists unless a test says otherwise.
+ *
+ * Deliberately not the ids in the price catalog: the whole point of asking a provider what it has
+ * is to discover models this build was not compiled knowing about, so a stub that only ever
+ * returns familiar ids cannot tell a working fetch from one whose result is being dropped.
+ */
+export const STUB_MODELS = [
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-fable-5",
+  "claude-vega-6-20270114", // not in any catalog: proves a live id survives to the caller
+  "text-embedding-3-large", // not conversational: proves the caller filters
+] as const;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,27 +77,58 @@ function chunksOf(text: string, size: number): string[] {
 
 export function startAnthropicStub(): Promise<AnthropicStub> {
   const queue: StubTurn[] = [];
+  const received: StubRequest[] = [];
   let requests = 0;
+  let modelIds: string[] = [...STUB_MODELS];
+  let modelListRequests = 0;
 
   const server = http.createServer((req, res) => {
+    // The model list, which is not an optional extra: a key is validated by asking for it, and the
+    // model picker is populated from it. A stub that serves only `/v1/messages` makes every caller
+    // that checks a key look like a caller talking to a provider that is down.
+    if (req.method === "GET" && req.url?.replace(/\?.*$/, "").endsWith("/models")) {
+      req.resume();
+      modelListRequests += 1;
+      const body = JSON.stringify({ data: modelIds.map((id) => ({ id, type: "model" })) });
+      res.writeHead(200, { "content-type": "application/json" }).end(body);
+      return;
+    }
     if (req.method !== "POST" || !req.url?.startsWith("/v1/messages")) {
       res.writeHead(404).end();
       return;
     }
-    // The SDK sends its body before the handler needs it — this stub scripts by call order, not
-    // content, but the request stream still has to be drained or the socket never completes.
-    req.resume();
-    requests += 1;
-    const turn = queue.shift() ?? { kind: "text", text: "(stub had no scripted response queued)" };
+    // The request stream has to be drained either way or the socket never completes. Kept rather
+    // than discarded because *what the model was told* is the only external evidence of some
+    // behaviour — a resumed session is indistinguishable from a fresh one until you look at
+    // whether the earlier transcript was actually sent.
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk: string) => { raw += chunk; });
+    req.on("end", () => {
+      let body: StubRequest = { messages: [] };
+      try {
+        const parsed = JSON.parse(raw) as StubRequest;
+        body = { ...parsed, messages: Array.isArray(parsed.messages) ? parsed.messages : [] };
+      } catch {
+        // Left as the empty request: a test asserting on what was sent should see nothing rather
+        // than a plausible-looking guess.
+      }
+      received.push(body);
+      requests += 1;
+      const turn = queue.shift() ?? { kind: "text", text: "(stub had no scripted response queued)" };
 
-    void respond(res, requests, turn).catch(() => {
-      // The pty test that owns this response has already moved on (turn cancelled, process
-      // exited); nothing downstream is listening for a write error on a half-closed socket.
-      res.destroy();
+      // Answering only once the body has arrived, so the reply can echo the model that was asked
+      // for. The real API does that, and a caller pricing a turn from the model named in the
+      // response gets a name its rate card has never heard of if the stub invents one instead.
+      void respond(res, requests, turn, body.model ?? "claude-stub").catch(() => {
+        // The pty test that owns this response has already moved on (turn cancelled, process
+        // exited); nothing downstream is listening for a write error on a half-closed socket.
+        res.destroy();
+      });
     });
   });
 
-  async function respond(res: http.ServerResponse, requestIndex: number, turn: StubTurn): Promise<void> {
+  async function respond(res: http.ServerResponse, requestIndex: number, turn: StubTurn, model: string): Promise<void> {
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -82,7 +141,7 @@ export function startAnthropicStub(): Promise<AnthropicStub> {
     const messageId = `msg_stub_${requestIndex}`;
     send("message_start", {
       type: "message_start",
-      message: { id: messageId, type: "message", role: "assistant", model: "claude-stub", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 0 } },
+      message: { id: messageId, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 0 } },
     });
 
     let index = 0;
@@ -124,6 +183,9 @@ export function startAnthropicStub(): Promise<AnthropicStub> {
         url: `http://127.0.0.1:${port}`,
         enqueue: (turn) => queue.push(turn),
         requestCount: () => requests,
+        requests: () => received.map((request) => ({ ...request, messages: [...request.messages] })),
+        setModels: (ids) => { modelIds = [...ids]; },
+        modelListCount: () => modelListRequests,
         close: () => new Promise((res) => server.close(() => res())),
       });
     });

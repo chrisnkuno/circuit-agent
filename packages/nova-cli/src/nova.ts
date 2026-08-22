@@ -5,23 +5,24 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { NovaAgent, type NovaEvent } from "@circuit-nova/nova-core/nova-cli/agent";
 import { runAcpServer } from "./acp-server";
+import { priceSessionModelTurns, readSessionModelTurns } from "./resumed-spend";
 import { renderGallery } from "./gallery";
 import { displayMask, fixObjective } from "./defender-screen";
-import { CommandUsage, navSignals, rankWithContext, renderAsks, renderGroupedHelp, renderHint, renderRecovery, renderStarters, renderSuggestions, type NavContext } from "./navigation";
+import { CommandUsage, isEssential, navSignals, rankWithContext, renderAsks, renderEssentials, renderGroupedHelp, renderHint, renderRecovery, renderStarters, renderSuggestions, type NavContext } from "./navigation";
 import { askModelForSuggestions, mergeModelSuggestions, type Suggestion as EngineSuggestion } from "@circuit-nova/nova-core/nova-cli/suggestions";
 import type { ModelUsage } from "@circuit-nova/nova-core/providers/model";
 import { NovaSessionDaemon, type DaemonApprovalRequest, type DaemonNotification, type NovaDaemonClient } from "@circuit-nova/nova-core/nova-cli/daemon";
 import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-cli/permissions";
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
 import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
-import { describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
+import { catalogPrices, describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
 import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
 import { CostLedger } from "@circuit-nova/nova-core/nova-cli/cost";
 import { EXIT_CODES, HeadlessEmitter, exitCodeForStatus } from "./headless";
-import { buildModelCatalog, describePrice, matchModelQuery, parseModelCommand, type ModelChoice } from "./models";
+import { buildModelCatalog, describePrice, matchModelQuery, modelsForProvider, parseModelCommand, type ModelChoice } from "./models";
 import { buildPickerRows, type PickerResult } from "./model-picker";
 import { INITIAL_TABLE_STATE, renderTable } from "./table";
 import { buildCostTable, buildJobsTable, buildModelTable } from "./tables";
@@ -43,12 +44,12 @@ import { hostOf, providerBaseUrl } from "./endpoints";
 import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
 import { classifyNetworkError } from "./network";
 import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
-import { SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingKey, type SettingsPrompts } from "./settings";
+import { MODEL_FIELD_PROVIDER, SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingChoice, type SettingKey, type SettingsPrompts } from "./settings";
 import { loadHistory, saveHistory } from "./history";
 import { renderTabStrip, parseTabCommand, SEQUENTIAL_TABS_NOTE, shortModel, WorkspaceController } from "./tabs";
 import { OutputRouter, TabSink, replayLines, terminalStream } from "./output";
 import { renderPatch } from "./patch-view";
-import { fetchableProviders, isCacheFresh, loadLiveModels, readModelCache } from "./model-fetch";
+import { fetchProviderModels, fetchableProviders, isCacheFresh, loadLiveModels, mergeModelLists, readModelCache } from "@circuit-nova/nova-core/providers/model-fetch";
 import { JobStream, WatchRegistry, sandboxWarning } from "./job-stream";
 import { PaneActivity, tabPanes, type WorkspaceSnapshot } from "./workspace-model";
 import { explainScreenRefusal, withFullScreen, type ScreenCapabilities, type TerminalControls } from "./screen-host";
@@ -72,6 +73,8 @@ import {
 } from "@circuit-nova/nova-core";
 import { runJobWorkerForever, workerId } from "./job-worker";
 import { parseAttachCommand, parseDetachCommand, parseJobsCommand } from "./jobs-command";
+import { BILLING_NOT_CONFIGURED, parsePayCommand, renderBalance, renderCheckout, renderPaymentOutcome, renderTopUpQuote } from "./pay";
+import { BillingError, billingFromEnvironment, newIdempotencyKey, waitForPayment } from "@circuit-nova/nova-core/nova-cli/billing";
 import { IMPLICIT_SKILL_PROVIDER_ID } from "@circuit-nova/nova-core";
 import { renderTools } from "./tools-command";
 import { removeRecording, startRecording, transcribeAudio } from "./voice";
@@ -362,9 +365,24 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 // A function, not a constant: it is built after `configureRendering` has learned whether the
 // destination can render colour at all, which a module-level template literal would predate.
 function helpText(language: ControlLanguage = "en", shortcuts: ReadonlyMap<string, string> = new Map()): string {
+  // The module-level glyph set, which `configureRendering` has already resolved by the time this
+  // is called — the reason this is a function rather than a constant.
+  const star = glyphs.star;
+  // Marked rather than reordered. This page is grepped and piped as often as it is read, so the
+  // rows have to stay where they were; what changes is that a few of them are now findable.
+  const mark = (command: string) => (isEssential(command) ? `${star} ` : "  ");
   return `
 ${style.bold("nova")} — a coding agent in your terminal
 
+${style.bold("Start here")}
+  ${star} nova settings           Paste an API key. Nothing runs until one is saved.
+  ${star} nova                    Start a session, then just describe what you want
+  ${star} nova --resume           Pick up the last session where it stopped
+  ${star} /help                   Inside a session: everything you can do
+  ${star} /undo                   Inside a session: take back the last turn's changes
+  ${style.dim(`Everything below is here when you need it — these five are the ones you need first.`)}
+
+${style.bold("Running it")}
   nova                      Start an interactive session
   nova "add a health check" Run one request and exit
   nova --plan               Plan mode: read and reason, never write
@@ -438,8 +456,8 @@ ${style.bold("Headless output")}
     0 completed   1 failed    2 usage         3 blocked
     4 unverified  5 approval  6 limit hit     7 cancelled
 
-${style.bold("In a session")}
-${renderCommandHelp(language, shortcuts)}
+${style.bold("In a session")}  ${style.dim(`(${star} marks the ones to learn first)`)}
+${renderCommandHelp(language, shortcuts, { mark })}
 `;
 }
 
@@ -1058,6 +1076,49 @@ async function hiddenQuestion(readline: Interface, question: string): Promise<st
  * user, while the common case (no explicit cap) uses whole-currency-units-per-million as a loose
  * backstop, because a guard rail nobody configured should be generous rather than surprising.
  */
+/**
+ * What a model field in the settings menu should offer, asked of the provider itself.
+ *
+ * A model id is the one setting whose valid answers Nova cannot know: they belong to the provider,
+ * they change with no release of Nova, and the key needed to ask for them has — by the time this
+ * field is opened — just been typed into the field above. So this asks, using the settings as they
+ * stand in the menu rather than as they were saved, which is what makes "paste a key, then pick a
+ * model" work in one visit instead of two.
+ *
+ * The catalog stays underneath: it is what knows prices, and it is the whole list when there is no
+ * key yet or the provider cannot be reached. The fetch only ever widens it, and never blocks on
+ * more than one provider — the one whose field is open.
+ */
+async function modelChoicesForSettingsField(
+  field: SettingKey,
+  settings: NovaSettings,
+  processEnvironment: Record<string, string | undefined>,
+  display: Currency,
+  rates: readonly FxRate[],
+): Promise<readonly SettingChoice[]> {
+  const provider = MODEL_FIELD_PROVIDER[field];
+  if (!provider) return [];
+  // The in-progress menu values win over the process environment, so a key pasted a moment ago is
+  // the key this asks with.
+  const environment = mergedEnvironment(settings, processEnvironment);
+  const known = modelsForProvider(provider);
+  const fetched = await fetchProviderModels(provider, environment, globalThis.fetch as never).catch(() => null);
+  const models = mergeModelLists(known, fetched?.models);
+
+  return models.map((model) => {
+    const prices = catalogPrices(provider, model);
+    return {
+      value: model,
+      label: model,
+      // Named rather than left blank: a model this build has no rate for is perfectly usable, and
+      // saying so is different from saying nothing — the cost report will say the same thing later.
+      description: prices
+        ? describePrice(prices, display, (amount) => convertTo(amount, display, rates))
+        : "no published rate — costs will show as unknown",
+    };
+  });
+}
+
 function modelPriceCatalogFor(prices: { inputPerMillion: number; outputPerMillion: number } | undefined, exact: boolean) {
   if (!prices) return { inputRwfPerMillionTokens: 1, outputRwfPerMillionTokens: 1 };
   return exact
@@ -1236,6 +1297,8 @@ async function main(): Promise<number> {
         askSecret: (question) => hiddenQuestion(settingsReadline, question),
         write: (text) => process.stdout.write(text),
         choose: settingsChooser(settingsReadline),
+      }, {
+        modelChoices: (field, current) => modelChoicesForSettingsField(field, current, processEnvironment, "USD", []),
       });
     } catch (error) {
       settingsReadline.close();
@@ -1381,7 +1444,12 @@ async function main(): Promise<number> {
         askSecret: (question) => hiddenQuestion(setupReadline, question),
         write: (text) => process.stdout.write(text),
         choose: settingsChooser(setupReadline),
-      }, { focus: "providers" });
+      }, {
+        focus: "providers",
+        // The whole point of first run: the key was pasted one field ago, so the model field can
+        // be a list of what that key actually reaches rather than an id to be recalled and typed.
+        modelChoices: (field, current) => modelChoicesForSettingsField(field, current, processEnvironment, "USD", []),
+      });
       const file = await saveSettings(savedSettings, processEnvironment);
       out.write(style.dim(`Settings saved to ${file}.\n`));
     } catch (error) {
@@ -1639,6 +1707,36 @@ async function main(): Promise<number> {
     catalog: PRICE_CATALOG,
     ...(approvedBudget ? { budget: approvedBudget } : {}),
   });
+
+  /**
+   * Tells the current tab's ledger what the session being resumed has already spent.
+   *
+   * Without this a budget is a per-process cap wearing a per-session label: the ledger the cap is
+   * checked against starts this process at zero, so every resume hands back the whole allowance.
+   * Rebuilt from the session's event journal rather than read off the record — see
+   * `resumed-spend.ts` for why the record's own running total is not a currency. Reads `ledger`
+   * and `prices` at call time rather than capturing them, because switching tabs replaces both.
+   */
+  const carryResumedSpend = async (record: SessionRecord): Promise<void> => {
+    const turns = await readSessionModelTurns(args.root, record.id).catch((error: unknown) => {
+      // A journal that fails its integrity check is a reason to distrust the figure, not to
+      // invent one. Say so: a budget silently starting over is the failure this exists to prevent.
+      out.write(style.yellow(`  Could not read this session's earlier spend (${error instanceof Error ? error.message : String(error)}); the budget below counts only this run.\n`));
+      return null;
+    });
+    if (!turns || turns.length === 0) return;
+    const { spent, unpriced } = priceSessionModelTurns(turns, {
+      display,
+      rates,
+      // The catalog first, since it knows what each model the session actually used costs; the
+      // current session's own rate card only as a fallback for a model it has never heard of.
+      pricesFor: (model) => catalogPrices(spec.id, model) ?? (model === resolvedModelId ? prices : undefined),
+    });
+    if (unpriced.length > 0) {
+      out.write(style.yellow(`  No published rate for ${unpriced.join(", ")}; this session's earlier spend is counted as at least what is shown.\n`));
+    }
+    if (spent && spent.micros > 0) ledger.carryForward(record.id, spent);
+  };
 
   // Read at ask-time by `createApprovalPrompt`, not captured once: it is replaced every turn (an
   // `AbortSignal` is single-use) but the prompt function itself is built once per agent and must
@@ -1943,7 +2041,16 @@ async function main(): Promise<number> {
     if (providers.length === 0) return { errors: [] };
     const loaded = await loadLiveModels(providers, environment, options);
     if (Object.keys(loaded.models).length > 0) liveModels = loaded.models;
-    return { errors: loaded.errors.map((error) => `${error.provider}: ${error.error}`) };
+    return {
+      errors: loaded.errors
+        // Ollama needs no key, so it is always "configured" and is always asked — a free probe of
+        // localhost that costs nothing when nothing is listening. Reporting that refusal is a
+        // different matter: to everyone not running Ollama it is a warning about a provider they
+        // have never heard of, printed every time they ask to see the model list. It is only worth
+        // saying when they pointed Nova at an Ollama server and it did not answer.
+        .filter((error) => error.provider !== "ollama" || Boolean(environment.OLLAMA_BASE_URL?.trim()))
+        .map((error) => `${error.provider}: ${error.error}`),
+    };
   };
   // Free: a cache hit widens completion and the picker with no request at all. A miss simply means
   // the first `/models` pays for the fetch.
@@ -2083,9 +2190,28 @@ async function main(): Promise<number> {
       // below performs.
       await agent.relinquish();
       agent = await openClient(record);
+      await carryResumedSpend(record);
       out.write(style.dim(`Resumed ${record.id} — ${record.title}\n`));
-    } else {
+      // Where the conversation actually got to, not just its id. A resumed session that opens on
+      // an empty screen asks the user to trust that a transcript they cannot see is loaded, and
+      // the usual next move — scroll back to check — has nothing to scroll to.
+      //
+      // Only when this run will actually stop at a prompt. A replay is orientation for someone
+      // about to type; in front of a one-shot answer it is preamble nobody is waiting for, and
+      // `nova --resume "…"` from a terminal is still a one-shot even though the terminal is real.
+      if (interactive && !args.prompt) out.write(`${renderReplay(record, sectionStyle(), { turns: 2 })}\n`);
+    } else if (args.resume === "latest") {
       out.write(style.yellow("No matching session; starting a new one.\n"));
+    } else {
+      // An explicit id is a request for *that* conversation. Starting a fresh one instead looks
+      // identical for the first few seconds and then diverges silently — the work lands in a new
+      // session while the user believes they are adding to the old one. A mistyped id is far
+      // cheaper to be told about now.
+      process.stderr.write(`${style.red(`No session ${args.resume} in this project.`)} Run nova --sessions to list them.\n`);
+      await agent.dispose();
+      await stateHistory.close();
+      exitCleanly();
+      return EXIT_CODES.usage;
     }
   }
 
@@ -2601,6 +2727,10 @@ async function main(): Promise<number> {
   if (interactive && !args.prompt) {
     const starters = renderStarters(navContext(), sectionStyle(), path.basename(args.root));
     if (starters) out.write(`\n${starters}\n`);
+    // Under the starters, because "what could I ask" comes before "how do I take it back" — but
+    // only just: the second question is the one that makes the first safe to answer.
+    const essentials = renderEssentials(navContext(), sectionStyle());
+    if (essentials) out.write(`${essentials}\n`);
   }
 
   /**
@@ -2904,6 +3034,9 @@ async function main(): Promise<number> {
         askSecret: (question) => hiddenQuestion(readline, question),
         write: (text) => out.write(text),
         ...(interactive ? { choose: settingsChooser(readline) } : {}),
+      }, {
+        // Prices in the currency this session is already reporting in, rather than the provider's.
+        modelChoices: (field, current) => modelChoicesForSettingsField(field, current, processEnvironment, display, rates),
       });
     } catch (error) {
       if (!isReadlineExit(error)) throw error;
@@ -3575,6 +3708,7 @@ async function main(): Promise<number> {
           if (!record) { out.write(style.yellow(`  No session ${id}.\n`)); break; }
           await agent.relinquish();
           agent = await openClient(record);
+          await carryResumedSpend(record);
           // A resumed thread has already been told what Nova remembers only if the memory set has
           // not changed since — which cannot be known, so it is told again on the next turn.
           recalledMemoryKeys.clear();
@@ -4067,6 +4201,82 @@ async function main(): Promise<number> {
           });
           animator.retarget(fraction);
         });
+      }
+      continue;
+    }
+    const payCommand = parsePayCommand(input);
+    if (payCommand) {
+      if (payCommand.kind === "invalid") {
+        out.write(style.yellow(`  ${payCommand.reason}\n`));
+        continue;
+      }
+      // Both settings or neither: refusing here, before any amount is discussed, is kinder than
+      // failing at the moment someone is trying to hand over money.
+      const gateway = billingFromEnvironment(environment);
+      if (!gateway) {
+        for (const line of BILLING_NOT_CONFIGURED) out.write(`  ${line}\n`);
+        continue;
+      }
+      const sessionSpendRwf = (() => {
+        const total = ledger.displayTotal;
+        const rwf = total ? convertTo(total, "RWF", rates) : undefined;
+        return rwf ? Math.round(rwf.micros / 1_000_000) : undefined;
+      })();
+      try {
+        if (payCommand.kind === "balance") {
+          const balance = await gateway.getBalance();
+          for (const line of renderBalance(balance, { sessionSpendRwf })) out.write(`  ${line}\n`);
+          continue;
+        }
+        if (payCommand.kind === "status") {
+          const payment = await gateway.getPayment(payCommand.reference);
+          // The balance is only ever read back, never worked out from the amount — a figure Nova
+          // computed that disagrees with the provider's ledger is the disagreement users notice.
+          const balance = payment.status === "paid" ? await gateway.getBalance().catch(() => undefined) : undefined;
+          for (const line of renderPaymentOutcome(payment, { timedOut: false, balance })) out.write(`  ${line}\n`);
+          continue;
+        }
+
+        const before = await gateway.getBalance().catch(() => undefined);
+        out.write(`${box(renderTopUpQuote(payCommand.amountRwf, before), { depth: renderDepth, title: "payment", glyphs })}\n`);
+        // Money never moves without a person saying so in this session. A piped or scripted run has
+        // nobody to ask, so it stops rather than treating the command itself as consent.
+        if (!interactive) {
+          out.write(style.yellow("  Paying needs an interactive session — run /pay from the Nova prompt.\n"));
+          continue;
+        }
+        statusBar.clear();
+        const confirmation = (await readline.question(`  ${style.yellow("?")} Create this payment? ${style.dim("[y/N]: ")}`)).trim().toLowerCase();
+        if (confirmation !== "y" && confirmation !== "yes") {
+          out.write(style.dim("  Cancelled — nothing was charged.\n"));
+          continue;
+        }
+
+        const checkout = await gateway.createCheckout({ amountRwf: payCommand.amountRwf, idempotencyKey: newIdempotencyKey() });
+        for (const line of renderCheckout(checkout)) out.write(`  ${line}\n`);
+        out.write(style.dim("  waiting for confirmation — Ctrl+C stops waiting; the payment itself continues\n"));
+
+        // Same swap as /attach: Ctrl+C here must end the wait, not the session — and stopping the
+        // wait must never be reported as a failed payment, because the money may already be moving.
+        const stopped = { aborted: false };
+        const onPaySigint = () => { stopped.aborted = true; };
+        unbindSigint();
+        process.on("SIGINT", onPaySigint);
+        readline.on("SIGINT", onPaySigint);
+        let outcome;
+        try {
+          outcome = await waitForPayment(gateway, checkout.reference, { signal: stopped });
+        } finally {
+          process.off("SIGINT", onPaySigint);
+          readline.off("SIGINT", onPaySigint);
+          bindSigint();
+        }
+        const after = outcome.payment.status === "paid" ? await gateway.getBalance().catch(() => undefined) : undefined;
+        for (const line of renderPaymentOutcome(outcome.payment, { timedOut: outcome.timedOut, balance: after })) {
+          out.write(`  ${outcome.payment.status === "paid" ? style.green(line) : line}\n`);
+        }
+      } catch (error) {
+        out.write(style.red(`  ${error instanceof BillingError ? error.message : `Payment failed: ${error instanceof Error ? error.message : String(error)}`}\n`));
       }
       continue;
     }

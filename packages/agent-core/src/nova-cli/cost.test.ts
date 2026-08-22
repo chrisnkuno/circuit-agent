@@ -306,4 +306,85 @@ describe("spending beyond the model", () => {
     expect(ledger.formatReport()).not.toContain("Beyond the model");
     expect(ledger.expenseTotal).toBeUndefined();
   });
+
+  /**
+   * What a resumed session does to a budget.
+   *
+   * The cap the user approved is a cap on the *session*, but the ledger enforcing it is built per
+   * process. Left alone, that difference is a way to spend a budget over and over: resume, spend
+   * the whole allowance again, resume again. The session record already carries the running total
+   * across runs, so the invariant these tests pin is that the ledger is checked against that total
+   * rather than against however much this particular process happens to have spent.
+   */
+  describe("spend carried in from a resumed session", () => {
+    it("counts against the budget, so resuming does not hand back the whole allowance", () => {
+      const ledger = new CostLedger({ prices: opus, display: "USD", budget: fromUnits(1, "USD") });
+      // The session had already spent $0.90 of its $1.00 before this process opened it.
+      ledger.carryForward("session_a", fromUnits(0.9, "USD"));
+      expect(toUnits(ledger.displayTotal!)).toBeCloseTo(0.9, 6);
+      expect(ledger.exhausted).toBe(false);
+
+      // One more turn at $0.55 takes the *session* past the cap, even though this process has
+      // spent barely half of it. Without the carry the ledger would report 55% spent and keep going.
+      ledger.record({ usage: usage(100_000, 2_000), iterations: 1, toolCalls: 0, elapsedMs: 900 });
+      expect(toUnits(ledger.displayTotal!)).toBeCloseTo(1.45, 6);
+      expect(ledger.exhausted).toBe(true);
+      expect(ledger.budgetWarning()).toContain("is spent");
+    });
+
+    it("restates a session's total when it is resumed again, rather than adding a second copy", () => {
+      // `/history resume` on a session already resumed this process is an ordinary thing to do —
+      // leave and come back to a thread. Summing on arrival would charge the same dollars twice.
+      const ledger = new CostLedger({ prices: opus, display: "USD" });
+      ledger.carryForward("session_a", fromUnits(0.4, "USD"));
+      ledger.carryForward("session_a", fromUnits(0.6, "USD"));
+      expect(toUnits(ledger.carriedTotal!)).toBeCloseTo(0.6, 6);
+    });
+
+    it("sums distinct sessions, because a process that resumed two of them has spent both", () => {
+      const ledger = new CostLedger({ prices: opus, display: "USD" });
+      ledger.carryForward("session_a", fromUnits(0.4, "USD"));
+      ledger.carryForward("session_b", fromUnits(0.25, "USD"));
+      expect(toUnits(ledger.carriedTotal!)).toBeCloseTo(0.65, 6);
+    });
+
+    it("projects remaining turns from the turns it watched, not from the inherited total", () => {
+      // $10 cap, $9 already spent elsewhere, and one observed turn costing $0.55. The honest
+      // answer is "one more turn at this rate" — $0.45 left over a $0.55 average. Averaging the
+      // carried $9 over the single observed turn instead would claim zero.
+      const ledger = new CostLedger({ prices: opus, display: "USD", budget: fromUnits(10, "USD") });
+      ledger.carryForward("session_a", fromUnits(9, "USD"));
+      ledger.record({ usage: usage(100_000, 2_000), iterations: 1, toolCalls: 0, elapsedMs: 900 });
+      expect(ledger.turnsRemaining).toBe(0); // $0.45 remaining does not buy another $0.55 turn
+      expect(ledger.carriedTotal).toBeDefined();
+
+      const roomier = new CostLedger({ prices: opus, display: "USD", budget: fromUnits(12, "USD") });
+      roomier.carryForward("session_a", fromUnits(9, "USD"));
+      roomier.record({ usage: usage(100_000, 2_000), iterations: 1, toolCalls: 0, elapsedMs: 900 });
+      // $2.45 left at the $0.55 per turn this process actually observed.
+      expect(roomier.turnsRemaining).toBe(4);
+    });
+
+    it("shows the running total from the first turn, and names the inherited part in the report", () => {
+      const ledger = new CostLedger({ prices: opus, display: "USD" });
+      ledger.carryForward("session_a", fromUnits(0.9, "USD"));
+      const turn = ledger.record({ usage: usage(100_000, 2_000), iterations: 1, toolCalls: 0, elapsedMs: 900 });
+      // Normally withheld until turn two; on a resumed session turn one already has a history.
+      expect(ledger.formatTurn(turn)).toContain("session $1.45");
+      // The token lines and the request count describe this process only, so the gap between them
+      // and the total has to be accounted for by name rather than left to be inferred.
+      expect(ledger.formatReport()).toContain("carried $0.90 spent before this session was resumed");
+      expect(ledger.formatReport()).toContain("over 1 request");
+    });
+
+    it("refuses a figure in a currency the ledger does not display, instead of misreading it", () => {
+      // The stored total is a bare integer with no currency on it. Converting it is the caller's
+      // job precisely so a mismatch fails here rather than silently entering the total as if
+      // 1,320 francs were 1,320 dollars.
+      const ledger = new CostLedger({ prices: opus, display: "USD", rates: [rwfPerUsd] });
+      expect(() => ledger.carryForward("session_a", fromUnits(1_320, "RWF"))).toThrow(/display currency/);
+      expect(() => ledger.carryForward("session_a", { micros: -1, currency: "USD" })).toThrow(/non-negative/);
+      expect(ledger.carriedTotal).toBeUndefined();
+    });
+  });
 });

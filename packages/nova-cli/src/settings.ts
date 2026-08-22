@@ -4,9 +4,15 @@ import path from "node:path";
 import { controlLabel, resolveControlLanguage } from "./i18n";
 import { SUPPORTED_COUNTRIES, currencyForCountry, normalizeCountryCode } from "./local-currency";
 import { isCurrency } from "@circuit-nova/nova-core/money";
+import type { ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
 
-/** A value that can be picked from a list, with the human name shown beside the stored code. */
-export type SettingChoice = { value: string; label: string };
+/**
+ * A value that can be picked from a list, with the human name shown beside the stored code.
+ *
+ * `description` is optional detail rendered beside a choice — a model's price, or the fact that
+ * this build has no published rate for it.
+ */
+export type SettingChoice = { value: string; label: string; description?: string };
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: "English", zh: "中文", hi: "हिन्दी", es: "Español", fr: "Français",
@@ -86,6 +92,10 @@ export const SETTING_FIELDS = [
   { key: "MODEL_CACHED_INPUT_PER_MILLION", label: "Cached input price per million tokens" },
   { key: "MODEL_PRICE_CURRENCY", label: "Model price currency" },
   { key: "MODEL_PRICE_MODEL", label: "Model the price override applies to" },
+  // Both or neither: `/pay` refuses to run half-configured rather than failing at the moment a
+  // person is trying to hand over money.
+  { key: "NOVA_BILLING_URL", label: "Billing service URL (enables /pay)", url: true },
+  { key: "NOVA_BILLING_KEY", label: "Billing service key", secret: true },
   { key: "NOVA_KEYS", label: "Key bindings, e.g. /diff=alt+d,/wander=off" },
   // Off by default, and the label says what it costs: the deterministic suggestions are free and
   // instant, and this buys two extra project-specific ones for a small model call per turn. A
@@ -228,6 +238,33 @@ export type SettingsMenuOptions = {
    * twenty-four unrelated options is an obstacle between someone and their first working session.
    */
   focus?: "providers";
+  /**
+   * What a model field should offer, asked when that field is opened.
+   *
+   * A model id is the one setting on this menu whose valid answers are neither fixed nor
+   * guessable: they belong to the provider, they change without any release of Nova, and the key
+   * needed to ask has — by the time this field is reached — just been pasted into the field above.
+   * Leaving it as free text means typing `claude-sonnet-5` exactly, from memory, and finding out
+   * you got it wrong one turn into the next session.
+   *
+   * Asked lazily rather than up front, because it reaches the network: opening the settings menu
+   * must not wait on three providers, and most visits here are not about the model at all.
+   * Returning an empty list is the honest "could not ask", and falls back to typing.
+   */
+  modelChoices?(field: SettingKey, settings: NovaSettings): Promise<readonly SettingChoice[]>;
+};
+
+/**
+ * The settings whose value is a model id, and whose provider therefore knows the answers.
+ *
+ * Ollama is included: a local server's installed models are exactly as unguessable as a hosted
+ * provider's, and `/v1/models` is how it says which it has.
+ */
+export const MODEL_FIELD_PROVIDER: Partial<Record<SettingKey, ProviderId>> = {
+  ANTHROPIC_MODEL: "anthropic",
+  OPENAI_MODEL: "openai",
+  CIRCUITNOTION_MODEL: "circuitnotion",
+  OLLAMA_MODEL: "ollama",
 };
 
 /** What the menu is asking for, when a caller can render a real chooser. */
@@ -295,21 +332,33 @@ export async function runSettingsMenu(current: NovaSettings, prompts: SettingsPr
     if (selection.kind === "expand") { focused = false; cursor = 0; continue; }
     const field = SETTING_FIELDS.find((candidate) => candidate.key === selection.key)!;
 
+    // A model field's answers come from the provider, asked with the key that was just pasted, so
+    // they are fetched at the moment the field is opened rather than baked into the field list.
+    // An empty answer — no key yet, provider unreachable, no chooser to paint with — falls through
+    // to the free-text prompt, which is still a complete way to set this.
+    const dynamic = MODEL_FIELD_PROVIDER[field.key] && options.modelChoices
+      ? await options.modelChoices(field.key, settings).catch(() => [])
+      : [];
+    const choices: readonly SettingChoice[] = dynamic.length > 0
+      ? dynamic
+      : ("choices" in field && field.choices ? field.choices : []);
+
     // A field with a fixed set of answers is picked, not typed — but only when there is a chooser
     // to pick with. Without one it falls back to the same free-text prompt it always had.
-    if ("choices" in field && field.choices && prompts.choose) {
+    if (choices.length > 0 && prompts.choose) {
       const picked = await prompts.choose({
         title: field.label,
         filter: true,
         items: [
-          ...field.choices.map((choice) => ({
+          ...choices.map((choice) => ({
             value: choice.value,
             label: choice.label,
+            ...(choice.description ? { description: choice.description } : {}),
             ...(settings[field.key] === choice.value ? { hint: "current" } : {}),
           })),
           { value: "-", label: "Clear this setting", pinned: true },
         ],
-        initialIndex: Math.max(0, field.choices.findIndex((choice) => choice.value === settings[field.key])),
+        initialIndex: Math.max(0, choices.findIndex((choice) => choice.value === settings[field.key])),
       });
       if (picked === undefined) continue;
       if (picked === "-") {

@@ -1,5 +1,7 @@
 import { addPart, affordableOutputTokensFor, newPartTotals, priceActualModelUsage, tokenEstimateFrom, type ModelPriceCatalog } from "./model-cost";
 import type { ModelUsage } from "./providers/model";
+import type { ModelCapabilities } from "./providers/model-capabilities";
+import { createHash } from "node:crypto";
 
 export type AgentMessage =
   | { role: "system" | "user" | "assistant"; content: string }
@@ -11,12 +13,24 @@ export type AgentToolCall = { id: string; name: string; arguments: unknown };
 export type AgentModelTurn = {
   responseId: string;
   model: string;
-  finishReason: "stop" | "tool_calls" | "refusal";
+  /**
+   * Why the model stopped generating.
+   *
+   * `length` is the one that is easy to mistake for an error: the request succeeded, the model
+   * simply ran out of the output budget it was given (`finish_reason: "length"` on the Chat
+   * Completions wire, `stop_reason: "max_tokens"` on Anthropic's). The text that arrived is real
+   * and already paid for — it is just unfinished, so the runtime continues the turn instead of
+   * failing it.
+   */
+  finishReason: "stop" | "tool_calls" | "refusal" | "length";
   content: string;
   refusal?: string;
   toolCalls: AgentToolCall[];
   usage: ModelUsage;
 };
+
+/** How hard the model should think, where the provider's model supports being told. */
+export type ThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AgentModelRequest = {
   messages: AgentMessage[];
@@ -32,10 +46,28 @@ export type AgentModelRequest = {
    * conditions all read the completed turn exactly as before.
    */
   onTextDelta?: (text: string) => void;
+  /**
+   * How hard the model should think about this particular request.
+   *
+   * Set only where the *caller* knows the work is cheap: summarizing a transcript is reading, not
+   * reasoning, and paying deep-thinking tokens for it is money for nothing. Left unset for ordinary
+   * turns, where the provider's own default (high) is the right answer and second-guessing it costs
+   * quality on exactly the requests that need it. A provider whose model does not accept the
+   * setting ignores it rather than failing — see `ModelCapabilities.supportsEffort`.
+   */
+  effort?: ThinkingEffort;
 };
 
 export interface AgentTurnProvider {
   complete(request: AgentModelRequest): Promise<AgentModelTurn>;
+  /**
+   * What this provider's model can hold and produce, when it knows.
+   *
+   * Optional so an embedder's own provider keeps working untouched, and so a provider that cannot
+   * answer says nothing rather than guessing — a caller reading this treats absence as "use the
+   * conservative default", which is what every caller did before the field existed.
+   */
+  readonly capabilities?: ModelCapabilities;
 }
 
 export type ToolEffect = "none" | "workspace" | "external";
@@ -161,6 +193,13 @@ export type AgentRuntimeRequest = AgentToolContext & {
   maxToolResultChars: number;
   maxTotalToolResultChars: number;
   maxOutputTokens: number;
+  /**
+   * Effort for every model call in this run.
+   *
+   * A property of the *run*, not of a turn: a bounded sub-task delegated to a sub-agent is cheap
+   * work throughout, and a main session's turns are not. Unset means the provider's own default.
+   */
+  effort?: ThinkingEffort;
   modelReservationRwf: number;
   safetyIdentifier: string;
 };
@@ -177,6 +216,27 @@ export type AgentRuntimeResult = {
 
 /** How many times a turn is sent back to the model to verify before the gate gives up and stops. */
 const MAX_VERIFICATION_NUDGES = 2;
+
+/**
+ * How many times a truncated turn is resumed before the run gives up.
+ *
+ * Bounded because "continue" is not guaranteed to converge: a model that answers every
+ * continuation with another full budget of output would otherwise spend the whole task cap on one
+ * unfinishable answer. Three is enough for the ordinary case — a long file, a long plan — and few
+ * enough that a runaway is caught while there is still budget left to report it.
+ */
+const MAX_LENGTH_CONTINUATIONS = 3;
+
+/**
+ * Sent after a turn that stopped at the output cap.
+ *
+ * The partial text stays in the transcript above this message, so "continue" is literal: the model
+ * reads what it already wrote and picks up from there. It is also told what happened, because the
+ * useful correction is usually the model's own — answer more briefly, or read the file in pieces —
+ * and a model that does not know it was cut off cannot make it.
+ */
+const LENGTH_CONTINUATION_NUDGE =
+  "Your previous message hit the output token limit and was cut off mid-answer. Continue from exactly where it stopped — do not repeat what you already wrote, and do not restart. If you were part-way through a tool call, send that tool call again from the beginning, since the truncated one was discarded. If the remaining work does not fit in one reply, do the part that fits and keep each reply shorter.";
 
 const VERIFICATION_NUDGE =
   "You changed the workspace but ended the turn without running anything that verifies it. Write tests that assert the invariants your change must satisfy — the properties that hold for every valid input, not one happy-path example — then run them and report the real result. If this project genuinely has nothing to run, say so explicitly instead of stopping silently.";
@@ -229,8 +289,12 @@ function validateRequest(request: AgentRuntimeRequest): void {
     [request.maxIterations, 1, 100, "maxIterations"],
     [request.maxToolCalls, 0, 500, "maxToolCalls"],
     [request.maxToolCallsPerTurn, 1, 16, "maxToolCallsPerTurn"],
-    [request.maxToolResultChars, 128, 200_000, "maxToolResultChars"],
-    [request.maxTotalToolResultChars, 128, 1_000_000, "maxTotalToolResultChars"],
+    // Sized for the largest context any current model has (1M tokens, roughly 3M characters), since
+    // the caller now derives these from the model rather than passing a constant. The old ceilings
+    // were the 200K-model figures themselves, so a session on a 1M model was rejected by its own
+    // budget — the validator is here to catch nonsense, not to re-impose a smaller model's limits.
+    [request.maxToolResultChars, 128, 1_000_000, "maxToolResultChars"],
+    [request.maxTotalToolResultChars, 128, 4_000_000, "maxTotalToolResultChars"],
     [request.maxOutputTokens, 256, 128_000, "maxOutputTokens"],
   ] as const;
   for (const [value, minimum, maximum, name] of bounded) {
@@ -306,6 +370,33 @@ const EVICTION_MIN_BUDGET = 400;
 /** Room set aside for the "N lines elided" marker, which is written after the split is chosen. */
 const ELISION_MARKER_BUDGET = 96;
 
+/**
+ * Share of the per-call budget an evicted excerpt may use.
+ *
+ * The excerpt is a sample, not a substitute: its job is to show how the output starts, how it ends,
+ * and that there is a file holding the rest. Filling the whole budget with head and tail spent
+ * ~36,000 characters proving something 4,000 proves just as well.
+ */
+const EXCERPT_SHARE = 0.1;
+
+/**
+ * Floor for that share, so the excerpt can still do its job.
+ *
+ * The header alone is ~245 characters and the elision marker another 96. Below roughly this, there
+ * is no room left for any actual output and `evictedToolResult` correctly refuses to build an
+ * excerpt at all — which would silently drop the artifact path, the one thing the model needs to
+ * find the rest.
+ */
+const EXCERPT_FLOOR = 1_200;
+
+/**
+ * Smallest result worth checking for a duplicate.
+ *
+ * Below this the reference line costs about what the content does, and a transcript full of
+ * "identical to an earlier result" notes for two-line outputs is harder to read for no saving.
+ */
+const DEDUPE_MIN_CHARS = 2_000;
+
 function takeWithinBudget(lines: readonly string[], budget: number, fromEnd: boolean): string[] {
   const taken: string[] = [];
   let used = 0;
@@ -378,8 +469,12 @@ export class BoundedAgentRuntime {
     let actualModelRwf = 0;
     let toolCallsExecuted = 0;
     let totalToolResultChars = 0;
+    /** Digest → the call that first carried it, so an identical result is referenced rather than repeated. */
+    const sentResults = new Map<string, { toolName: string; path?: string }>();
     let workspaceNeedsVerification = false;
     let verificationNudges = 0;
+    // Truncated turns resumed so far in this run, capped by `MAX_LENGTH_CONTINUATIONS`.
+    let lengthContinuations = 0;
     // Strongest evidence seen for the workspace changes in this run, as a rung on `EVIDENCE_RANK`,
     // and which escalations the model has already been asked for. Each is asked at most once: a
     // model that answers "this change has nothing to assert" must be able to finish.
@@ -412,6 +507,7 @@ export class BoundedAgentRuntime {
       if (maximumOutputTokens < 1) return stop("iteration_limit", "Run reached its approved model budget before another provider call.", iteration - 1);
 
       const turn = await this.dependencies.model.complete({
+        ...(request.effort ? { effort: request.effort } : {}),
         messages: [...messages],
         tools: definitions,
         maxOutputTokens: maximumOutputTokens,
@@ -426,6 +522,20 @@ export class BoundedAgentRuntime {
       await this.dependencies.control.persistEvent({ type: "model_turn", iteration, responseId: turn.responseId, model: turn.model, toolCallCount: turn.toolCalls.length, usage: turn.usage });
 
       if (turn.finishReason === "refusal") return stop("blocked", turn.refusal?.trim() || "Model refused the task.", iteration);
+      if (turn.finishReason === "length") {
+        // Not a failure: the provider answered, the tokens were spent, and the text that arrived is
+        // as real as any other. What is missing is the rest of it — so the partial answer is kept in
+        // the transcript and the model is asked to carry on, rather than the turn being thrown away
+        // along with everything it already paid for.
+        const partial = turn.content.trim();
+        if (lengthContinuations >= MAX_LENGTH_CONTINUATIONS) {
+          return stop("iteration_limit", `Model kept exceeding its output limit: ${MAX_LENGTH_CONTINUATIONS} continuations were not enough to finish the answer.`, iteration);
+        }
+        lengthContinuations += 1;
+        messages.push({ role: "assistant", content: partial || "(no output before the limit was reached)" });
+        messages.push({ role: "user", content: LENGTH_CONTINUATION_NUDGE });
+        continue;
+      }
       if (turn.finishReason === "stop") {
         const summary = turn.content.trim() || "Model completed without a summary.";
         messages.push({ role: "assistant", content: summary });
@@ -535,10 +645,22 @@ export class BoundedAgentRuntime {
         else results.push(...await Promise.all(group.map(runOne)));
       }
 
+      /**
+       * What one iteration may add to the transcript, however many calls it made.
+       *
+       * Eight parallel calls at the per-call budget is 320,000 characters — around 107,000 tokens
+       * appended in a single step, which on a 200K-context model is the context error itself
+       * rather than a step towards one. The per-call and total budgets both allowed it: one is
+       * too small a unit to notice, the other too large. A quarter of the total allowance per
+       * iteration keeps a single big result whole while bounding the pile-up.
+       */
+      const iterationCharBudget = Math.max(request.maxToolResultChars, Math.floor(request.maxTotalToolResultChars / 4));
+      let iterationChars = 0;
+
       for (const { call, tool, result } of results) {
         toolCallsExecuted += 1;
         const remaining = request.maxTotalToolResultChars - totalToolResultChars;
-        const budget = Math.max(0, Math.min(request.maxToolResultChars, remaining));
+        const budget = Math.max(0, Math.min(request.maxToolResultChars, remaining, iterationCharBudget - iterationChars));
         const raw = result.content || "(empty tool result)";
         /**
          * Oversized results leave the conversation and become files.
@@ -554,16 +676,50 @@ export class BoundedAgentRuntime {
          */
         let artifact: StoredToolArtifact | undefined;
         let content = truncate(raw, budget);
-        if (this.dependencies.artifacts && raw.length > budget && budget > 0) {
+        /**
+         * Eviction has to *save* tokens, and just over the line it does the opposite.
+         *
+         * Measured: at a 40,000-character budget, a 41,000-character result evicts to a 39,864
+         * character excerpt — 1,136 characters saved — and the header it carries tells the model to
+         * go and read the file. One `read_file` follow-up costs up to another 40,000, so the
+         * "saving" is 35x more expensive than having sent the 41,000 characters once. The loss band
+         * runs from `budget` to `2 x budget`, and break-even is exactly at the top of it.
+         *
+         * So the transcript takes the whole result when it is within twice the budget and the total
+         * allowance can still afford it, and evicts only above that, where eviction pays for itself
+         * many times over: a 400,000-character log becomes an excerpt and a path.
+         */
+        const withinTwiceBudget = raw.length <= budget * 2 && raw.length <= remaining;
+        /**
+         * A result identical to one already in this transcript is sent once.
+         *
+         * Reading the same file twice, or re-running the same failing test, used to append a second
+         * full copy — nothing deduplicated anything, and the model pays for every character of both.
+         * A digest it already has is a pointer, not a payload. Only worth doing for results big
+         * enough that the pointer is smaller than the thing: below that the reference is the cost.
+         */
+        const digest = raw.length >= DEDUPE_MIN_CHARS ? createHash("sha256").update(raw).digest("hex") : undefined;
+        const alreadySent = digest ? sentResults.get(digest) : undefined;
+        if (alreadySent) {
+          content = `[Identical to the earlier ${alreadySent.toolName} result in this conversation${alreadySent.path ? `, saved at ${alreadySent.path}` : ""}. Unchanged since then; re-read it there if you need it again.]`;
+        } else if (withinTwiceBudget) {
+          content = raw;
+        } else if (this.dependencies.artifacts && raw.length > budget && budget > 0) {
           const stored = await this.dependencies.artifacts
             .put({ toolName: call.name, toolCallId: call.id, content: raw })
             .catch(() => undefined);
           if (stored) {
             artifact = stored;
-            content = evictedToolResult(raw, stored, budget);
+            // A tenth of the budget, not the whole of it. The excerpt exists to show the shape of
+            // the output and its ending; the file holds the rest, and 4,000 characters of head and
+            // tail say what 40,000 said. Measured: this is ~36,000 characters saved on every large
+            // result, with the same path to the full text.
+            content = evictedToolResult(raw, stored, Math.min(budget, Math.max(EXCERPT_FLOOR, Math.round(budget * EXCERPT_SHARE))));
           }
         }
+        if (digest && !alreadySent) sentResults.set(digest, { toolName: call.name, path: artifact?.path });
         totalToolResultChars += content.length;
+        iterationChars += content.length;
         messages.push({ role: "tool", content, toolCallId: call.id, name: call.name });
         const effect = tool.effect === "external" ? "external" : result.effect ?? tool.effect;
         if (!result.isError && effect === "workspace") workspaceNeedsVerification = true;

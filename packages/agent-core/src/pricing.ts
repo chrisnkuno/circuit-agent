@@ -107,17 +107,52 @@ function covers(record: PriceRecord, date: string): boolean {
 }
 
 /**
+ * The ids a model can be priced under, most specific first.
+ *
+ * Providers publish rates against a family name (`claude-sonnet-5`, `gpt-4.1-mini`) but serve — and
+ * `/v1/models` lists — dated snapshots of it (`claude-sonnet-5-20260514`, `gpt-4.1-mini-2025-04-14`)
+ * and moving aliases (`…-latest`). Those are the same billed model at the same published rate, so
+ * pricing only the exact string reports "unpriced" for the very ids the live model list hands the
+ * user, and a run on a pinned snapshot goes unpriced while the identical unpinned one does not.
+ *
+ * Only version markers are stripped, and only from the end: a release date, `latest`, `preview`.
+ * Each names a *version* of a model rather than a different model. Nothing else is trimmed — shortening
+ * `gpt-5-mini` to `gpt-5` would price a cheap model at an expensive one's rate, which is the failure
+ * this whole catalog exists to avoid.
+ */
+export function priceAliases(model: string): string[] {
+  const aliases = [model];
+  // `-YYYYMMDD` (Anthropic), `-YYYY-MM-DD` (OpenAI), or a `-latest`/`-preview` pointer at the same
+  // model. Applied repeatedly so `claude-sonnet-5-latest` and a dated preview both reduce.
+  let candidate = model;
+  for (let step = 0; step < 3; step += 1) {
+    const trimmed = candidate.replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2}|latest|preview)$/i, "");
+    if (trimmed === candidate || !trimmed) break;
+    candidate = trimmed;
+    aliases.push(candidate);
+  }
+  return aliases;
+}
+
+/**
  * The rate in force for one model on one date.
  *
  * Where two records overlap the later `effectiveFrom` wins, so a promotional rate layered over a
  * standing one resolves to the promotion without the standing entry having to be edited or removed.
  * Returning undefined is a real answer: an unpriced model must report "unknown", never zero.
+ *
+ * A dated snapshot falls back to its family's rate (see `priceAliases`), but only after an exact
+ * match has been looked for — a snapshot that *is* priced separately keeps its own rate.
  */
 export function selectPrice(records: readonly PriceRecord[], query: PriceQuery): PriceRecord | undefined {
   const date = query.asOf ?? today();
-  return records
-    .filter((record) => record.provider === query.provider && record.model === query.model && covers(record, date))
-    .sort((left, right) => right.effectiveFrom.localeCompare(left.effectiveFrom))[0];
+  for (const model of priceAliases(query.model)) {
+    const match = records
+      .filter((record) => record.provider === query.provider && record.model === model && covers(record, date))
+      .sort((left, right) => right.effectiveFrom.localeCompare(left.effectiveFrom))[0];
+    if (match) return match;
+  }
+  return undefined;
 }
 
 /**

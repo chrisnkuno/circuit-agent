@@ -8,6 +8,7 @@ import {
   globWorkspace,
   grepWorkspace,
   looksBinary,
+  walkWorkspace,
   readTextFile,
   resolveInWorkspace,
   writeTextFile,
@@ -117,5 +118,67 @@ describe("search", () => {
 
     const pattern = await grepWorkspace(root, "^export", { regex: true, include: "**/*.ts" });
     expect(pattern).toHaveLength(2);
+  });
+});
+
+describe("walking and searching concurrently", () => {
+  /** A tree wide and deep enough that a level-at-a-time walk actually has something to parallelize. */
+  async function tree(base: string): Promise<void> {
+    for (let directory = 0; directory < 12; directory += 1) {
+      const nested = path.join(base, `pkg-${directory}`, "src");
+      await fs.mkdir(nested, { recursive: true });
+      for (let file = 0; file < 6; file += 1) {
+        await fs.writeFile(path.join(nested, `mod-${file}.ts`), `export const marker = "needle-${directory}-${file}";\n`.repeat(4));
+      }
+    }
+    // Generated output: present, and never searched.
+    await fs.mkdir(path.join(base, "coverage"), { recursive: true });
+    await fs.writeFile(path.join(base, "coverage", "report.ts"), 'export const marker = "needle-coverage";\n');
+    await fs.mkdir(path.join(base, "node_modules", "left-pad"), { recursive: true });
+    await fs.writeFile(path.join(base, "node_modules", "left-pad", "index.ts"), 'export const marker = "needle-vendor";\n');
+  }
+
+  it("yields the same entries in the same order on every run", async () => {
+    // Determinism is the property a concurrent walk most easily loses, and losing it would make
+    // glob_files return a different list each call for an unchanged tree.
+    await tree(root);
+    const runs: string[][] = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const seen: string[] = [];
+      for await (const entry of walkWorkspace(root)) seen.push(entry.relative);
+      runs.push(seen);
+    }
+    expect(runs[1]).toEqual(runs[0]);
+    expect(runs[2]).toEqual(runs[0]);
+    expect(runs[0].length).toBeGreaterThan(70);
+  });
+
+  it("finds every match, in a stable order, and never searches generated output", async () => {
+    await tree(root);
+    // Above the 200 default, so the assertion is about what the search finds rather than where it stops.
+    const first = await grepWorkspace(root, "needle-", { maxResults: 1_000 });
+    const second = await grepWorkspace(root, "needle-", { maxResults: 1_000 });
+    expect(second).toEqual(first);
+    expect(first.length).toBe(12 * 6 * 4);
+    expect(first.some((match) => match.path.includes("coverage"))).toBe(false);
+    expect(first.some((match) => match.path.includes("node_modules"))).toBe(false);
+    // Matches from one file stay together and in line order — the concurrent reads are reassembled
+    // in walk order, not completion order.
+    const firstFile = first.filter((match) => match.path === first[0].path);
+    expect(firstFile.map((match) => match.line)).toEqual([...firstFile.map((match) => match.line)].sort((a, b) => a - b));
+  });
+
+  it("truncates at maxResults deterministically", async () => {
+    await tree(root);
+    const limited = await grepWorkspace(root, "needle-", { maxResults: 7 });
+    expect(limited).toHaveLength(7);
+    expect(limited).toEqual((await grepWorkspace(root, "needle-", { maxResults: 7 })));
+    expect(limited).toEqual((await grepWorkspace(root, "needle-", { maxResults: 1_000 })).slice(0, 7));
+  });
+
+  it("still matches a regex query, where the byte prefilter cannot help", async () => {
+    await tree(root);
+    const found = await grepWorkspace(root, "needle-\\d+-[0-5]", { regex: true, maxResults: 1_000 });
+    expect(found.length).toBe(12 * 6 * 4);
   });
 });

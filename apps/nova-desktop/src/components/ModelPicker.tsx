@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildModelOptions, filterModels } from "../lib/models";
+import { useLiveModels } from "../lib/live-models";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import type { ProviderId } from "../lib/settings";
 
@@ -30,9 +31,12 @@ export function ModelPicker(props: {
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Asked the first time the menu opens, not on mount: an app that reaches the network before
+  // anyone has looked at the menu spends someone's launch time on a list they may never open.
+  const live = useLiveModels(open);
   const options = useMemo(
-    () => buildModelOptions(props.configured ?? props.provider),
-    [props.configured, props.provider],
+    () => buildModelOptions(props.configured ?? props.provider, { live: live.models }),
+    [props.configured, props.provider, live.models],
   );
   const visible = useMemo(() => filterModels(options, query), [options, query]);
 
@@ -93,6 +97,7 @@ export function ModelPicker(props: {
           />
           <div className="model-list">
             {visible.length === 0 ? <p className="panel-empty">No model matches “{query}”.</p> : null}
+            {live.loading ? <p className="model-loading">Asking your providers what else they have…</p> : null}
             {visible.map((option, index) => {
               const current = option.model === props.model && option.provider === props.provider;
               return (
@@ -112,7 +117,7 @@ export function ModelPicker(props: {
                   <span className="model-option-name">{option.model}</span>
                   <span className="model-option-meta">
                     {option.providerLabel}
-                    {option.price ? ` · ${option.price}` : " · unpriced"}
+                    {option.price ? ` · ${option.price}` : option.live ? " · price unknown" : " · unpriced"}
                     {current ? " · current" : ""}
                     {option.needsKey ? " · needs a key" : ""}
                   </span>
@@ -120,7 +125,10 @@ export function ModelPicker(props: {
               );
             })}
           </div>
-          <p className="model-foot">Switching keeps the conversation. Prices are list rates, not your contract.</p>
+          <p className="model-foot">
+            Switching keeps the conversation. Prices are list rates, not your contract.
+            {Object.keys(live.models).length > 0 ? " Models your key can reach are included." : ""}
+          </p>
         </div>
       </PopoverContent>
     </Popover>

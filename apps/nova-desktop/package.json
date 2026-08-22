@@ -1,6 +1,6 @@
 {
   "name": "@circuit-nova/nova-desktop",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -28,6 +28,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "^2.1.1",
     "e2b": "^2.36.0",

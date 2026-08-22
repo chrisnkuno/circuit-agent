@@ -63,26 +63,72 @@ function parseArguments(value: string): unknown {
   try { return JSON.parse(value); } catch { return value; }
 }
 
+/**
+ * The wire's `finish_reason` as one of the four the runtime understands.
+ *
+ * Every provider spells these slightly differently, and the spellings are not interchangeable in
+ * the direction that matters: `length` means *the model was not finished*, and reading it as a
+ * normal stop would silently hand a half-written answer to the caller as a complete one.
+ *
+ * `undefined` means genuinely unrecognised, which stays an error — inventing a reading for a word
+ * nobody has seen is how truncation gets mistaken for completion.
+ */
+function readFinishReason(reason: string | null): AgentModelTurn["finishReason"] | undefined {
+  switch (reason) {
+    case "stop":
+    case "end_turn":
+      return "stop";
+    case "tool_calls":
+    case "function_call":
+    case "tool_use":
+      return "tool_calls";
+    // The output budget ran out. OpenAI and OpenAI-compatible gateways say "length";
+    // `max_tokens` / `model_length` are the same event under other gateways' names.
+    case "length":
+    case "max_tokens":
+    case "model_length":
+      return "length";
+    case "content_filter":
+      return "refusal";
+    default:
+      return undefined;
+  }
+}
+
 /** Reads one Chat Completions response into the runtime's turn shape. */
 export function turnFromChatResponse(response: ChatResponse): AgentModelTurn {
   const choice = response.choices[0];
   if (!choice) throw new Error("Model response contained no choices");
   const toolCalls = (choice.message.tool_calls ?? []).map((call) => ({ id: call.id, name: call.function.name, arguments: parseArguments(call.function.arguments) }));
-  const finishReason = choice.message.refusal
-    ? "refusal"
-    : choice.finish_reason === "stop"
-      ? "stop"
-      : choice.finish_reason === "tool_calls"
-        ? "tool_calls"
-        : undefined;
-  if (!finishReason) throw new Error(`Unsupported model finish reason: ${choice.finish_reason}`);
+  // `null` is not an unknown word — it is no word at all, which several gateways send when the
+  // final chunk carrying the reason never arrives (or is dropped by a proxy) even though the
+  // content and tool calls came through intact. Erroring on it threw away a complete, usable turn
+  // and ended the user's request with "Unsupported model finish reason: null". Unstated is read
+  // from the payload instead: calls mean a tool turn, text means a finished one, and nothing at
+  // all still errors, because a turn with no reason *and* no output carries no answer to give.
+  const inferred = choice.finish_reason === null || choice.finish_reason === undefined
+    ? (toolCalls.length > 0 ? "tool_calls" : choice.message.content ? "stop" : undefined)
+    : readFinishReason(choice.finish_reason);
+  const read = choice.message.refusal ? "refusal" : inferred;
+  // An unrecognised *word* stays an error: inventing a reading for a spelling nobody has seen is
+  // how truncation gets mistaken for completion.
+  if (!read) throw new Error(`Unsupported model finish reason: ${choice.finish_reason}`);
+  // Some gateways report a tool-call turn as a plain "stop". Trusting the reason over the payload
+  // there drops the calls on the floor and answers with an empty message instead of running them.
+  const finishReason = read === "stop" && toolCalls.length > 0 ? "tool_calls" : read;
+  const refusal = choice.message.refusal
+    ?? (finishReason === "refusal" ? "The provider's content filter stopped this response." : undefined);
   return {
     responseId: response.id,
     model: response.model,
     finishReason,
     content: choice.message.content ?? "",
-    refusal: choice.message.refusal ?? undefined,
-    toolCalls,
+    refusal: refusal ?? undefined,
+    // A turn cut off at the output cap cannot carry tool calls forward. Whatever arrived was being
+    // written when the budget ran out, so its arguments are a truncated JSON fragment; executing a
+    // call parsed from one would act on arguments the model never finished choosing. The runtime
+    // asks for the call again instead.
+    toolCalls: finishReason === "length" || finishReason === "refusal" ? [] : toolCalls,
     usage: usageOf(response),
   };
 }

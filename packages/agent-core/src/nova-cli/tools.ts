@@ -4,7 +4,7 @@ import type { Expense } from "./cost";
 import type { NovaWorkspace } from "./backends";
 export { runShellCommand } from "./command";
 export type { CommandRunner } from "./command";
-import { isFindDelete, isRecursiveForceRemoval } from "./command";
+import { isFindDelete, isRecursiveForceRemoval, tokenizeCommand } from "./command";
 import type { HookRegistry } from "./hooks";
 import { NestedInstructionTracker } from "./nested-instructions";
 import { NOVA_CAPABILITIES } from "./permissions";
@@ -184,7 +184,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
   const tools: AgentTool[] = [
     {
       name: "read_file",
-      description: "Read a UTF-8 text file from the project. Prefer reading a whole file; use offset/limit only for very large files.",
+      description: "Read a UTF-8 text file from the project, including project-local environment/configuration files when relevant to the user's task. Reading is allowed; do not repeat secret values in the answer. Prefer reading a whole file; use offset/limit only for very large files.",
       inputSchema: {
         type: "object",
         properties: {
@@ -365,6 +365,17 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const timeoutMs = Math.min(optionalInteger(args.timeoutMs, "timeoutMs") ?? commandTimeoutMs, commandTimeoutMs);
         const result = await workspace.runCommand(command, timeoutMs);
         const body = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || "(no output)";
+        // A missing program is the one failure whose fix is never "try again": the model has to
+        // pick a different program. Naming that explicitly beats an ENOENT the model reads as a
+        // transient error and retries verbatim.
+        const missing = missingProgram(command, result);
+        if (missing) {
+          return {
+            content: `exit ${result.exitCode}\n${body}\n\n'${missing}' is not available in this environment. Do not retry this command. Use a program listed as available in the environment section, or check for an alternative with 'command -v' before running it.`,
+            isError: true,
+            data: { command, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, missingProgram: missing },
+          };
+        }
         const kind = classifyVerification(command);
         return {
           content: `exit ${result.exitCode}\n${body}`,
@@ -377,6 +388,32 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
             ? { passed: true, kind, scope: "targeted" as const, summary: `${command} exited 0` }
             : undefined,
         };
+      },
+    },
+    {
+      name: "read_playbook",
+      description:
+        "Read one security playbook in full, by id from the index in your instructions. Pull the two or three categories this project actually has a surface for, rather than reciting all of them.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.playbooks,
+      effect: "none",
+      requiresApproval: false,
+      parallelSafe: true,
+      async execute(args) {
+        const id = requiredString(args.id, "id");
+        const playbook = playbookFor(id);
+        if (!playbook) {
+          return {
+            content: `No playbook '${id}'. Available: ${DEFENDER_PLAYBOOK_CATALOG.map((entry) => entry.id).join(", ")}`,
+            isError: true,
+          };
+        }
+        return { content: playbook.text, data: { id: playbook.id, title: playbook.title } };
       },
     },
     {
@@ -923,6 +960,32 @@ function renderTodos(items: TodoItem[]): string {
  */
 export type { VerificationKind } from "../agent-runtime";
 import type { VerificationKind } from "../agent-runtime";
+import { DEFENDER_PLAYBOOK_CATALOG, playbookFor } from "./defender-playbooks";
+
+/**
+ * The program a failed command could not find, or null when the failure was something else.
+ *
+ * Matches the three ways this is reported — a POSIX shell's `command not found`, Node's spawn
+ * `ENOENT`, and cmd.exe's "is not recognized" — and then confirms the name against the command
+ * that was actually run, so a compiler error quoting "not found" in someone's source file does not
+ * get reported as a missing program.
+ */
+export function missingProgram(command: string, result: { exitCode: number; stdout: string; stderr: string }): string | null {
+  if (result.exitCode === 0) return null;
+  const output = `${result.stdout}\n${result.stderr}`;
+  const match = output.match(/(?:^|[\s:'"`])['"`]?([\w.+-]+)['"`]?:?\s*(?:command not found|not found\b|is not recognized as an internal)/i)
+    ?? output.match(/ENOENT[^\n]*?spawn\s+([\w.+-]+)/i)
+    ?? output.match(/spawn\s+([\w.+-]+)\s+ENOENT/i);
+  const program = match?.[1];
+  if (!program) return null;
+  let tokens: string[];
+  try {
+    tokens = tokenizeCommand(command);
+  } catch {
+    return null;
+  }
+  return tokens.includes(program) ? program : null;
+}
 
 /** Runners whose names embed a word boundary the bare word "test" cannot match (e.g. `vitest`). */
 const TEST_COMMAND = /\b(tests?|pytest|jest|vitest|mocha|jasmine|karma|ava|rspec|minitest|phpunit|pest|junit|gotestsum|nose2|unittest|testthat|ctest|gradlew?\s+test|xctest)\b/i;

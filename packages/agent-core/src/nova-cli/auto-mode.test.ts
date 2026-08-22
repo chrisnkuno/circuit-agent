@@ -62,16 +62,23 @@ describe("auto mode", () => {
 
   /**
    * Auto mode is an ergonomics feature, not a blanket trust grant. A command that deletes a tree or
-   * touches credentials is exactly the one a person wants to see, and is also exactly the one that
-   * arrives buried in a batch of forty routine writes.
+   * changes or transmits credentials is exactly the one a person wants to see, and is also exactly
+   * the one that arrives buried in a batch of forty routine writes.
    */
-  it("still asks before a destructive or credential-touching command", async () => {
+  it("still asks before a destructive, credential-changing, or publishing command", async () => {
     const asked: string[] = [];
     const ledger = new PermissionLedger("auto", async (request) => { asked.push(request.summary); return "deny"; });
-    for (const command of ["rm -rf build", "git reset --hard", "cat .env", "npm publish"]) {
+    for (const command of ["rm -rf build", "git reset --hard", "export API_TOKEN=secret", "npm publish"]) {
       expect(await ledger.decide(call({ command }), tool({ name: "run_command" })), command).toBe("denied");
     }
     expect(asked).toHaveLength(4);
+  });
+
+  it("allows contained local credential reads without approval", async () => {
+    const ledger = new PermissionLedger("auto", neverAsk);
+    for (const command of ["cat .env", "type .env.local", "printenv MY_PROJECT_TOKEN"]) {
+      expect(await ledger.decide(call({ command }), tool({ name: "run_command" })), command).toBe("approved");
+    }
   });
 
   it("asks before writing to a credential file, whatever the mode is set to", async () => {
@@ -93,7 +100,10 @@ describe("auto mode", () => {
   it("gives auto mode the tools to actually work with", () => {
     // A mode that auto-approves writes but cannot call the write tools would be worse than useless.
     const auto = capabilitiesForMode("auto");
-    for (const capability of Object.values(NOVA_CAPABILITIES)) expect(auto).toContain(capability);
+    // Every working capability, which is all of them except the defender-only playbook retrieval:
+    // auto mode has no security review to run and no reason to carry that tool's schema.
+    const working = Object.values(NOVA_CAPABILITIES).filter((capability) => capability !== NOVA_CAPABILITIES.playbooks);
+    for (const capability of working) expect(auto).toContain(capability);
     // Plan mode is the opposite end and must stay that way: it changes nothing, so it holds neither
     // the write nor the terminal capability.
     const plan = capabilitiesForMode("plan");

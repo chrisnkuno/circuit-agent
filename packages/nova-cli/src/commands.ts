@@ -52,6 +52,7 @@ export const COMMANDS = defineCommands({
   "/attach": { args: "<id>", description: "Watch a background job's log live" },
   "/detach": { args: "<task>", description: "Start work in the background; press Alt+B to send a running turn there" },
   "/cost": { description: "Token and cost breakdown for this session" },
+  "/pay": { args: "[amount|balance|status <ref>]", description: "Top up your Nova credit — pay on Circuit Pay's page, Nova never sees your card" },
   "/scan": { args: "[glob]", description: "Deterministic secret scan of the workspace, worst severity first — no model turn needed" },
   "/sessions": { description: "List sessions in this project (an alias for /history)" },
   "/palette": { description: "Search every command by name or by what it does" },
@@ -71,14 +72,27 @@ export const COMMANDS = defineCommands({
  * `KeyBindingRegistry.shortcutLabels()` is the source, kept optional here so this stays callable —
  * and testable — without constructing a whole registry.
  */
-export function renderCommandHelp(language: ControlLanguage = "en", shortcuts: ReadonlyMap<string, string> = new Map()): string {
+/**
+ * The whole catalog, one row each — for `nova --help`, which is read piped and grepped as often
+ * as it is read on screen.
+ *
+ * `mark` puts a leading character on the rows worth learning first. It is a parameter rather than
+ * a hardcoded glyph because this same text is written to a pipe, where a star may not survive the
+ * destination's encoding — the caller already knows whether this terminal can draw one.
+ */
+export function renderCommandHelp(
+  language: ControlLanguage = "en",
+  shortcuts: ReadonlyMap<string, string> = new Map(),
+  options: { mark?: (command: string) => string } = {},
+): string {
   const width = Math.max(...COMMANDS.map((command) => command.name.length + (command.args ? command.args.length + 1 : 0)));
   const shortcutWidth = Math.max(0, ...[...shortcuts.values()].map((label) => label.length));
+  const mark = options.mark ?? (() => "  ");
   return COMMANDS.map((command) => {
     const head = command.args ? `${command.name} ${command.args}` : command.name;
     const shortcut = shortcuts.get(command.name) ?? "";
     const shortcutColumn = shortcutWidth > 0 ? shortcut.padEnd(shortcutWidth + 2) : "";
-    return `  ${head.padEnd(width + 2)}${shortcutColumn}${commandDescription(language, command.name, command.description)}`;
+    return `${mark(command.name)}${head.padEnd(width + 2)}${shortcutColumn}${commandDescription(language, command.name, command.description)}`;
   }).join("\n");
 }
 

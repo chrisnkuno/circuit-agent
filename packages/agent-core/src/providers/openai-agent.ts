@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "../agent-runtime";
 import { collectChatStream, toWireMessages, turnFromChatResponse, type ChatResponse, type ChatStreamChunk } from "./openai-compatible";
+import { capabilitiesFor, type ModelCapabilities } from "./model-capabilities";
 
 /**
  * OpenAI adapter for the agent loop.
@@ -16,10 +17,13 @@ type ChatCall = (body: Record<string, unknown>, signal: AbortSignal) => Promise<
 
 export class OpenAIAgentTurnProvider implements AgentTurnProvider {
   private readonly call: ChatCall;
+  /** What this model can hold and produce, so the session sizes its budgets from the model. */
+  readonly capabilities: ModelCapabilities;
 
   constructor(private readonly options: OpenAIAgentOptions, call?: ChatCall) {
     if (!options.apiKey.trim()) throw new Error("OPENAI_API_KEY is required");
     if (!options.model.trim()) throw new Error("OPENAI_MODEL is required");
+    this.capabilities = capabilitiesFor(options.model);
     if (call) this.call = call;
     else {
       const client = new OpenAI({ apiKey: options.apiKey, ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
@@ -37,7 +41,21 @@ export class OpenAIAgentTurnProvider implements AgentTurnProvider {
       parallel_tool_calls: true,
       max_completion_tokens: request.maxOutputTokens,
       safety_identifier: request.safetyIdentifier,
-      ...(request.onTextDelta ? { stream: true, stream_options: { include_usage: true } } : {}),
+      // The documented routing hint for prompt caching, and the replacement for the deprecated
+      // `user` field. Stable for the whole session, which is what makes it useful: cached prefixes
+      // are routed by this key, and a per-request value would scatter them across shards and hit
+      // nothing. The sibling CircuitNotion adapter has always sent one; this path had not.
+      prompt_cache_key: request.safetyIdentifier,
+      // Effort is only sent when the caller asked for one and the model accepts the field.
+      // Reasoning tokens bill as output and share the output budget, so this is a direct spend
+      // control, not a quality preference.
+      ...(request.effort && this.capabilities.supportsEffort ? { reasoning_effort: request.effort } : {}),
+      // Streaming is unconditional. `max_completion_tokens` is now sized from what the model can
+      // really write, and an unstreamed reply that large risks the SDK's HTTP timeout — the call is
+      // billed and the answer lost. `include_usage` travels with it because on Chat Completions a
+      // streamed response reports no usage without it, and the accounting is not optional.
+      stream: true,
+      stream_options: { include_usage: true },
     }, AbortSignal.timeout(this.options.timeoutMs ?? 180_000));
     return turnFromChatResponse(
       Symbol.asyncIterator in Object(response)

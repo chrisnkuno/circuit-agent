@@ -36,6 +36,13 @@ complete until the relevant invariant remains covered by an automated behavioral
 size, and p50/p95/p99 search latency as JSON. CI should retain results as artifacts and compare
 trends, but should not use absolute developer-machine timings as a flaky pass/fail gate.
 
+The corpus has to be shaped like a real workspace or the benchmark prices work Nova never does:
+every snapshot carries the `integrity` digest the writer always stamps, and every session has the
+event journal that accumulates beside it, so canonicalization, digest verification, and hash-chain
+replay are all on the measured path. The `sources` block reports what that verification costs on its
+own. `--events 0` and `--integrity 0` exist only to price those two paths by comparison; a run that
+is meant to represent Nova leaves both at their defaults.
+
 ```sh
 cargo run --release --features benchmark --manifest-path packages/nova-state/Cargo.toml \
   --bin nova-state-bench -- --sessions 500 --messages 40 --queries 200

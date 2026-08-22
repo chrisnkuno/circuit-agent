@@ -157,6 +157,9 @@ const GOLDEN_CONTRACT = [
   { name: "write_file", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["path", "content"], properties: ["path", "content"] },
   { name: "edit_file", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["path", "oldText", "newText"], properties: ["path", "oldText", "newText", "replaceAll"] },
   { name: "run_command", effect: "workspace", capabilityId: "workspace.terminal", requiresApproval: true, parallelSafe: false, required: ["command"], properties: ["command", "timeoutMs"] },
+  // Defender-only by capability: the security playbooks left the system prompt (44,000 characters
+  // on every request) and became retrievable one category at a time.
+  { name: "read_playbook", effect: "none", capabilityId: "security.playbooks", requiresApproval: false, parallelSafe: true, required: ["id"], properties: ["id"] },
   { name: "todo_write", effect: "none", capabilityId: "reasoning.plan", requiresApproval: false, parallelSafe: false, required: [], properties: ["items", "complete", "start"] },
   { name: "todo_read", effect: "none", capabilityId: "reasoning.plan", requiresApproval: false, parallelSafe: true, required: [], properties: [] },
   { name: "web_fetch", effect: "none", capabilityId: "web.research", requiresApproval: false, parallelSafe: true, required: ["url"], properties: ["url"] },
@@ -220,4 +223,5 @@ const NOVA_CAPABILITY_IDS = {
   terminal: "workspace.terminal",
   research: "web.research",
   planning: "reasoning.plan",
+  playbooks: "security.playbooks",
 } as const;

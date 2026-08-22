@@ -28,6 +28,13 @@ function isJsonRpcResponse(value: unknown): value is JsonRpcResponse {
   return typeof value === "object" && value !== null && "jsonrpc" in value && "id" in value && typeof (value as { id: unknown }).id === "number";
 }
 
+/** A server-initiated message: a method, and deliberately no id to answer. */
+function isJsonRpcNotification(value: unknown): value is { jsonrpc: "2.0"; method: string; params?: unknown } {
+  return typeof value === "object" && value !== null
+    && "jsonrpc" in value && !("id" in value)
+    && typeof (value as { method?: unknown }).method === "string";
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -84,6 +91,8 @@ export class McpConnection {
   private nextId = 1;
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private initializePromise: Promise<void> | null = null;
+  /** Cached `tools/list` result. Cleared by `invalidateTools` when the server says its tools changed. */
+  private toolsPromise: Promise<Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>> | undefined;
 
   /** `requestTimeoutMs` is a constructor option (not only the default) so a test can prove the timeout fires without waiting 15s for it. */
   constructor(private readonly config: McpServerConfig, private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS) {
@@ -115,6 +124,14 @@ export class McpConnection {
       parsed = JSON.parse(line);
     } catch {
       return; // A malformed line from a misbehaving server is not this client's failure to surface mid-stream.
+    }
+    // A message with a method and no id is a notification. Only one matters to this client, and it
+    // is the one that makes caching `tools/list` correct rather than merely fast: a server that
+    // adds or removes a tool says so, and the cache is dropped there instead of being re-polled
+    // every turn on the chance that it might have.
+    if (isJsonRpcNotification(parsed)) {
+      if (parsed.method === "notifications/tools/list_changed") this.invalidateTools();
+      return;
     }
     if (!isJsonRpcResponse(parsed)) return;
     const waiting = this.pending.get(parsed.id);
@@ -157,14 +174,35 @@ export class McpConnection {
     return this.initializePromise;
   }
 
+  /**
+   * The server's tool list, fetched once per connection.
+   *
+   * `createNovaTools` runs on every turn, so this was a `tools/list` JSON-RPC round trip per turn
+   * per server — pure latency on the critical path between the user pressing Enter and the model
+   * being asked anything, and it bought nothing: MCP servers announce changes rather than expecting
+   * to be re-polled. `notifications/tools/list_changed` is that announcement, and it clears this.
+   */
   async listTools(): Promise<Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>> {
     await this.initialize();
-    const result = await this.request("tools/list", {}) as { tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> };
-    return (result.tools ?? []).map((tool) => ({
-      name: tool.name,
-      description: tool.description ?? "",
-      inputSchema: tool.inputSchema ?? { type: "object", additionalProperties: false },
-    }));
+    this.toolsPromise ??= (async () => {
+      const result = await this.request("tools/list", {}) as { tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> };
+      return (result.tools ?? []).map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? "",
+        inputSchema: tool.inputSchema ?? { type: "object", additionalProperties: false },
+      }));
+    })().catch((error) => {
+      // A failed listing must not be cached: the next turn should try again rather than inherit
+      // this one's bad luck with a server that was still starting up.
+      this.toolsPromise = undefined;
+      throw error;
+    });
+    return this.toolsPromise;
+  }
+
+  /** Drops the cached tool list, so the next `listTools` asks the server again. */
+  invalidateTools(): void {
+    this.toolsPromise = undefined;
   }
 
   async callTool(name: string, argumentsValue: Record<string, unknown>): Promise<{ content: string; isError?: boolean }> {

@@ -19,7 +19,11 @@ export type SafetyAssessment = {
 type Rule = { category: SensitiveCategory; reason: string; pattern: RegExp };
 
 const TASK_RULES: Rule[] = [
-  { category: "credentials", reason: "credentials or secrets", pattern: /\b(?:set|add|store|save|copy|export|expose|reveal|rotate|revoke|replace|use)\b.{0,45}\b(?:api[ _-]?key|access[ _-]?token|auth[ _-]?token|password|private[ _-]?key|secret|credential)s?\b/i },
+  // Possessing a credential is not itself a dangerous action. Reading a project-local `.env`, or
+  // putting a token the user supplied into that project's configuration, is routine development
+  // work. Preflight only the consequences that are hard to undo: disclosure and lifecycle changes.
+  // The exact write still passes through the tool-level credential-file approval below.
+  { category: "credentials", reason: "credential disclosure or high-impact credential change", pattern: /\b(?:export|expose|reveal|print|show|share|send|upload|publish|rotate|revoke)\b.{0,60}\b(?:api[ _-]?key|api[ _-]?token|access[ _-]?token|auth[ _-]?token|password|private[ _-]?key|secret|credential)s?\b|\b(?:set|add|store|save|replace)\b.{0,45}\b(?:production|prod|live)\b.{0,45}\b(?:api[ _-]?key|api[ _-]?token|access[ _-]?token|auth[ _-]?token|password|private[ _-]?key|secret|credential)s?\b/i },
   // The `rm` branch covers short-flag (`-rf`) and long-flag (`--recursive`, `--force`) spellings
   // separately, in either order, since an objective naming the command at all is worth a preflight
   // confirmation regardless of which GNU flag style it used to say "recursive" or "force". The
@@ -39,7 +43,10 @@ const COMMAND_RULES: Rule[] = [
   // program being run rather than matching the substring "rm -rf" anywhere, including inside the
   // ordinary and safe `git rm -rf <tracked-file>`.
   { category: "destructive", reason: "destructive shell command", pattern: /\b(?:git\s+(?:reset\s+--hard|clean\s+-[^\n]*f)|drop\s+(?:database|table)|truncate\s+table|kubectl\s+delete|terraform\s+destroy)\b/i },
-  { category: "credentials", reason: "command reads or changes credentials", pattern: /\b(?:printenv|env|cat|type|more)\b[^\n]*(?:\.env|credentials?|secrets?|\.pem|id_rsa)|\b(?:secret|secrets)\s+(?:set|put|create|delete)|\b(?:set|export)\s+[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)=/i },
+  // Local reads are intentionally absent. They may expose a value to the model running this
+  // session, but they do not alter or transmit it and are a normal part of diagnosing a project.
+  // Mutation and likely exfiltration remain explicit decisions.
+  { category: "credentials", reason: "command changes or transmits credentials", pattern: /\b(?:secret|secrets)\s+(?:set|put|create|delete)|\b(?:set|export)\s+[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)=|\b(?:curl|wget|scp|rsync|nc|netcat|gh\s+gist\s+create)\b[^\n]*(?:\.env(?:\.[^\s]+)?|credentials?|secrets?|\.pem|id_rsa)/i },
   { category: "production", reason: "deployment or package publication command", pattern: /\b(?:npm|pnpm|yarn|bun|uv|poetry|twine|cargo)\s+(?:publish|release)\b|\b(?:vercel(?:\s+deploy)?\s+--prod|(?:fly|railway|render|netlify|firebase)\s+(?:deploy|up|release))|\bkubectl\s+(?:apply|replace|patch|rollout)|\bterraform\s+apply\b|\bgit\s+push\b/i },
   { category: "external", reason: "network mutation or external publication", pattern: /\bcurl\b[^\n]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b|\bgh\s+pr\s+(?:create|merge|close)|\bgh\s+release\s+create\b/i },
   { category: "security", reason: "privilege or permission change", pattern: /(?:^|[;&|]\s*)sudo\b|\bchmod\s+(?:-R\s+)?777\b|\b(?:disable|bypass)[-_ ]?(?:auth|security)\b/i },

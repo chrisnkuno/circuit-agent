@@ -295,14 +295,21 @@ pub fn read_journal(path: &Path, expected_session_id: &str) -> Result<JournalRec
             });
         }
         let expected_hash = string_field(object, "hash", path, "journal")?.to_owned();
-        event
+        let object = event
             .as_object_mut()
             .ok_or_else(|| SourceError::InvalidRecord {
                 path: path.to_owned(),
                 kind: "journal",
                 message: "event must be an object".into(),
-            })?
-            .shift_remove("hash");
+            })?;
+        // The chain is verified over the event without its own digest, but the indexed record still
+        // carries it. Lifting it out and putting it back at the same position keeps the verified
+        // value byte-identical to the line on disk without parsing that line a second time.
+        let digest_position = object
+            .keys()
+            .position(|key| key == "hash")
+            .unwrap_or(object.len());
+        object.shift_remove("hash");
         let encoded = serde_json::to_vec(&event).map_err(|source| SourceError::Json {
             path: path.to_owned(),
             source,
@@ -313,23 +320,26 @@ pub fn read_journal(path: &Path, expected_session_id: &str) -> Result<JournalRec
                 sequence,
             });
         }
+        if let Some(object) = event.as_object_mut() {
+            object.shift_insert(
+                digest_position,
+                "hash".into(),
+                Value::String(expected_hash.clone()),
+            );
+        }
         previous_hash = expected_hash;
 
-        let original: Value = serde_json::from_str(line).map_err(|source| SourceError::Json {
-            path: path.to_owned(),
-            source,
-        })?;
-        let timestamp = original
+        let timestamp = event
             .get("timestamp")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
         first_at.get_or_insert_with(|| timestamp.clone());
         last_at = Some(timestamp);
-        if let Some(document) = journal_document(&original) {
+        if let Some(document) = journal_document(&event) {
             documents.push(document);
         }
-        events.push(original);
+        events.push(event);
     }
 
     Ok(JournalRecord {
@@ -459,8 +469,12 @@ pub(crate) fn session_id_from_file(path: &Path, suffix: &str) -> Option<String> 
     safe.then(|| id.to_owned())
 }
 
-#[cfg(test)]
-pub(crate) fn integrity_for_session(mut value: Value) -> String {
+/// The digest the TypeScript writer stamps into every snapshot: SHA-256 over the canonical record
+/// with `integrity` removed. Tests and the benchmark corpus both have to produce snapshots that are
+/// indistinguishable from what `session.ts` writes, and a second copy of the rule in either of them
+/// would be free to drift away from the one `read_session` verifies against.
+#[cfg(any(test, feature = "benchmark"))]
+pub fn integrity_for_session(mut value: Value) -> String {
     value
         .as_object_mut()
         .expect("session object")

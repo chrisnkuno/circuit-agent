@@ -682,3 +682,55 @@ export const DEFENDER_PLAYBOOKS = [
   THREAT_INTELLIGENCE_PLAYBOOK,
   HARDENING_RESOURCES_PLAYBOOK,
 ].join("\n\n");
+
+
+/**
+ * The same playbooks, addressable one at a time.
+ *
+ * `DEFENDER_PLAYBOOKS` above is ~44,000 characters — around 14,300 tokens — and it was sent whole
+ * on every request of every iteration in defender mode, which is 80% of that mode's fixed prompt
+ * cost and by far the largest single line item in the whole system. Most of it is inapplicable to
+ * any given project: there is no SQL injection surface in a repository with no database, and no
+ * LLM playbook worth reading against one that calls no model.
+ *
+ * So the prompt now carries the *index* — every category, named — and the model pulls the two or
+ * three that actually apply. Nothing is lost: the full text of every playbook is one tool call
+ * away, and the prompt still tells the model to work them in order of what the project is.
+ */
+export const DEFENDER_PLAYBOOK_CATALOG: ReadonlyArray<{ id: string; title: string; text: string }> = [
+  ACCESS_CONTROL_PLAYBOOK,
+  SECURITY_MISCONFIGURATION_PLAYBOOK,
+  SUPPLY_CHAIN_INTEGRITY_PLAYBOOK,
+  INJECTION_PLAYBOOK,
+  CLIENT_SIDE_SECURITY_PLAYBOOK,
+  AUTH_SESSION_PLAYBOOK,
+  API_SECURITY_PLAYBOOK,
+  SSRF_PLAYBOOK,
+  SECRETS_PLAYBOOK,
+  DEPENDENCIES_PLAYBOOK,
+  CRYPTOGRAPHY_PLAYBOOK,
+  IAC_CONTAINERS_PLAYBOOK,
+  ERROR_HANDLING_PLAYBOOK,
+  BUSINESS_LOGIC_PLAYBOOK,
+  INPUT_VALIDATION_FUZZING_PLAYBOOK,
+  LOGGING_MONITORING_DETERRENCE_PLAYBOOK,
+  LLM_AI_SECURITY_PLAYBOOK,
+  THREAT_INTELLIGENCE_PLAYBOOK,
+  HARDENING_RESOURCES_PLAYBOOK,
+].map((text) => {
+  // The `## Heading` each playbook already starts with is its title — derived rather than
+  // restated, so a renamed playbook cannot disagree with the index that lists it.
+  const title = text.trim().split("\n")[0].replace(/^#+\s*/, "").trim();
+  return { id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""), title, text: text.trim() };
+});
+
+/** The compact list that goes in the prompt: ids the model can actually pass to `read_playbook`. */
+export function defenderPlaybookIndex(): string {
+  return DEFENDER_PLAYBOOK_CATALOG.map((entry) => `- ${entry.id} — ${entry.title}`).join("\n");
+}
+
+/** One playbook by id, or undefined. Ids come from the index, so an unknown one is a model mistake worth reporting. */
+export function playbookFor(id: string): { id: string; title: string; text: string } | undefined {
+  const wanted = id.trim().toLowerCase();
+  return DEFENDER_PLAYBOOK_CATALOG.find((entry) => entry.id === wanted || entry.title.toLowerCase() === wanted);
+}

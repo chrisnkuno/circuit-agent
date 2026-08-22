@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { buildCodingPlannerPrompt, CodingPlanSchema, type CodingPlan } from "../coding-prompt";
 import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
+import { PROTOCOL_MAX_OUTPUT_TOKENS } from "./model-capabilities";
 
 type ParsedCodingResponse = {
   id: string;
@@ -28,8 +29,13 @@ export type OpenAICodingModelOptions = {
 
 function validateRequest(request: CodingPlanRequest): void {
   if (!request.taskId.trim() || !request.stepId.trim()) throw new Error("taskId and stepId are required");
-  if (!Number.isInteger(request.maxOutputTokens) || request.maxOutputTokens < 256 || request.maxOutputTokens > 16_384) {
-    throw new Error("maxOutputTokens must be between 256 and 16384");
+  // The ceiling is the largest output any current model will produce, not a number this file
+  // invented. Whether *this* model can go that high is decided upstream from its capabilities
+  // (`model-capabilities.ts`); a validator that cannot see the model must not impose a stricter
+  // limit than the protocol, which is what the old 16,384 did — it rejected the runtime's own
+  // default the moment budgets started coming from the model.
+  if (!Number.isInteger(request.maxOutputTokens) || request.maxOutputTokens < 256 || request.maxOutputTokens > PROTOCOL_MAX_OUTPUT_TOKENS) {
+    throw new Error(`maxOutputTokens must be between 256 and ${PROTOCOL_MAX_OUTPUT_TOKENS}`);
   }
   if (!Number.isInteger(request.timeoutMs) || request.timeoutMs < 1_000 || request.timeoutMs > 10 * 60_000) {
     throw new Error("timeoutMs must be between 1 second and 10 minutes");

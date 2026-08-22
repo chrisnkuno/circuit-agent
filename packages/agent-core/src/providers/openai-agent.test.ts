@@ -78,10 +78,13 @@ describe("OpenAI agent adapter", () => {
     expect(turn).toMatchObject({ finishReason: "refusal", refusal: "Cannot assist." });
   });
 
-  it("fails closed on an unsupported finish reason and on missing accounting", async () => {
+  it("reports a truncated turn as unfinished, and fails closed on an unknown reason or missing accounting", async () => {
     const truncated = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async () =>
-      respond({ finish_reason: "length" }));
-    await expect(truncated.complete(request)).rejects.toThrow(/finish reason/);
+      respond({ finish_reason: "length", message: { content: "partial" } }));
+    expect(await truncated.complete(request)).toMatchObject({ finishReason: "length", content: "partial" });
+
+    const unknown = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async () => respond({ finish_reason: "banana" }));
+    await expect(unknown.complete(request)).rejects.toThrow(/finish reason/);
 
     const noUsage = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async () => ({ ...respond(), usage: null }));
     await expect(noUsage.complete(request)).rejects.toThrow(/usage accounting/);
