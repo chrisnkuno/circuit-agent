@@ -34,7 +34,7 @@
     },
     "apps/nova-desktop": {
       "name": "@circuit-nova/nova-desktop",
-      "version": "0.1.7",
+      "version": "0.2.0",
       "dependencies": {
         "@circuit-nova/nova-core": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.23",
@@ -70,7 +70,7 @@
     },
     "packages/agent-core": {
       "name": "@circuit-nova/nova-core",
-      "version": "0.5.0",
+      "version": "0.8.0",
       "dependencies": {
         "openai": "^6.49.0",
         "zod": "^4.4.3",
@@ -86,7 +86,7 @@
     },
     "packages/nova-cli": {
       "name": "@circuit-nova/nova-cli",
-      "version": "1.0.0",
+      "version": "1.3.0",
       "bin": {
         "nova": "dist/nova.mjs",
       },
@@ -96,14 +96,14 @@
         "@termuijs/widgets": "0.1.7",
       },
       "optionalDependencies": {
-        "@circuit-nova/state-darwin-arm64": "0.1.0",
-        "@circuit-nova/state-darwin-x64": "0.1.0",
-        "@circuit-nova/state-linux-arm64-gnu": "0.1.0",
-        "@circuit-nova/state-linux-arm64-musl": "0.1.0",
-        "@circuit-nova/state-linux-x64-gnu": "0.1.0",
-        "@circuit-nova/state-linux-x64-musl": "0.1.0",
-        "@circuit-nova/state-win32-arm64": "0.1.0",
-        "@circuit-nova/state-win32-x64": "0.1.0",
+        "@circuit-nova/state-darwin-arm64": "0.2.0",
+        "@circuit-nova/state-darwin-x64": "0.2.0",
+        "@circuit-nova/state-linux-arm64-gnu": "0.2.0",
+        "@circuit-nova/state-linux-arm64-musl": "0.2.0",
+        "@circuit-nova/state-linux-x64-gnu": "0.2.0",
+        "@circuit-nova/state-linux-x64-musl": "0.2.0",
+        "@circuit-nova/state-win32-arm64": "0.2.0",
+        "@circuit-nova/state-win32-x64": "0.2.0",
       },
     },
   },
@@ -179,14 +179,6 @@
     "@circuit-nova/nova-core": ["@circuit-nova/nova-core@workspace:packages/agent-core"],
 
     "@circuit-nova/nova-desktop": ["@circuit-nova/nova-desktop@workspace:apps/nova-desktop"],
-
-    "@circuit-nova/state-linux-arm64-gnu": ["@circuit-nova/state-linux-arm64-gnu@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-z5u6xkhZ4qra7W10Gbw6BqhWJPmQP7c/ZuMOInZSNpVNjsN77/KeGV5nylDgNCu9zZnhCivxvVwsmITRlKxgpg=="],
-
-    "@circuit-nova/state-linux-arm64-musl": ["@circuit-nova/state-linux-arm64-musl@0.1.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-vvwS1WDjCnJ+ahCCabh1PjpcuLpmSAvP4ErQqCmDqZSTGAnckax47Gm1LMrTL85SaJR3g+jPUbfpROHqZ14/Hw=="],
-
-    "@circuit-nova/state-linux-x64-gnu": ["@circuit-nova/state-linux-x64-gnu@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-vtMwuJcDuoed8f14hmWaES19QL5UzCVevh1gSYjYQVjA1AbFL5254bxgZoBgMbYL4W6BqKVXQBEb2uNn+aqVNA=="],
-
-    "@circuit-nova/state-linux-x64-musl": ["@circuit-nova/state-linux-x64-musl@0.1.0", "", { "os": "linux", "cpu": "x64" }, "sha512-5+RiGvUrMdSrhjN9LoqZDODvM0Xb7sq37r7DpiVA7N7Kql2e5+MNRUekkm3xwWuJlqLTWijyX7q+beUqYZmu3g=="],
 
     "@connectrpc/connect": ["@connectrpc/connect@2.1.2", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA=="],
 
