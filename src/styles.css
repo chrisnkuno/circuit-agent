@@ -2753,6 +2753,74 @@ kbd,
   color: var(--danger);
 }
 
+/* ── Update panel (Settings) ────────────────────────────────────────────────────────────────── */
+
+.update-panel {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.update-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.update-panel-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-panel-status {
+  color: var(--ink-muted);
+  font-size: var(--t3);
+  /* Wraps rather than truncating: the interesting statuses are the failures, and a failure the
+     user cannot read is one they cannot act on. */
+  overflow-wrap: anywhere;
+}
+
+.update-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transition: width 160ms linear;
+}
+
+/* No content length means no honest percentage, so the bar shows motion instead of a number. */
+.update-progress.indeterminate .update-progress-fill {
+  width: 40%;
+  animation: update-progress-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes update-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A looping bar is exactly the kind of motion this setting exists to stop. Still clearly "busy",
+     just without the travel. */
+  .update-progress.indeterminate .update-progress-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
 /* ── Verification badges ────────────────────────────────────────────────────────────────────── */
 
 .verify {

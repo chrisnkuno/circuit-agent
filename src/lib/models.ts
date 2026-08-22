@@ -1,6 +1,10 @@
-import { PROVIDERS, catalogPrices } from "@circuit-nova/nova-core/providers/agent-matrix";
+// `provider-specs` rather than `agent-matrix`: identical data, but importing the matrix reaches
+// `create()` and through it both vendor SDKs, which this bundle would then ship to a browser
+// that never calls either — every request goes through the sidecar.
+import { PROVIDER_INFO, catalogPrices } from "@circuit-nova/nova-core/providers/provider-specs";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { formatMoney, money } from "@circuit-nova/nova-core/money";
+import { mergeModelLists } from "@circuit-nova/nova-core/providers/model-list";
 import type { ProviderId } from "./settings";
 
 /**
@@ -25,6 +29,13 @@ export type ModelOption = {
   isDefault: boolean;
   /** Per-million input/output, already formatted, or undefined when the catalog has no rate. */
   price?: string;
+  /**
+   * True when this model came from the provider rather than the price catalog.
+   *
+   * Worth marking in the menu, because it is exactly the set whose `price` is missing: the model
+   * is real and selectable, and what it costs is genuinely unknown to this build rather than free.
+   */
+  live?: boolean;
 };
 
 /**
@@ -33,15 +44,19 @@ export type ModelOption = {
  * Only text, and only tokens: the catalog also prices embeddings, images and audio, and offering
  * `text-embedding-3-large` as something to hold a conversation with is offering a mistake.
  */
-export function modelsForProvider(provider: ProviderId): string[] {
+export function modelsForProvider(provider: ProviderId, live?: readonly string[]): string[] {
   const seen = new Set<string>();
   for (const record of PRICE_CATALOG) {
     if (record.provider !== provider || record.modality !== "text" || record.billingUnit !== "tokens") continue;
     seen.add(record.model);
   }
-  const fallback = PROVIDERS[provider].defaultModel;
+  const fallback = PROVIDER_INFO[provider].defaultModel;
   seen.add(fallback);
-  return [fallback, ...[...seen].filter((model) => model !== fallback).sort()];
+  const known = [fallback, ...[...seen].filter((model) => model !== fallback).sort()];
+  // Known ids keep the order they were given — the default first, then the catalog — and anything
+  // the provider named that this build has never heard of is appended. Merged with the CLI's own
+  // rule rather than a second one, so the same key produces the same menu in both surfaces.
+  return mergeModelLists(known, live);
 }
 
 /**
@@ -66,27 +81,34 @@ export const DESKTOP_PROVIDERS: readonly ProviderId[] = ["circuitnotion", "opena
  * unusable ones are listed and marked rather than omitted. Hiding them would make the menu look
  * like the app only supports one provider.
  */
-export function buildModelOptions(configured: ProviderId | ReadonlySet<ProviderId>, asOf?: string): ModelOption[] {
+export function buildModelOptions(
+  configured: ProviderId | ReadonlySet<ProviderId>,
+  options: { asOf?: string; live?: Partial<Record<ProviderId, string[]>> } = {},
+): ModelOption[] {
+  const { asOf, live } = options;
   // Accepts either the single selected provider (what every earlier caller passed) or the set that
   // actually has keys. The set is what lets a row say "needs a key" instead of letting someone
   // choose a model that cannot run — the switch itself succeeds, and the failure arrives a turn
   // later as a 401 with no obvious cause.
   const ready = typeof configured === "string" ? new Set<ProviderId>([configured]) : configured;
-  const options: ModelOption[] = [];
+  const rows: ModelOption[] = [];
   for (const provider of DESKTOP_PROVIDERS) {
-    const spec = PROVIDERS[provider];
-    for (const model of modelsForProvider(provider)) {
-      options.push({
+    const spec = PROVIDER_INFO[provider];
+    const fromCatalog = new Set(modelsForProvider(provider));
+    for (const model of modelsForProvider(provider, live?.[provider])) {
+      const price = describePrice(provider, model, asOf);
+      rows.push({
         provider,
         providerLabel: spec.label,
         model,
         isDefault: model === spec.defaultModel,
         ...(ready.has(provider) ? {} : { needsKey: true }),
-        ...(describePrice(provider, model, asOf) ? { price: describePrice(provider, model, asOf)! } : {}),
+        ...(fromCatalog.has(model) ? {} : { live: true }),
+        ...(price ? { price } : {}),
       });
     }
   }
-  return options;
+  return rows;
 }
 
 /** Case-insensitive substring match, ranked so a prefix beats a mid-string hit. */

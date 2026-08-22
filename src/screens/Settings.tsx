@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
 import { verifyCredentials } from "../lib/ipc";
 import { buildModelOptions } from "../lib/models";
+import { UpdatePanel } from "../components/UpdatePanel";
+import type { UpdateStatus } from "../lib/updates";
+import { invalidateLiveModels, useLiveModels } from "../lib/live-models";
 import { DESKTOP_PROVIDERS } from "../lib/models";
 import { defaultBaseUrl, defaultSettings, providerIsConfigured, withProvider, DEFAULT_MODELS, type NovaSettings, type ProviderId } from "../lib/settings";
 
@@ -33,6 +36,13 @@ export function SettingsScreen(props: {
   onSave: (settings: NovaSettings) => Promise<void>;
   /** A boot failure to explain in place, above the fields that can fix it. */
   notice?: string | null;
+  /** Update state, owned by `App` so the banner and this panel can never disagree. */
+  update?: {
+    currentVersion: string;
+    status: UpdateStatus;
+    onCheck: () => void;
+    onInstall: () => void;
+  };
 }) {
   const [settings, setSettings] = useState(props.initial);
   const [saving, setSaving] = useState(false);
@@ -42,9 +52,13 @@ export function SettingsScreen(props: {
 
   const missingKey = settings.apiKey.trim().length === 0;
   const canSave = !missingKey && settings.model.trim().length > 0;
+  // This is the screen where a key is pasted, so it is the screen where "which models does this
+  // key actually reach" stops being rhetorical. Fetched on mount rather than on demand: there is
+  // no menu to open here, the list is the field.
+  const live = useLiveModels(!missingKey);
   const models = useMemo(
-    () => buildModelOptions(settings.provider).filter((option) => option.provider === settings.provider),
-    [settings.provider],
+    () => buildModelOptions(settings.provider, { live: live.models }).filter((option) => option.provider === settings.provider),
+    [settings.provider, live.models],
   );
 
   function edit(patch: Partial<NovaSettings>) {
@@ -83,6 +97,10 @@ export function SettingsScreen(props: {
     setError(null);
     try {
       await props.onSave(settings);
+      // The saved key is what the model list was fetched against. Keeping the old answer after it
+      // changes is how a picker goes on offering the previous account's models — and, worse, goes
+      // on hiding the new key's.
+      invalidateLiveModels();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -245,6 +263,15 @@ export function SettingsScreen(props: {
         >
           Reset defaults
         </button>
+
+        {props.update ? (
+          <UpdatePanel
+            currentVersion={props.update.currentVersion}
+            status={props.update.status}
+            onCheck={props.update.onCheck}
+            onInstall={props.update.onInstall}
+          />
+        ) : null}
       </div>
     </div>
   );

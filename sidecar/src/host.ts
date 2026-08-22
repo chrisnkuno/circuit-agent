@@ -29,9 +29,10 @@ import { createE2BProvider } from "@circuit-nova/nova-core/providers/factory";
 import { addMemory, forgetMemory, loadMemories, memoryFile, type MemoryKind, type MemoryScope } from "@circuit-nova/nova-core/nova-cli/memory";
 import { verifyCredentials } from "./verify.js";
 import { TabRegistry } from "./tabs.js";
-import type { IpcEvent, IpcRequest, NovaSettings, ProviderId } from "./protocol.js";
-import { DEFAULT_MODELS } from "./protocol.js";
-import { credentialsFor, settingsToEnvironment, validateApiKey } from "./settings.js";
+import type { IpcEvent, IpcRequest, ModelsListResult, NovaSettings, ProviderId } from "./protocol.js";
+import { DEFAULT_MODELS, DESKTOP_PROVIDER_IDS } from "./protocol.js";
+import { credentialsFor, settingsToCatalogEnvironment, settingsToEnvironment, validateApiKey } from "./settings.js";
+import { fetchableProviders, loadLiveModels } from "@circuit-nova/nova-core/providers/model-fetch";
 
 type Emit = (event: IpcEvent) => void;
 
@@ -170,6 +171,8 @@ export class NovaHost {
       }
       case "providers.describe":
         return this.describeProviders();
+      case "models.list":
+        return await this.listModels(Boolean(request.refresh));
       // Takes the settings in the request rather than the stored ones: this is asked from a form
       // the user is still editing, about values they have not committed yet.
       case "providers.verify":
@@ -261,6 +264,38 @@ export class NovaHost {
       providers: describeProviders(env),
       configured: true,
       active: { provider: settings.provider, model: settings.model, baseUrl: settings.baseUrl },
+    };
+  }
+
+  /**
+   * Asks every provider the user has a key for what models it will accept.
+   *
+   * The desktop picker was built from the price catalog, which lists a model only once someone has
+   * written down what it costs. That is backwards for a menu whose job is "what can I switch to":
+   * providers ship models faster than any rate table is updated, and the missing ones are
+   * disproportionately the new ones people are looking for. This is the same fetch the CLI has
+   * made since `model-fetch.ts` existed, against the same six-hour cache, so the two surfaces
+   * cannot offer different models.
+   *
+   * Never throws. A provider that is down, rate-limiting or holding a stale key produces a named
+   * reason on its own row; the other providers' lists still arrive.
+   */
+  private async listModels(refresh: boolean): Promise<ModelsListResult> {
+    const settings = this.settings;
+    if (!settings) return { providers: [], fromCache: false };
+    const environment = settingsToCatalogEnvironment(settings);
+    const askable = fetchableProviders(environment, DESKTOP_PROVIDER_IDS);
+    if (askable.length === 0) return { providers: [], fromCache: false };
+
+    const loaded = await loadLiveModels(askable, environment, { refresh });
+    const failures = new Map(loaded.errors.map((error) => [error.provider, error.error]));
+    return {
+      providers: askable.map((provider) => ({
+        provider,
+        models: loaded.models[provider] ?? [],
+        ...(failures.get(provider) ? { error: failures.get(provider)! } : {}),
+      })),
+      fromCache: loaded.fromCache,
     };
   }
 
