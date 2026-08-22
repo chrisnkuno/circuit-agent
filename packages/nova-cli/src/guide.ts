@@ -206,6 +206,23 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     covers: ["/cost", "/slow"],
   },
   {
+    id: "pay",
+    title: "Paying from the terminal",
+    summary: "Topping up your Nova credit without leaving the prompt.",
+    body: [
+      "/pay creates a payment and gives you a link and a short code. You pay on Circuit Pay's own page — Nova never sees your card, your PIN or your mobile-money confirmation, and never asks for them.",
+      "Nothing is charged until you answer the confirmation, and the amount you approve is the amount that appears on the checkout. Amounts are whole RWF: Nova refuses a decimal rather than rounding money you typed.",
+      "While it waits, Ctrl+C returns you to the prompt without cancelling the payment. If it is still unconfirmed when you stop waiting, Nova says so and keeps the reference rather than calling it failed — a payment that has not been confirmed is not a payment that has failed, and paying twice is the mistake worth designing against. /pay status <reference> picks it up later.",
+      "/pay on its own shows the balance, and warns when it is less than this session has already used. Paying needs NOVA_BILLING_URL and NOVA_BILLING_KEY set in /settings; without both, /pay says so instead of half-working.",
+    ],
+    examples: [
+      { input: "/pay 5000", effect: "top up 5,000 RWF" },
+      { input: "/pay", effect: "what the balance is" },
+      { input: "/pay status CP-91f2", effect: "check a payment you stopped waiting for" },
+    ],
+    covers: ["/pay"],
+  },
+  {
     id: "background",
     title: "Background work",
     summary: "Jobs that outlive the prompt, and research that runs itself.",

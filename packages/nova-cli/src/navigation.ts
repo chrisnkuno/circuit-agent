@@ -89,7 +89,7 @@ export const COMMAND_GROUP: Readonly<Record<string, NavGroupId>> = {
   "/mode": "steer", "/plan": "steer", "/build": "steer", "/auto": "steer", "/defender": "steer",
   "/model": "steer", "/models": "steer", "/slow": "steer", "/clear": "steer", "/memory": "steer",
   "/todos": "review", "/diff": "review", "/undo": "work", "/cost": "review", "/expand": "review",
-  "/history": "review", "/sessions": "review", "/scan": "work", "/wander": "work", "/voice": "work",
+  "/history": "review", "/sessions": "review", "/pay": "review", "/scan": "work", "/wander": "work", "/voice": "work",
   "/files": "work", "/pull": "work", "/where": "review",
   "/jobs": "parallel", "/detach": "parallel", "/attach": "parallel", "/watch": "parallel",
   "/tab": "parallel", "/workspace": "parallel",

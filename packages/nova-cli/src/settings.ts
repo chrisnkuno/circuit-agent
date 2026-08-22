@@ -92,6 +92,10 @@ export const SETTING_FIELDS = [
   { key: "MODEL_CACHED_INPUT_PER_MILLION", label: "Cached input price per million tokens" },
   { key: "MODEL_PRICE_CURRENCY", label: "Model price currency" },
   { key: "MODEL_PRICE_MODEL", label: "Model the price override applies to" },
+  // Both or neither: `/pay` refuses to run half-configured rather than failing at the moment a
+  // person is trying to hand over money.
+  { key: "NOVA_BILLING_URL", label: "Billing service URL (enables /pay)", url: true },
+  { key: "NOVA_BILLING_KEY", label: "Billing service key", secret: true },
   { key: "NOVA_KEYS", label: "Key bindings, e.g. /diff=alt+d,/wander=off" },
   // Off by default, and the label says what it costs: the deterministic suggestions are free and
   // instant, and this buys two extra project-specific ones for a small model call per turn. A

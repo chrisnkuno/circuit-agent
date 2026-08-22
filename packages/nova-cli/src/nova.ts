@@ -73,6 +73,8 @@ import {
 } from "@circuit-nova/nova-core";
 import { runJobWorkerForever, workerId } from "./job-worker";
 import { parseAttachCommand, parseDetachCommand, parseJobsCommand } from "./jobs-command";
+import { BILLING_NOT_CONFIGURED, parsePayCommand, renderBalance, renderCheckout, renderPaymentOutcome, renderTopUpQuote } from "./pay";
+import { BillingError, billingFromEnvironment, newIdempotencyKey, waitForPayment } from "@circuit-nova/nova-core/nova-cli/billing";
 import { IMPLICIT_SKILL_PROVIDER_ID } from "@circuit-nova/nova-core";
 import { renderTools } from "./tools-command";
 import { removeRecording, startRecording, transcribeAudio } from "./voice";
@@ -4199,6 +4201,82 @@ async function main(): Promise<number> {
           });
           animator.retarget(fraction);
         });
+      }
+      continue;
+    }
+    const payCommand = parsePayCommand(input);
+    if (payCommand) {
+      if (payCommand.kind === "invalid") {
+        out.write(style.yellow(`  ${payCommand.reason}\n`));
+        continue;
+      }
+      // Both settings or neither: refusing here, before any amount is discussed, is kinder than
+      // failing at the moment someone is trying to hand over money.
+      const gateway = billingFromEnvironment(environment);
+      if (!gateway) {
+        for (const line of BILLING_NOT_CONFIGURED) out.write(`  ${line}\n`);
+        continue;
+      }
+      const sessionSpendRwf = (() => {
+        const total = ledger.displayTotal;
+        const rwf = total ? convertTo(total, "RWF", rates) : undefined;
+        return rwf ? Math.round(rwf.micros / 1_000_000) : undefined;
+      })();
+      try {
+        if (payCommand.kind === "balance") {
+          const balance = await gateway.getBalance();
+          for (const line of renderBalance(balance, { sessionSpendRwf })) out.write(`  ${line}\n`);
+          continue;
+        }
+        if (payCommand.kind === "status") {
+          const payment = await gateway.getPayment(payCommand.reference);
+          // The balance is only ever read back, never worked out from the amount — a figure Nova
+          // computed that disagrees with the provider's ledger is the disagreement users notice.
+          const balance = payment.status === "paid" ? await gateway.getBalance().catch(() => undefined) : undefined;
+          for (const line of renderPaymentOutcome(payment, { timedOut: false, balance })) out.write(`  ${line}\n`);
+          continue;
+        }
+
+        const before = await gateway.getBalance().catch(() => undefined);
+        out.write(`${box(renderTopUpQuote(payCommand.amountRwf, before), { depth: renderDepth, title: "payment", glyphs })}\n`);
+        // Money never moves without a person saying so in this session. A piped or scripted run has
+        // nobody to ask, so it stops rather than treating the command itself as consent.
+        if (!interactive) {
+          out.write(style.yellow("  Paying needs an interactive session — run /pay from the Nova prompt.\n"));
+          continue;
+        }
+        statusBar.clear();
+        const confirmation = (await readline.question(`  ${style.yellow("?")} Create this payment? ${style.dim("[y/N]: ")}`)).trim().toLowerCase();
+        if (confirmation !== "y" && confirmation !== "yes") {
+          out.write(style.dim("  Cancelled — nothing was charged.\n"));
+          continue;
+        }
+
+        const checkout = await gateway.createCheckout({ amountRwf: payCommand.amountRwf, idempotencyKey: newIdempotencyKey() });
+        for (const line of renderCheckout(checkout)) out.write(`  ${line}\n`);
+        out.write(style.dim("  waiting for confirmation — Ctrl+C stops waiting; the payment itself continues\n"));
+
+        // Same swap as /attach: Ctrl+C here must end the wait, not the session — and stopping the
+        // wait must never be reported as a failed payment, because the money may already be moving.
+        const stopped = { aborted: false };
+        const onPaySigint = () => { stopped.aborted = true; };
+        unbindSigint();
+        process.on("SIGINT", onPaySigint);
+        readline.on("SIGINT", onPaySigint);
+        let outcome;
+        try {
+          outcome = await waitForPayment(gateway, checkout.reference, { signal: stopped });
+        } finally {
+          process.off("SIGINT", onPaySigint);
+          readline.off("SIGINT", onPaySigint);
+          bindSigint();
+        }
+        const after = outcome.payment.status === "paid" ? await gateway.getBalance().catch(() => undefined) : undefined;
+        for (const line of renderPaymentOutcome(outcome.payment, { timedOut: outcome.timedOut, balance: after })) {
+          out.write(`  ${outcome.payment.status === "paid" ? style.green(line) : line}\n`);
+        }
+      } catch (error) {
+        out.write(style.red(`  ${error instanceof BillingError ? error.message : `Payment failed: ${error instanceof Error ? error.message : String(error)}`}\n`));
       }
       continue;
     }
