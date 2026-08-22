@@ -73,7 +73,7 @@ fn write_snapshot(root: &Path, session_id: &str, title: &str, marker: &str) {
 fn write_snapshot_messages(root: &Path, session_id: &str, title: &str, messages: Vec<Value>) {
     let directory = root.join(".nova/sessions");
     fs::create_dir_all(&directory).unwrap();
-    let session = json!({
+    let session = stamped(json!({
         "schemaVersion": 2,
         "revision": 1,
         "id": session_id,
@@ -84,12 +84,42 @@ fn write_snapshot_messages(root: &Path, session_id: &str, title: &str, messages:
         "messages": messages,
         "approvals": {},
         "totalRwf": 0
-    });
+    }));
     fs::write(
         directory.join(format!("{session_id}.json")),
         serde_json::to_vec_pretty(&session).unwrap(),
     )
     .unwrap();
+}
+
+/// Sorts keys the way the TypeScript writer's canonicalizer does. Deliberately a second, independent
+/// implementation of the rule: a fixture built from the reader's own helper could only ever agree
+/// with itself, and what these tests need to pin down is agreement with the writer on disk.
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
+        Value::Object(object) => {
+            let mut keys: Vec<&String> = object.keys().collect();
+            keys.sort();
+            Value::Object(
+                keys.into_iter()
+                    .map(|key| (key.clone(), canonical(&object[key])))
+                    .collect(),
+            )
+        }
+        other => other.clone(),
+    }
+}
+
+/// Every snapshot the real writer emits carries `integrity`, so every fixture snapshot carries one
+/// too — otherwise the tests exercise a verification path production never takes.
+fn stamped(mut session: Value) -> Value {
+    let digest = sha256(&canonical(&session));
+    session
+        .as_object_mut()
+        .unwrap()
+        .insert("integrity".into(), Value::String(digest));
+    session
 }
 
 fn fixture() -> TempDir {
@@ -425,4 +455,309 @@ fn invariant_schema_mismatch_discards_only_the_projection() {
         .path()
         .join(".nova/sessions/session-a.json")
         .exists());
+}
+
+/// Snapshots with an explicit `updatedAt`, so ordering tests do not depend on the shared fixture.
+fn write_snapshot_at(root: &Path, session_id: &str, updated_at: i64, marker: &str) {
+    let directory = root.join(".nova/sessions");
+    fs::create_dir_all(&directory).unwrap();
+    let session = stamped(json!({
+        "schemaVersion": 2, "revision": 1, "id": session_id,
+        "createdAt": 1, "updatedAt": updated_at, "root": root,
+        "title": format!("Session {session_id}"),
+        "messages": [json!({"role":"user","content":marker})],
+        "approvals": {}, "totalRwf": 0
+    }));
+    fs::write(
+        directory.join(format!("{session_id}.json")),
+        serde_json::to_vec(&session).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn invariant_verified_events_keep_their_digest_and_field_order() {
+    let directory = tempfile::tempdir().unwrap();
+    write_journal(directory.path(), "session-a", "PaymentIntent evidence");
+    let path = directory.path().join(".nova/events/session-a.jsonl");
+    let lines: Vec<String> = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+
+    let record = read_journal(&path, "session-a").unwrap();
+    assert_eq!(record.events.len(), lines.len());
+    for (event, line) in record.events.iter().zip(&lines) {
+        // Verification lifts the digest out of the event to hash it; what the index stores has to
+        // stay byte-identical to the canonical line on disk.
+        assert_eq!(&serde_json::to_string(event).unwrap(), line);
+    }
+}
+
+#[test]
+fn invariant_batched_rebuild_isolates_a_failure_and_stays_idempotent() {
+    let directory = tempfile::tempdir().unwrap();
+    // Deliberately larger than one write batch, so sessions land either side of a commit boundary.
+    for session in 0..80 {
+        let messages = (0..100)
+            .map(|message| json!({"role":"user","content":format!("session {session} message {message} PaymentIntent evidence")}))
+            .collect();
+        write_snapshot_messages(
+            directory.path(),
+            &format!("batch-{session:02}"),
+            "Batched session",
+            messages,
+        );
+    }
+    fs::write(
+        directory.path().join(".nova/sessions/batch-40.json"),
+        b"{ not json",
+    )
+    .unwrap();
+
+    let mut index = StateIndex::open(directory.path()).unwrap();
+    let report = index.rebuild_all().unwrap();
+    assert_eq!(report.sessions, 79);
+    assert_eq!(report.documents, 7_900);
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].session_id.as_deref(), Some("batch-40"));
+
+    let repeated = index.rebuild_all().unwrap();
+    assert_eq!(
+        (repeated.sessions, repeated.documents),
+        (report.sessions, report.documents)
+    );
+    assert_eq!(index.sessions(500).unwrap().len(), 79);
+    // A session from every batch remains individually retrievable after the corrupt neighbour.
+    for session in ["batch-00", "batch-39", "batch-41", "batch-79"] {
+        assert_eq!(
+            index
+                .search(
+                    "PaymentIntent",
+                    SearchOptions {
+                        session_id: Some(session.into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn invariant_reindexing_replaces_rather_than_accumulates_documents() {
+    let directory = fixture();
+    let mut index = StateIndex::open(directory.path()).unwrap();
+    let first = index.rebuild_all().unwrap();
+
+    write_snapshot(
+        directory.path(),
+        "session-a",
+        "Checkout migration",
+        "Replaced PaymentIntent evidence",
+    );
+    let second = index.rebuild_all().unwrap();
+    assert_eq!(second.documents, first.documents);
+    let hit = index
+        .search("PaymentIntent", SearchOptions::default())
+        .unwrap()
+        .remove(0);
+    assert_eq!(hit.context.len(), 6);
+    assert!(index
+        .search("Implemented idempotent", SearchOptions::default())
+        .unwrap()
+        .is_empty());
+
+    // Removing the sources retires the projection instead of leaving orphaned FTS rows behind.
+    fs::remove_file(directory.path().join(".nova/sessions/session-a.json")).unwrap();
+    fs::remove_file(directory.path().join(".nova/events/session-a.jsonl")).unwrap();
+    index.rebuild_all().unwrap();
+    assert!(index.sessions(20).unwrap().is_empty());
+    assert!(index
+        .search("PaymentIntent", SearchOptions::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn behavior_sort_order_selects_which_sessions_a_limit_keeps() {
+    let directory = tempfile::tempdir().unwrap();
+    for (session_id, updated_at) in [("oldest", 10), ("middle", 20), ("newest", 30)] {
+        write_snapshot_at(
+            directory.path(),
+            session_id,
+            updated_at,
+            "PaymentIntent evidence",
+        );
+    }
+    let mut index = StateIndex::open(directory.path()).unwrap();
+    index.rebuild_all().unwrap();
+
+    // Options arrive from the client as JSON, which is also the only way to name a sort order.
+    let sessions = |sort: &str| {
+        let options: SearchOptions =
+            serde_json::from_value(json!({"limit": 2, "sort": sort})).unwrap();
+        index
+            .search("PaymentIntent", options)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.session_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(sessions("newest"), ["newest", "middle"]);
+    assert_eq!(sessions("oldest"), ["oldest", "middle"]);
+    assert_eq!(sessions("relevance").len(), 2);
+}
+
+#[test]
+fn behavior_empty_sources_index_without_documents_or_panics() {
+    let directory = tempfile::tempdir().unwrap();
+    write_snapshot_messages(directory.path(), "empty", "Empty session", Vec::new());
+    fs::create_dir_all(directory.path().join(".nova/events")).unwrap();
+    fs::write(directory.path().join(".nova/events/empty.jsonl"), "").unwrap();
+
+    let mut index = StateIndex::open(directory.path()).unwrap();
+    let report = index.rebuild_all().unwrap();
+    assert_eq!(
+        (report.sessions, report.events, report.documents),
+        (1, 0, 0)
+    );
+    let summary = index.sessions(20).unwrap().remove(0);
+    assert!(summary.has_snapshot && summary.has_journal);
+    assert_eq!(summary.event_count, 0);
+    assert!(index
+        .search("anything", SearchOptions::default())
+        .unwrap()
+        .is_empty());
+    assert!(index
+        .context("empty", "snapshot", 1, 5, None)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn invariant_tampered_snapshot_is_rejected_and_the_projection_survives() {
+    let directory = fixture();
+    let mut index = StateIndex::open(directory.path()).unwrap();
+    index.rebuild_all().unwrap();
+
+    // The digest covers the canonical record, so editing any field without restamping breaks it.
+    let snapshot = directory.path().join(".nova/sessions/session-a.json");
+    let mut session: Value = serde_json::from_str(&fs::read_to_string(&snapshot).unwrap()).unwrap();
+    session["messages"][3]["content"] = json!("forged PaymentIntent conclusion");
+    fs::write(&snapshot, serde_json::to_vec_pretty(&session).unwrap()).unwrap();
+
+    let report = index.rebuild_all().unwrap();
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].source, "snapshot");
+    assert!(report.failures[0].message.contains("integrity"));
+    assert!(index
+        .search("forged", SearchOptions::default())
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        index
+            .search("Implemented idempotent", SearchOptions::default())
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// Mirrors the document queries in `index.rs`. They are the only reason the `documents` table has a
+/// multi-column index at all, and the plan is the only place a silently unusable index shows up:
+/// each one has to be answered by an index search, never by walking the table.
+const DOCUMENT_QUERIES: [&str; 4] = [
+    "SELECT id, source, source_position, role, kind, text FROM documents WHERE session_id = ? AND source = ? AND source_position BETWEEN ? AND ? ORDER BY source_position",
+    "SELECT id, source, source_position, role, kind, text FROM documents WHERE session_id = ? AND source = 'snapshot' AND role IN ('user', 'assistant') ORDER BY source_position DESC LIMIT 3",
+    "SELECT id FROM documents WHERE session_id = ?",
+    "DELETE FROM documents WHERE session_id = ?",
+];
+
+#[test]
+fn invariant_document_lookups_never_degrade_to_a_table_scan() {
+    let directory = fixture();
+    let index_file = {
+        let mut index = StateIndex::open(directory.path()).unwrap();
+        index.rebuild_all().unwrap();
+        index.file().to_owned()
+    };
+    let database = rusqlite::Connection::open(&index_file).unwrap();
+    for query in DOCUMENT_QUERIES {
+        let mut statement = database
+            .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+            .unwrap();
+        // The planner needs the parameters bound, but never their values: it plans on the shape.
+        let placeholders = (0..statement.parameter_count()).map(|_| rusqlite::types::Null);
+        let plan = statement
+            .query_map(rusqlite::params_from_iter(placeholders), |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" | ");
+        assert!(
+            plan.contains("SEARCH documents USING") && plan.contains("INDEX"),
+            "query is not index-driven: {query}\nplan: {plan}"
+        );
+        assert!(!plan.contains("SCAN documents"), "table scan: {query}");
+        // An index that cannot supply the order would show up here instead of in the timings.
+        assert!(!plan.contains("TEMP B-TREE FOR ORDER BY"), "sort: {query}");
+    }
+}
+
+#[test]
+fn invariant_an_earlier_projection_schema_is_dropped_rather_than_reused() {
+    let directory = fixture();
+    let index_file = {
+        let mut index = StateIndex::open(directory.path()).unwrap();
+        index.rebuild_all().unwrap();
+        index.file().to_owned()
+    };
+    // Reconstruct exactly what version 1 left on disk: the same tables plus the redundant index
+    // whose removal is what version 2 means.
+    let database = rusqlite::Connection::open(&index_file).unwrap();
+    database
+        .execute_batch(
+            "CREATE INDEX documents_context ON documents (session_id, source, source_position);
+             UPDATE meta SET value = '1' WHERE key = 'schemaVersion';",
+        )
+        .unwrap();
+    drop(database);
+
+    let mut index = StateIndex::open(directory.path()).unwrap();
+    assert!(index.sessions(20).unwrap().is_empty());
+    let database = rusqlite::Connection::open(&index_file).unwrap();
+    let stale: i64 = database
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'documents_context'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stale, 0, "the dropped index outlived the schema bump");
+    let version: String = database
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schemaVersion'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "2");
+    drop(database);
+
+    // The canonical sources are untouched, so the discarded projection rebuilds in full.
+    index.rebuild_all().unwrap();
+    assert_eq!(index.sessions(20).unwrap().len(), 1);
+    assert_eq!(
+        index
+            .search("PaymentIntent", SearchOptions::default())
+            .unwrap()
+            .len(),
+        1
+    );
 }

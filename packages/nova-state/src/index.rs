@@ -12,10 +12,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::source::{
-    read_journal, read_session, session_id_from_file, JournalRecord, SessionRecord, SourceDocument,
+    read_journal, read_session, session_id_from_file, JournalRecord, SessionRecord,
 };
 
-const INDEX_SCHEMA_VERSION: i64 = 1;
+/// Bumped whenever the projection's on-disk shape changes. `open_initialized` treats any other
+/// recorded version as unreadable and drops the projection rather than migrating it: the canonical
+/// sources are the truth, so rebuilding is always cheaper and safer than an in-place migration.
+/// Version 2 dropped a redundant `documents_context` index.
+const INDEX_SCHEMA_VERSION: i64 = 2;
+/// Upper bound on the events plus documents a rebuild buffers before committing. It trades a
+/// bounded amount of memory and index-lock hold time for far fewer fsyncs than one commit per
+/// session, which is what dominated a cold rebuild.
+const REBUILD_BATCH_ROWS: usize = 5_000;
 const DEFAULT_LIMIT: usize = 5;
 const MAX_LIMIT: usize = 50;
 const RESET_SCHEMA: &str = r#"
@@ -61,9 +69,12 @@ CREATE TABLE IF NOT EXISTS documents (
   kind TEXT NOT NULL,
   turn_id TEXT,
   text TEXT NOT NULL,
+  -- Serves both roles: it rejects duplicate projections of the same source record, and its leading
+  -- (session_id, source, source_position) columns are what every context, bookend, and per-session
+  -- delete searches on. A separate index over that prefix would only add a B-tree insert per
+  -- document and pages on disk; SQLite picks this one for those queries either way.
   UNIQUE (session_id, source, source_position, kind)
 ) STRICT;
-CREATE INDEX IF NOT EXISTS documents_context ON documents (session_id, source, source_position);
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   title,
   text,
@@ -72,6 +83,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   tokenize='unicode61 remove_diacritics 2'
 );
 "#;
+
+/// One verified session waiting to be written: its identifier, snapshot, and journal.
+type PendingSession = (String, Option<SessionRecord>, Option<JournalRecord>);
+
+#[derive(Default)]
+struct BatchCounts {
+    sessions: usize,
+    events: usize,
+    documents: usize,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,18 +242,24 @@ impl StateIndex {
         let stale: Vec<String> = {
             let mut statement = self.connection.prepare("SELECT session_id FROM sessions")?;
             let rows = statement
-                .query_map([], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            rows
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().filter(|id| !known.contains(id)).collect()
         };
-        for session_id in stale.into_iter().filter(|id| !known.contains(id)) {
-            self.delete_session(&session_id)?;
+        if !stale.is_empty() {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for session_id in &stale {
+                delete_session_rows(&transaction, session_id)?;
+            }
+            transaction.commit()?;
         }
 
         let mut failures = Vec::new();
-        let mut indexed_sessions = 0;
-        let mut indexed_events = 0;
-        let mut indexed_documents = 0;
+        let mut counts = BatchCounts::default();
+        let mut batch: Vec<PendingSession> = Vec::new();
+        let mut batch_rows = 0;
         for (session_id, (journal_path, session_path)) in source_paths {
             let journal = match journal_path {
                 Some(path) => match read_journal(&path, &session_id) {
@@ -262,116 +289,55 @@ impl StateIndex {
                 },
                 None => None,
             };
-            let (events, documents) =
-                self.replace_session(&session_id, session.as_ref(), journal.as_ref())?;
-            indexed_sessions += 1;
-            indexed_events += events;
-            indexed_documents += documents;
+            batch_rows += journal
+                .as_ref()
+                .map_or(0, |record| record.events.len() + record.documents.len())
+                + session.as_ref().map_or(0, |record| record.documents.len());
+            batch.push((session_id, session, journal));
+            if batch_rows >= REBUILD_BATCH_ROWS {
+                self.write_batch(&mut batch, &mut counts)?;
+                batch_rows = 0;
+            }
         }
+        self.write_batch(&mut batch, &mut counts)?;
         Ok(IndexReport {
-            sessions: indexed_sessions,
-            events: indexed_events,
-            documents: indexed_documents,
+            sessions: counts.sessions,
+            events: counts.events,
+            documents: counts.documents,
             failures,
         })
     }
 
-    fn delete_session(&mut self, session_id: &str) -> Result<()> {
+    /// Writes one batch of already verified sources in a single transaction. Each commit costs a
+    /// durable fsync, so committing once per session put the disk on the critical path of a
+    /// rebuild; batching keeps the same all-or-nothing replacement per session with far fewer
+    /// flushes. Sources are read before the transaction opens so the write lock is never held
+    /// across file I/O, and the batch is bounded by row count so peak memory stays predictable.
+    fn write_batch(
+        &mut self,
+        batch: &mut Vec<PendingSession>,
+        counts: &mut BatchCounts,
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        delete_session_rows(&transaction, session_id)?;
+        for (session_id, session, journal) in batch.iter() {
+            let (events, documents) =
+                replace_session(&transaction, session_id, session.as_ref(), journal.as_ref())?;
+            counts.sessions += 1;
+            counts.events += events;
+            counts.documents += documents;
+        }
         transaction.commit()?;
+        batch.clear();
         Ok(())
     }
 
-    fn replace_session(
-        &mut self,
-        session_id: &str,
-        session: Option<&SessionRecord>,
-        journal: Option<&JournalRecord>,
-    ) -> Result<(usize, usize)> {
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        delete_session_rows(&transaction, session_id)?;
-        let title = session
-            .map(|record| record.title.as_str())
-            .unwrap_or("Untitled session");
-        let event_count = journal.map(|record| record.events.len()).unwrap_or(0);
-        let last_sequence = journal
-            .and_then(|record| record.events.last())
-            .and_then(|event| event.get("sequence"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        transaction.execute(
-            "INSERT INTO sessions (session_id, title, created_at, updated_at, revision, event_count, first_event_at, last_event_at, last_sequence, has_snapshot, has_journal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                session_id,
-                title,
-                session.map(|record| record.created_at),
-                session.map(|record| record.updated_at),
-                session.map(|record| record.revision).unwrap_or(0),
-                event_count as i64,
-                journal.and_then(|record| record.first_at.as_deref()),
-                journal.and_then(|record| record.last_at.as_deref()),
-                last_sequence,
-                i64::from(session.is_some()),
-                i64::from(journal.is_some()),
-            ],
-        )?;
-
-        if let Some(journal) = journal {
-            let mut statement = transaction.prepare("INSERT INTO events (session_id, sequence, timestamp, type, turn_id, hash, payload) VALUES (?, ?, ?, ?, ?, ?, ?)")?;
-            for event in &journal.events {
-                let payload = event.get("payload").unwrap_or(&Value::Null);
-                statement.execute(params![
-                    session_id,
-                    event.get("sequence").and_then(Value::as_i64).unwrap_or(0),
-                    event
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    payload
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown"),
-                    payload.get("turnId").and_then(Value::as_str),
-                    event
-                        .get("hash")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    serde_json::to_string(payload)?,
-                ])?;
-            }
-        }
-
-        let documents: Vec<&SourceDocument> = session
-            .into_iter()
-            .flat_map(|record| record.documents.iter())
-            .chain(
-                journal
-                    .into_iter()
-                    .flat_map(|record| record.documents.iter()),
-            )
-            .collect();
-        for document in &documents {
-            transaction.execute(
-                "INSERT INTO documents (session_id, source, source_position, timestamp, role, kind, turn_id, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                params![session_id, document.source, document.position, document.timestamp, document.role, document.kind, document.turn_id, document.text],
-            )?;
-            let id = transaction.last_insert_rowid();
-            transaction.execute(
-                "INSERT INTO documents_fts (rowid, title, text, session_id, document_id) VALUES (?, ?, ?, ?, ?)",
-                params![id, title, document.text, session_id, id],
-            )?;
-        }
-        transaction.commit()?;
-        Ok((event_count, documents.len()))
-    }
-
     pub fn sessions(&self, limit: usize) -> Result<Vec<SessionSummary>> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT session_id, title, created_at, updated_at, revision, event_count, last_sequence, has_snapshot, has_journal FROM sessions ORDER BY COALESCE(updated_at, 0) DESC, COALESCE(last_event_at, '') DESC LIMIT ?",
         )?;
         let rows = statement.query_map([limit.clamp(1, 500) as i64], |row| {
@@ -400,10 +366,10 @@ impl StateIndex {
         let session_filter = options.session_id.as_deref();
         let roles = options.role_filter.unwrap_or_default();
         let role_filter = roles.join(",");
-        let mut session_statement = self.connection.prepare(
-            "SELECT d.session_id, MIN(documents_fts.rank) AS best_rank, COALESCE(s.updated_at, 0) FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid JOIN sessions s ON s.session_id = d.session_id WHERE documents_fts MATCH ? AND (? IS NULL OR d.session_id = ?) AND (? = '' OR instr(',' || ? || ',', ',' || COALESCE(d.role, '') || ',') > 0) GROUP BY d.session_id ORDER BY best_rank, d.session_id LIMIT ?",
+        let mut session_statement = self.connection.prepare_cached(
+            "SELECT d.session_id, MIN(documents_fts.rank) AS best_rank, s.updated_at FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid JOIN sessions s ON s.session_id = d.session_id WHERE documents_fts MATCH ? AND (? IS NULL OR d.session_id = ?) AND (? = '' OR instr(',' || ? || ',', ',' || COALESCE(d.role, '') || ',') > 0) GROUP BY d.session_id ORDER BY best_rank, d.session_id LIMIT ?",
         )?;
-        let ranked_sessions = session_statement
+        let mut ranked_sessions = session_statement
             .query_map(
                 params![
                     fts_query,
@@ -417,14 +383,28 @@ impl StateIndex {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, f64>(1)?,
-                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(2)?,
                     ))
                 },
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        let mut hits = Vec::new();
-        let mut hit_statement = self.connection.prepare(
+        // Ordering and truncation happen on the candidate rows, before any evidence is assembled.
+        // Every hit costs a best-document lookup, a context window, and two bookend queries, and a
+        // relevance search asks for twelve times more candidates than it can ever return.
+        match options.sort.unwrap_or(SearchSort::Relevance) {
+            // The candidate query already returns best rank ascending, which is score descending.
+            SearchSort::Relevance => {}
+            SearchSort::Newest => ranked_sessions
+                .sort_by_key(|(_, _, updated_at)| std::cmp::Reverse(updated_at.unwrap_or(0))),
+            SearchSort::Oldest => {
+                ranked_sessions.sort_by_key(|(_, _, updated_at)| updated_at.unwrap_or(i64::MAX))
+            }
+        }
+        ranked_sessions.truncate(limit);
+
+        let mut hits = Vec::with_capacity(ranked_sessions.len());
+        let mut hit_statement = self.connection.prepare_cached(
             "SELECT d.id, s.title, d.source, d.source_position, d.role, d.kind, snippet(documents_fts, 1, '[', ']', ' … ', 24), bm25(documents_fts, 5.0, 1.0) FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid JOIN sessions s ON s.session_id = d.session_id WHERE documents_fts MATCH ? AND d.session_id = ? AND (? = '' OR instr(',' || ? || ',', ',' || COALESCE(d.role, '') || ',') > 0) ORDER BY bm25(documents_fts, 5.0, 1.0), d.id LIMIT 1",
         )?;
         for (session_id, session_rank, _updated_at) in ranked_sessions {
@@ -464,29 +444,7 @@ impl StateIndex {
                 snippet,
             });
         }
-        match options.sort.unwrap_or(SearchSort::Relevance) {
-            SearchSort::Relevance => hits.sort_by(|left, right| right.score.total_cmp(&left.score)),
-            SearchSort::Newest => hits.sort_by_key(|hit| {
-                std::cmp::Reverse(self.session_updated_at(&hit.session_id).unwrap_or(0))
-            }),
-            SearchSort::Oldest => {
-                hits.sort_by_key(|hit| self.session_updated_at(&hit.session_id).unwrap_or(i64::MAX))
-            }
-        }
-        hits.truncate(limit);
         Ok(hits)
-    }
-
-    fn session_updated_at(&self, session_id: &str) -> Option<i64> {
-        self.connection
-            .query_row(
-                "SELECT updated_at FROM sessions WHERE session_id = ?",
-                [session_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
     }
 
     pub fn context(
@@ -497,7 +455,7 @@ impl StateIndex {
         window: usize,
         anchor: Option<i64>,
     ) -> Result<Vec<ContextDocument>> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT id, source, source_position, role, kind, text FROM documents WHERE session_id = ? AND source = ? AND source_position BETWEEN ? AND ? ORDER BY source_position",
         )?;
         let rows = statement.query_map(
@@ -525,7 +483,7 @@ impl StateIndex {
     fn bookend(&self, session_id: &str, end: bool) -> Result<Vec<ContextDocument>> {
         let ordering = if end { "DESC" } else { "ASC" };
         let sql = format!("SELECT id, source, source_position, role, kind, text FROM documents WHERE session_id = ? AND source = 'snapshot' AND role IN ('user', 'assistant') ORDER BY source_position {ordering} LIMIT 3");
-        let mut statement = self.connection.prepare(&sql)?;
+        let mut statement = self.connection.prepare_cached(&sql)?;
         let rows = statement.query_map([session_id], |row| {
             Ok(ContextDocument {
                 id: row.get(0)?,
@@ -543,6 +501,101 @@ impl StateIndex {
         }
         Ok(documents)
     }
+}
+
+/// Replaces one session's derived rows inside a caller-owned transaction, so a whole batch of
+/// sessions shares a single commit while each session still lands all-or-nothing.
+fn replace_session(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    session: Option<&SessionRecord>,
+    journal: Option<&JournalRecord>,
+) -> Result<(usize, usize)> {
+    delete_session_rows(transaction, session_id)?;
+    let title = session
+        .map(|record| record.title.as_str())
+        .unwrap_or("Untitled session");
+    let event_count = journal.map(|record| record.events.len()).unwrap_or(0);
+    let last_sequence = journal
+        .and_then(|record| record.events.last())
+        .and_then(|event| event.get("sequence"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    transaction
+        .prepare_cached(
+            "INSERT INTO sessions (session_id, title, created_at, updated_at, revision, event_count, first_event_at, last_event_at, last_sequence, has_snapshot, has_journal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )?
+        .execute(params![
+            session_id,
+            title,
+            session.map(|record| record.created_at),
+            session.map(|record| record.updated_at),
+            session.map(|record| record.revision).unwrap_or(0),
+            event_count as i64,
+            journal.and_then(|record| record.first_at.as_deref()),
+            journal.and_then(|record| record.last_at.as_deref()),
+            last_sequence,
+            i64::from(session.is_some()),
+            i64::from(journal.is_some()),
+        ])?;
+
+    if let Some(journal) = journal {
+        let mut statement = transaction.prepare_cached("INSERT INTO events (session_id, sequence, timestamp, type, turn_id, hash, payload) VALUES (?, ?, ?, ?, ?, ?, ?)")?;
+        for event in &journal.events {
+            let payload = event.get("payload").unwrap_or(&Value::Null);
+            statement.execute(params![
+                session_id,
+                event.get("sequence").and_then(Value::as_i64).unwrap_or(0),
+                event
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                payload
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                payload.get("turnId").and_then(Value::as_str),
+                event
+                    .get("hash")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                serde_json::to_string(payload)?,
+            ])?;
+        }
+    }
+
+    // Streamed rather than collected: the row count is all the caller needs, and both inserts run
+    // from cached statements because they fire once per document in the corpus.
+    let documents = session
+        .into_iter()
+        .flat_map(|record| record.documents.iter())
+        .chain(
+            journal
+                .into_iter()
+                .flat_map(|record| record.documents.iter()),
+        );
+    let mut document_statement = transaction.prepare_cached(
+        "INSERT INTO documents (session_id, source, source_position, timestamp, role, kind, turn_id, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )?;
+    let mut fts_statement = transaction.prepare_cached(
+        "INSERT INTO documents_fts (rowid, title, text, session_id, document_id) VALUES (?, ?, ?, ?, ?)",
+    )?;
+    let mut document_count = 0;
+    for document in documents {
+        let id = document_statement.insert(params![
+            session_id,
+            document.source,
+            document.position,
+            document.timestamp,
+            document.role,
+            document.kind,
+            document.turn_id,
+            document.text
+        ])?;
+        fts_statement.execute(params![id, title, document.text, session_id, id])?;
+        document_count += 1;
+    }
+    Ok((event_count, document_count))
 }
 
 fn is_corrupt(error: &rusqlite::Error) -> bool {
@@ -564,6 +617,9 @@ fn is_busy(error: &rusqlite::Error) -> bool {
 fn open_initialized(file: &Path) -> rusqlite::Result<Connection> {
     let connection = Connection::open(file)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    // Every hot statement in this module is prepared through the cache; the default capacity is
+    // smaller than the number of distinct statements a rebuild plus a search touches.
+    connection.set_prepared_statement_cache_capacity(32);
     let journal_mode: String =
         connection.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
     if !journal_mode.eq_ignore_ascii_case("wal") {
@@ -603,14 +659,31 @@ fn open_initialized(file: &Path) -> rusqlite::Result<Connection> {
     Ok(connection)
 }
 
+/// Uses the connection's statement cache: a rebuild runs these deletes once per session, and
+/// re-preparing them each time cost more than the deletes themselves.
+///
+/// The FTS rows are removed by explicit rowid rather than with `rowid IN (SELECT ...)`, because
+/// fts5 cannot turn that subquery into a rowid lookup and scans its whole index instead — once per
+/// session, whether or not the session had any indexed rows at all.
 fn delete_session_rows(transaction: &Transaction<'_>, session_id: &str) -> Result<()> {
-    transaction.execute(
-        "DELETE FROM documents_fts WHERE rowid IN (SELECT id FROM documents WHERE session_id = ?)",
-        [session_id],
-    )?;
-    transaction.execute("DELETE FROM documents WHERE session_id = ?", [session_id])?;
-    transaction.execute("DELETE FROM events WHERE session_id = ?", [session_id])?;
-    transaction.execute("DELETE FROM sessions WHERE session_id = ?", [session_id])?;
+    let indexed: Vec<i64> = transaction
+        .prepare_cached("SELECT id FROM documents WHERE session_id = ?")?
+        .query_map([session_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !indexed.is_empty() {
+        let mut statement =
+            transaction.prepare_cached("DELETE FROM documents_fts WHERE rowid = ?")?;
+        for id in indexed {
+            statement.execute([id])?;
+        }
+    }
+    for sql in [
+        "DELETE FROM documents WHERE session_id = ?",
+        "DELETE FROM events WHERE session_id = ?",
+        "DELETE FROM sessions WHERE session_id = ?",
+    ] {
+        transaction.prepare_cached(sql)?.execute([session_id])?;
+    }
     Ok(())
 }
 
