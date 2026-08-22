@@ -80,8 +80,13 @@ export async function toolsFromProvider(provider: ToolProvider, timeoutMs = DEFA
 export async function collectExternalTools(providers: readonly ToolProvider[], timeoutMs?: number): Promise<AgentTool[]> {
   const collected: AgentTool[] = [];
   const seenNames = new Map<string, string>();
-  for (const provider of providers) {
-    for (const tool of await toolsFromProvider(provider, timeoutMs)) {
+  // Providers are asked concurrently — an MCP server's `tools/list` is a network round trip, and
+  // five of them one after another was five round trips of latency on the turn's critical path.
+  // The *merge* stays sequential in `providers` order, so which provider wins a name collision (and
+  // therefore which error is raised) does not depend on who answered first.
+  const listings = await Promise.all(providers.map((provider) => toolsFromProvider(provider, timeoutMs)));
+  for (const [index, provider] of providers.entries()) {
+    for (const tool of listings[index]) {
       const existing = seenNames.get(tool.name);
       if (existing) throw new Error(`Tool name '${tool.name}' is offered by both ${existing} and ${provider.kind}:${provider.id}`);
       seenNames.set(tool.name, `${provider.kind}:${provider.id}`);

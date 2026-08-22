@@ -114,13 +114,25 @@ export function eventJournalPath(root: string, sessionId: string): string {
 }
 
 /** Reads and verifies every complete line; a crash-truncated final line is safely ignored. */
+/**
+ * The journal, read once: its verified events and the exact bytes they came from.
+ *
+ * `EventJournal.initialize` needs both — the chain, to know where to continue from, and whether the
+ * file ends mid-line, to truncate a torn write. It used to call `readEventJournal` and then read
+ * the same file a second time for that one question, which at 5,000 events was a second full read,
+ * parse and re-hash of everything. The bytes are right here.
+ */
 export async function readEventJournal(root: string, sessionId: string): Promise<NovaEventEnvelope[]> {
+  return (await readJournalFile(root, sessionId)).events;
+}
+
+async function readJournalFile(root: string, sessionId: string): Promise<{ events: NovaEventEnvelope[]; text: string; completeText: string }> {
   const file = eventJournalPath(root, sessionId);
   let text: string;
   try {
     text = await fs.readFile(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { events: [], text: "", completeText: "" };
     throw error;
   }
   const completeText = text.endsWith("\n") ? text : text.slice(0, text.lastIndexOf("\n") + 1);
@@ -136,7 +148,7 @@ export async function readEventJournal(root: string, sessionId: string): Promise
     if (hash !== hashEnvelope(withoutHash)) throw new Error(`Nova event integrity check failed at sequence ${event.sequence}`);
     previousHash = hash;
   }
-  return events;
+  return { events, text, completeText };
 }
 
 /**
@@ -155,16 +167,14 @@ export class EventJournal {
   constructor(private readonly root: string, private readonly sessionId: string) {}
 
   private async initialize(): Promise<void> {
-    const previous = await readEventJournal(this.root, this.sessionId);
-    this.sequence = previous.length;
-    this.previousHash = previous.at(-1)?.hash ?? JOURNAL_GENESIS_HASH;
+    const { events, text, completeText } = await readJournalFile(this.root, this.sessionId);
+    this.sequence = events.length;
+    this.previousHash = events.at(-1)?.hash ?? JOURNAL_GENESIS_HASH;
     const file = eventJournalPath(this.root, this.sessionId);
     await fs.mkdir(path.dirname(file), { recursive: true });
-    const existing = await fs.readFile(file, "utf8").catch(() => "");
-    if (existing && !existing.endsWith("\n")) {
-      const complete = existing.slice(0, existing.lastIndexOf("\n") + 1);
-      await fs.truncate(file, Buffer.byteLength(complete, "utf8"));
-    }
+    // A file that does not end in a newline was torn by a crash mid-write. The complete prefix is
+    // already computed by the read above, so this costs a `truncate` and not a second full read.
+    if (text.length !== completeText.length) await fs.truncate(file, Buffer.byteLength(completeText, "utf8"));
     this.handle = await fs.open(file, "a", 0o600);
   }
 

@@ -73,7 +73,18 @@ const built = await Bun.build({
   entrypoints: [path.join(CLI, "src", "nova.ts")],
   target: "node",
   outdir: path.join(CLI, "dist"),
-  naming: "nova.js",
+  // Code splitting, and it is not cosmetic. Without it Bun hoists every dynamically imported
+  // subtree into the entry file, so `await import("./providers/factory")` bought nothing: the
+  // OpenAI, Anthropic and zod runtimes all executed on `nova --help`. Measured on the instrumented
+  // bundle, 510 of 755 module sections ran before the prompt could be drawn. Splitting moves the
+  // provider subtree into its own chunk that is loaded only when a model is actually constructed —
+  // entry 3.90 MB -> 0.94 MB, and `--help` from 205ms to 110ms with the compile cache still on.
+  //
+  // Chunks are named `.mjs` deliberately: `dist/` has no package.json in the local build, so a
+  // `.js` chunk would be read as CommonJS by Node and fail the moment the ESM entry imported it.
+  // The same trap the launcher's own comment describes, one level down.
+  splitting: true,
+  naming: { entry: "nova.js", chunk: "[name]-[hash].mjs" },
   // TermUI stays outside the bundle on purpose. The workspace screen is reached through a dynamic
   // import, and inlining a 5 MB framework would put its parse cost back on every `nova --version`
   // — the startup path that has no screen and never will. Declared in `dependencies`, so npm has

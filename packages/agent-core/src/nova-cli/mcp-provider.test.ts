@@ -175,3 +175,76 @@ describe("McpToolProvider", () => {
     }
   });
 });
+
+/**
+ * The same server, but it counts `tools/list` calls and announces a change when asked.
+ *
+ * Counting is the point: `createNovaTools` runs on every turn, so an uncached `tools/list` is a
+ * network round trip per turn per server, on the critical path between Enter and the model.
+ */
+const COUNTING_SERVER_SCRIPT = `
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+let listCalls = 0;
+let toolName = "add";
+function send(message) { process.stdout.write(JSON.stringify(message) + "\\n"); }
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const request = JSON.parse(line);
+  if (request.method === "initialize") {
+    send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "counting", version: "1" } } });
+    return;
+  }
+  if (request.method === "notifications/initialized") return;
+  if (request.method === "tools/list") {
+    listCalls += 1;
+    send({ jsonrpc: "2.0", id: request.id, result: { tools: [{ name: toolName, description: "call " + listCalls, inputSchema: { type: "object", properties: {}, additionalProperties: false } }] } });
+    return;
+  }
+  if (request.method === "tools/call" && request.params && request.params.name === "swap") {
+    toolName = "subtract";
+    send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    send({ jsonrpc: "2.0", id: request.id, result: { content: [{ type: "text", text: "swapped" }] } });
+    return;
+  }
+  send({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Unknown method" } });
+});
+`;
+
+describe("an MCP server's tool list", () => {
+  async function countingConnection() {
+    const file = path.join(root, "counting-server.js");
+    await fs.writeFile(file, COUNTING_SERVER_SCRIPT);
+    return new McpConnection({ id: "counting", command: "node", args: [file] });
+  }
+
+  it("is fetched once, not once per turn", async () => {
+    const connection = await countingConnection();
+    try {
+      const first = await connection.listTools();
+      const second = await connection.listTools();
+      const third = await connection.listTools();
+      // "call 1" in the description proves all three answers came from the same round trip.
+      expect(first[0].description).toBe("call 1");
+      expect(second).toEqual(first);
+      expect(third).toEqual(first);
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("is fetched again when the server says its tools changed", async () => {
+    // Caching is only correct because servers announce changes. This is that announcement.
+    const connection = await countingConnection();
+    try {
+      expect((await connection.listTools())[0].name).toBe("add");
+      await connection.callTool("swap", {}).catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const refreshed = await connection.listTools();
+      expect(refreshed[0].name).toBe("subtract");
+      expect(refreshed[0].description).toBe("call 2");
+    } finally {
+      connection.close();
+    }
+  });
+});
