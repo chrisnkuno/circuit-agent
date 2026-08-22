@@ -7,6 +7,7 @@ import type { ExaSearchClient } from "../providers/exa";
 import { CheckpointStore, type Checkpoint, type GitRunner } from "./checkpoints";
 import { capabilitiesForMode, PermissionLedger, type ApprovalPrompt, type NovaMode } from "./permissions";
 import { loadMemories, memoryPromptBlock, recallMemories } from "./memory";
+import { probeEnvironment, type EnvironmentReport } from "./environment";
 import { buildNovaSystemPrompt, collectProjectContext, type ProjectContext } from "./prompt";
 import { assertTurnTransition, EventJournal, runtimeEventForJournal, type TurnStatus } from "./protocol";
 import {
@@ -32,6 +33,7 @@ import { predictAgentUsage, type AgentCostPrediction } from "./cost";
 import { LocalWorkspace, type NovaWorkspace } from "./backends";
 import { WorkspaceArtifactStore } from "./artifacts";
 import type { ReadResult, WorkspaceLimits } from "./workspace";
+import { DEFAULT_OUTPUT_CEILING } from "../providers/model-capabilities";
 
 /**
  * Nova CLI's agent: the hosted `BoundedAgentRuntime`, hosted locally instead.
@@ -100,6 +102,10 @@ export const DEFAULT_NOVA_BUDGETS: NovaBudgets = {
   // afford, so a higher ceiling spends nothing on a short answer.
   maxOutputTokens: 16_000,
   maxRwf: 20_000,
+  // The floor, not the answer. A session whose provider reports what its model can hold replaces
+  // both this and `maxOutputTokens` with the model's own figures (see the constructor): 200,000 is
+  // a fifth of a current Opus or Sonnet window, and compacting at 70% of it threw away a
+  // transcript that had not come close to filling anything.
   contextLimit: 200_000,
 };
 
@@ -146,6 +152,14 @@ export class NovaAgent {
    */
   private openingObjective: string | null = null;
   private context: ProjectContext | null = null;
+  /**
+   * What is actually installed where commands run, probed once and reused.
+   *
+   * Per session rather than per turn, unlike `context`: an AGENTS.md can change between turns and
+   * must be re-read, but a toolchain does not appear mid-session, and re-probing it would spend a
+   * dozen process launches on every message the user sends.
+   */
+  private environment: Promise<EnvironmentReport> | null = null;
   private cancelled = false;
   private session: SessionRecord;
   private journal: EventJournal;
@@ -155,8 +169,31 @@ export class NovaAgent {
   private delegatedRwf = 0;
   private delegatedUsage: ModelUsage = emptyModelUsage();
 
+  /** The environment report for this session, probed on first use and cached. Never throws: a session that cannot describe its environment still runs, just without the section. */
+  private loadEnvironment(): Promise<EnvironmentReport | undefined> {
+    this.environment ??= probeEnvironment(this.workspace);
+    return this.environment.catch(() => undefined);
+  }
+
   constructor(private readonly options: NovaAgentOptions) {
-    this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...options.budgets };
+    // Model-derived first, caller-supplied last: a session runs against what its model can really
+    // do, while an explicit budget from the caller still overrides everything — that is the whole
+    // reason `--budget` and the embedder's own options exist.
+    const capabilities = options.model.capabilities;
+    const derived = capabilities
+      ? {
+        contextLimit: capabilities.contextWindow,
+        maxOutputTokens: Math.min(capabilities.maxOutputTokens, DEFAULT_OUTPUT_CEILING),
+        // Tool-result allowances scale with the window for the same reason the window does: 40,000
+        // characters is a sixteenth of a 200K context and a sixtieth of a 1M one, and a fixed
+        // number means a bigger model reads *less* of a large file than a smaller one. The shares
+        // are chosen to reproduce today's 40,000 / 400,000 exactly at a 200K window, so nothing
+        // changes for a model that really is that size.
+        maxToolResultChars: Math.round(capabilities.contextWindow * 0.2),
+        maxTotalToolResultChars: capabilities.contextWindow * 2,
+      }
+      : {};
+    this.budgets = { ...DEFAULT_NOVA_BUDGETS, ...derived, ...options.budgets };
     this.workspace = options.workspace ?? new LocalWorkspace(options.root, options.limits);
     this.nestedInstructions = new NestedInstructionTracker(this.workspace);
     this.artifacts = new WorkspaceArtifactStore(this.workspace);
@@ -232,6 +269,17 @@ export class NovaAgent {
   }
 
   /** Where this agent is reading and writing — a directory, or a sandbox id. */
+  /**
+   * The limits this session is actually running under.
+   *
+   * Worth exposing rather than keeping private: they are no longer constants a reader can look up
+   * in this file — they depend on which model the session opened with — and both the CLI's own
+   * reporting and any embedder deciding how much to send need the same answer the runtime uses.
+   */
+  get budgetSnapshot(): Readonly<NovaBudgets> {
+    return this.budgets;
+  }
+
   get workspaceLabel(): string {
     return this.workspace.label;
   }
@@ -365,7 +413,7 @@ export class NovaAgent {
     const capabilities = capabilitiesForMode(this.options.mode);
     const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
     delegate.setTools(scoped.filter((tool) => tool.name !== "delegate_task"));
-    const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, scoped.map((tool) => tool.name), this.workspace);
+    const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, scoped.map((tool) => tool.name), this.workspace, await this.loadEnvironment());
     const toolSchemas = JSON.stringify(scoped.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })));
     const initialInputTokens = approximateInputTokens([
       systemPrompt,
@@ -424,7 +472,7 @@ export class NovaAgent {
     let subTools: AgentTool[] = [];
     const capabilities = capabilitiesForMode(this.options.mode);
     const runner: DelegateRunner = async (task: string): Promise<DelegateResult> => {
-      const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, subTools.map((tool) => tool.name), this.workspace);
+      const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, subTools.map((tool) => tool.name), this.workspace, await this.loadEnvironment());
       // Never more than half of whatever is left of the turn's own budget on one delegation, so a
       // model that delegates several times in a row cannot spend the whole turn's budget on the
       // first one and leave nothing for the rest of its own work.
@@ -455,6 +503,10 @@ export class NovaAgent {
         maxToolResultChars: this.budgets.maxToolResultChars,
         maxTotalToolResultChars: this.budgets.maxTotalToolResultChars,
         maxOutputTokens: this.budgets.maxOutputTokens,
+        // A delegated sub-task is the textbook cheap-effort case: it is bounded, self-contained and
+        // reports back in prose. Lower effort also means fewer, more consolidated tool calls and
+        // less preamble, which is most of what a sub-agent's cost actually is.
+        effort: "low",
         modelReservationRwf: reservation,
         safetyIdentifier: `nova_cli_${this.session.id}_delegate`.slice(0, 64),
       });
@@ -529,10 +581,21 @@ export class NovaAgent {
        */
       const memories = await loadMemories(this.options.root, process.env).catch(() => []);
       const recalled = memories.length > 0 ? recallMemories(memories, objective).entries : [];
-      const systemPrompt = [
-        buildNovaSystemPrompt(this.context, this.options.mode, scoped.map((tool) => tool.name), this.workspace),
-        memoryPromptBlock(recalled),
-      ].filter(Boolean).join("\n\n");
+      /**
+       * The system prompt is the cached prefix, so nothing turn-specific may live in it.
+       *
+       * Recalled memory used to be appended here, and it is selected by lexical overlap with *this
+       * turn's objective* — so a different question produced a different system block, and because
+       * a prompt cache is a strict prefix match over tools → system → messages, one changed
+       * sentence at the top invalidated the cache for the entire transcript beneath it. On a long
+       * conversation that turned a 0.1x cache read into a 1.25x cache write, every single turn.
+       *
+       * The memory itself is just as useful attached to the turn that asked for it, where it costs
+       * a cache miss on nothing but itself.
+       */
+      const systemPrompt = buildNovaSystemPrompt(this.context, this.options.mode, scoped.map((tool) => tool.name), this.workspace, await this.loadEnvironment());
+      const memoryBlock = memoryPromptBlock(recalled);
+      const turnObjective = memoryBlock ? `${memoryBlock}\n\n${objective}` : objective;
 
       // Snapshot before the agent can touch anything, so `/undo` returns to the state the user saw
       // when they typed. Taken per turn rather than per tool call: a turn is the unit a person
@@ -578,7 +641,8 @@ export class NovaAgent {
         taskId: this.session.id,
         runId: this.session.id,
         stepId: `turn_${this.messages.length}`,
-        objective,
+        // Carries this turn's recalled memory with it, so the cached system prefix stays byte-stable.
+        objective: turnObjective,
         history: priorHistory,
         systemPrompt,
         allowedCapabilityIds: capabilities,
@@ -647,6 +711,11 @@ export class NovaAgent {
     if (maximumOutputTokens < 1) return { usage: emptyModelUsage(), actualRwf: 0 };
 
     const turn = await this.options.model.complete({
+      // Summarizing is reading, not reasoning. Thinking tokens bill as output and share the output
+      // budget, so paying for deep reasoning to compress a transcript spends money on the one call
+      // in the session that produces nothing the user asked for. Providers whose model does not
+      // take the setting ignore it.
+      effort: "low",
       messages: [...plan.toSummarize, { role: "user", content: COMPACTION_INSTRUCTION }],
       tools: [],
       maxOutputTokens: maximumOutputTokens,

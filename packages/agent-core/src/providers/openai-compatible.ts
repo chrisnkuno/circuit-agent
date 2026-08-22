@@ -100,7 +100,18 @@ export function turnFromChatResponse(response: ChatResponse): AgentModelTurn {
   const choice = response.choices[0];
   if (!choice) throw new Error("Model response contained no choices");
   const toolCalls = (choice.message.tool_calls ?? []).map((call) => ({ id: call.id, name: call.function.name, arguments: parseArguments(call.function.arguments) }));
-  const read = choice.message.refusal ? "refusal" : readFinishReason(choice.finish_reason);
+  // `null` is not an unknown word — it is no word at all, which several gateways send when the
+  // final chunk carrying the reason never arrives (or is dropped by a proxy) even though the
+  // content and tool calls came through intact. Erroring on it threw away a complete, usable turn
+  // and ended the user's request with "Unsupported model finish reason: null". Unstated is read
+  // from the payload instead: calls mean a tool turn, text means a finished one, and nothing at
+  // all still errors, because a turn with no reason *and* no output carries no answer to give.
+  const inferred = choice.finish_reason === null || choice.finish_reason === undefined
+    ? (toolCalls.length > 0 ? "tool_calls" : choice.message.content ? "stop" : undefined)
+    : readFinishReason(choice.finish_reason);
+  const read = choice.message.refusal ? "refusal" : inferred;
+  // An unrecognised *word* stays an error: inventing a reading for a spelling nobody has seen is
+  // how truncation gets mistaken for completion.
   if (!read) throw new Error(`Unsupported model finish reason: ${choice.finish_reason}`);
   // Some gateways report a tool-call turn as a plain "stop". Trusting the reason over the payload
   // there drops the calls on the floor and answers with an empty message instead of running them.

@@ -183,9 +183,32 @@ export function titleFromObjective(objective: string): string {
 }
 
 export function estimateMessageTokens(messages: readonly AgentMessage[]): number {
-  // The pessimistic figure, deliberately: compacting slightly early costs one summarization call,
-  // while compacting late costs the whole turn to a context-length error.
-  return approximateInputTokens(messages.map((message) => message.content ?? "")).maximumInputTokens;
+  /**
+   * The expected figure, not the pessimistic one.
+   *
+   * `maximumInputTokens` is `max(expected + 256, utf8Bytes + 1024)`, and for any real transcript
+   * the *byte* term wins — it is roughly three times the token count. Comparing that against the
+   * context limit meant Nova believed it was full at about 28% of a 200K window, and 5.6% of a 1M
+   * one: it compacted, paid a summarization call, discarded detail, and rebuilt its whole prompt
+   * cache, five times more often than it had any reason to. Measured on real source text, the
+   * first `required` fired at 56,216 actual tokens against a 184,000-token allowance.
+   *
+   * The pessimistic reading was defensible when the alternative was losing a turn to a
+   * context-length error, but it was the wrong tool for that job: the reserve for the reply is
+   * already subtracted by the caller, and 0.9 of what remains is the safety margin.
+   *
+   * Tool-call arguments are counted too. They are part of an assistant message on the wire and
+   * were invisible here, so a transcript of many tool calls read as smaller than it was — an error
+   * in the opposite direction, hidden behind the first one.
+   */
+  const parts: string[] = [];
+  for (const message of messages) {
+    parts.push(message.content ?? "");
+    if ("toolCalls" in message && Array.isArray(message.toolCalls)) {
+      for (const call of message.toolCalls) parts.push(call.name, JSON.stringify(call.arguments ?? {}));
+    }
+  }
+  return approximateInputTokens(parts).expectedInputTokens;
 }
 
 export type CompactionPlan = {
@@ -258,7 +281,7 @@ export function planCompaction(
   if (urgency === "none") return null;
   if (urgency === "advisable" && (options.boundary ?? "mid-task") !== "safe") return null;
 
-  const keepRecent = options.keepRecent ?? 6;
+  const keepRecent = options.keepRecent ?? recentToKeep(messages.slice(messages[0]?.role === "system" ? 2 : 1), options);
   // The system prompt and the original request are what the whole session means; they never go.
   const head = messages.slice(0, messages[0]?.role === "system" ? 2 : 1);
   const rest = messages.slice(head.length);
@@ -270,6 +293,35 @@ export function planCompaction(
   if (cut <= 0) return null;
 
   return { toSummarize: [...head, ...rest.slice(0, cut)], toKeep: rest.slice(cut) };
+}
+
+/**
+ * The fewest recent messages worth keeping verbatim, measured in tokens rather than counted.
+ *
+ * "Keep the last six messages" treats a two-line acknowledgement and a 40,000-character test log as
+ * the same size. Six of the latter is around 60,000 tokens carried past a compaction that happened
+ * *because* the transcript was too large; six of the former is 300 tokens, and throws away context
+ * the next turn plainly needed. Neither is what the number was trying to express.
+ *
+ * What it was trying to express is: leave enough of the recent conversation intact that the agent
+ * can continue without re-reading the summary for details it just had. That is a size, so it is
+ * measured as one — a fifth of the usable window — with a floor of one complete exchange, because a
+ * kept tail of nothing is a compaction the agent cannot continue from at all.
+ */
+const KEEP_RECENT_SHARE = 0.2;
+const MINIMUM_KEPT_MESSAGES = 2;
+
+function recentToKeep(recent: readonly AgentMessage[], options: { contextLimit: number; outputBudget: number }): number {
+  const budget = Math.max(0, options.contextLimit - options.outputBudget) * KEEP_RECENT_SHARE;
+  let spent = 0;
+  let kept = 0;
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const cost = estimateMessageTokens([recent[index]]);
+    if (kept >= MINIMUM_KEPT_MESSAGES && spent + cost > budget) break;
+    spent += cost;
+    kept += 1;
+  }
+  return Math.min(recent.length, Math.max(MINIMUM_KEPT_MESSAGES, kept));
 }
 
 /** The instruction used to compact a conversation, kept next to the policy that triggers it. */

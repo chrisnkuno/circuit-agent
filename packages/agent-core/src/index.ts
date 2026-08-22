@@ -57,6 +57,8 @@ export { assessTaskSafety, assessToolSafety } from "./nova-cli/safety";
 export type { SafetyAssessment, SensitiveCategory } from "./nova-cli/safety";
 export { CheckpointStore } from "./nova-cli/checkpoints";
 export { CostLedger } from "./nova-cli/cost";
+export { CircuitPayGateway, BillingError, billingFromEnvironment, parseAmountRwf, assertTopUpAmount, newIdempotencyKey, waitForPayment, isPaymentSettled, MINIMUM_TOP_UP_RWF, MAXIMUM_TOP_UP_RWF } from "./nova-cli/billing";
+export type { Balance, BillingGateway, Checkout, CheckoutRequest, Payment, PaymentStatus, WaitResult } from "./nova-cli/billing";
 export { listSessions, loadSession, saveSession } from "./nova-cli/session";
 export { NovaStateClient, NovaStateError, resolveNovaStateBinary, statePlatformKey, tryConnectNovaState, NOVA_STATE_PROTOCOL_VERSION } from "./nova-cli/state-client";
 export type { NovaStateClientOptions, StateContextDocument, StateEvidenceSource, StateIndexReport, StateSearchHit, StateSessionSummary } from "./nova-cli/state-client";

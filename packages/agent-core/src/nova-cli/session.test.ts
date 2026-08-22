@@ -9,6 +9,7 @@ import {
   buildCompactedMessages,
   COMPACTION_INSTRUCTION,
   compactionUrgency,
+  estimateMessageTokens,
   listSessions,
   loadSession,
   newSessionId,
@@ -369,5 +370,66 @@ describe("checkpoints against a real repository", () => {
     } finally {
       await fs.rm(repo, { recursive: true, force: true });
     }
+  });
+});
+
+describe("what compaction keeps verbatim", () => {
+  const budgets = { contextLimit: 200_000, outputBudget: 16_000 };
+
+  /** A transcript that has grown past the point where compaction is required. */
+  function transcript(tail: AgentMessage[]): AgentMessage[] {
+    const bulk: AgentMessage[] = [
+      { role: "system", content: "You are Nova." },
+      { role: "user", content: "Fix the failing build." },
+    ];
+    for (let index = 0; index < 40; index += 1) {
+      bulk.push({ role: "assistant", content: "x".repeat(20_000) });
+      bulk.push({ role: "user", content: "keep going" });
+    }
+    return [...bulk, ...tail];
+  }
+
+  it("keeps fewer huge messages than small ones, because the point was always a size", () => {
+    // The old rule kept six messages either way: ~60,000 tokens of test logs, or 300 tokens of
+    // acknowledgements. Neither is what "leave enough recent context to continue" meant.
+    const huge = planCompaction(transcript(Array.from({ length: 8 }, () => ({ role: "assistant", content: "y".repeat(60_000) } as AgentMessage))), budgets);
+    const small = planCompaction(transcript(Array.from({ length: 8 }, () => ({ role: "assistant", content: "ok" } as AgentMessage))), budgets);
+
+    expect(huge).not.toBeNull();
+    expect(small).not.toBeNull();
+    expect(huge!.toKeep.length).toBeLessThan(small!.toKeep.length);
+  });
+
+  it("never keeps more than its share of the usable window", () => {
+    const plan = planCompaction(transcript(Array.from({ length: 8 }, () => ({ role: "assistant", content: "y".repeat(60_000) } as AgentMessage))), budgets);
+    const keptTokens = estimateMessageTokens(plan!.toKeep);
+    // A fifth of what is usable, with one exchange of slack for the floor below.
+    expect(keptTokens).toBeLessThan((budgets.contextLimit - budgets.outputBudget) * 0.3);
+  });
+
+  it("always keeps at least one complete exchange, however large it is", () => {
+    // A kept tail of nothing is a compaction the agent cannot continue from.
+    const enormous = Array.from({ length: 3 }, () => ({ role: "assistant", content: "z".repeat(400_000) } as AgentMessage));
+    const plan = planCompaction(transcript(enormous), budgets);
+    expect(plan!.toKeep.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("still refuses to strand a tool result whose call it summarized away", () => {
+    const plan = planCompaction(
+      transcript([
+        { role: "assistant", content: "", toolCalls: [{ id: "call-1", name: "read_file", arguments: {} }] },
+        { role: "tool", content: "file contents", toolCallId: "call-1", name: "read_file" },
+        { role: "assistant", content: "Done." },
+      ]),
+      budgets,
+    );
+    // If the tail begins with a tool result, its call is in the summarized half and the provider
+    // rejects the request outright.
+    expect(plan!.toKeep[0].role).not.toBe("tool");
+  });
+
+  it("lets an explicit keepRecent override the measurement", () => {
+    const plan = planCompaction(transcript([{ role: "assistant", content: "done" }]), { ...budgets, keepRecent: 3 });
+    expect(plan!.toKeep).toHaveLength(3);
   });
 });

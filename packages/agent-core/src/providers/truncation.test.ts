@@ -47,6 +47,27 @@ describe("a turn that ran out of output budget", () => {
     expect(() => turnFromChatResponse(chatResponse({ finish_reason: "wat" }))).toThrow("Unsupported model finish reason");
   });
 
+  it("reads an unstated reason from the payload rather than discarding a complete turn", () => {
+    // A gateway that never sends the final reason-bearing chunk used to end the user's request with
+    // "Unsupported model finish reason: null" even though the whole answer had already arrived.
+    const text = turnFromChatResponse(chatResponse({ finish_reason: null, message: { content: "All done." } }));
+    expect(text.finishReason).toBe("stop");
+    expect(text.content).toBe("All done.");
+
+    const calls = turnFromChatResponse(chatResponse({
+      finish_reason: null,
+      message: { content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } }] },
+    }));
+    expect(calls.finishReason).toBe("tool_calls");
+    expect(calls.toolCalls).toHaveLength(1);
+  });
+
+  it("still fails on an unstated reason with nothing to infer from", () => {
+    // No reason and no output is not a turn at all; reporting it as a finished one would answer the
+    // user with silence and call it success.
+    expect(() => turnFromChatResponse(chatResponse({ finish_reason: null, message: { content: null } }))).toThrow("Unsupported model finish reason");
+  });
+
   it("runs a tool-call turn a gateway mislabelled as a plain stop", () => {
     const turn = turnFromChatResponse(chatResponse({
       finish_reason: "stop",
