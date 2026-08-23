@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   checkForUpdate,
