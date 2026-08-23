@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { BoundedAgentRuntime, type AgentMessage, type AgentRuntimeEvent, type AgentRuntimeResult, type AgentTool, type AgentTurnProvider } from "../agent-runtime";
+import { agentMessagePromptParts, BoundedAgentRuntime, type AgentMessage, type AgentRuntimeEvent, type AgentRuntimeResult, type AgentTool, type AgentTurnProvider } from "../agent-runtime";
 import { affordableOutputTokens, approximateInputTokens, priceActualModelUsage, type ModelPriceCatalog } from "../model-cost";
 import type { ModelUsage } from "../providers/model";
 import type { ExaSearchClient } from "../providers/exa";
 import { CheckpointStore, type Checkpoint, type GitRunner } from "./checkpoints";
 import { capabilitiesForMode, PermissionLedger, type ApprovalPrompt, type NovaMode } from "./permissions";
-import { loadMemories, memoryPromptBlock, recallMemories } from "./memory";
+import { loadMemories, memoryPromptBlock, recallMemories, recalledMemoryKey } from "./memory";
 import { probeEnvironment, type EnvironmentReport } from "./environment";
 import { buildNovaSystemPrompt, collectProjectContext, type ProjectContext } from "./prompt";
 import { assertTurnTransition, EventJournal, runtimeEventForJournal, type TurnStatus } from "./protocol";
@@ -142,6 +142,8 @@ export class NovaAgent {
   private readonly artifacts: WorkspaceArtifactStore;
   private readonly budgets: NovaBudgets;
   private messages: AgentMessage[] = [];
+  /** Memory already carried by this transcript; incremental recall prevents quadratic repetition. */
+  private readonly recalledMemoryKeys = new Set<string>();
   /**
    * The request that opened this session, kept whole.
    *
@@ -207,6 +209,8 @@ export class NovaAgent {
       root: options.root,
       title: "Untitled session",
       messages: [],
+      mode: options.mode,
+      recalledMemoryKeys: [],
       approvals: {},
       totalRwf: 0,
     };
@@ -241,8 +245,10 @@ export class NovaAgent {
 
   /** Restores a previous session's transcript and standing approvals. */
   resume(record: SessionRecord): void {
-    this.session = record;
+    this.session = { ...record, mode: this.options.mode };
     this.messages = [...record.messages];
+    this.recalledMemoryKeys.clear();
+    for (const key of record.recalledMemoryKeys ?? []) this.recalledMemoryKeys.add(key);
     // A resumed session may already have been compacted, in which case the earliest surviving user
     // message is Nova's own constraints block or summary rather than anything the user typed.
     // Those are skipped by their headings; if nothing is left, the session title is the best
@@ -251,6 +257,7 @@ export class NovaAgent {
       record.messages.find(
         (message) =>
           message.role === "user" &&
+          !message.internal &&
           !message.content.startsWith(STANDING_CONSTRAINTS_HEADING) &&
           !message.content.startsWith("[Earlier conversation, summarized]"),
       )?.content ?? (record.title === "Untitled session" ? null : record.title);
@@ -417,7 +424,7 @@ export class NovaAgent {
     const toolSchemas = JSON.stringify(scoped.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })));
     const initialInputTokens = approximateInputTokens([
       systemPrompt,
-      ...this.messages.filter((message) => message.role !== "system").map((message) => message.content),
+      ...this.messages.filter((message) => message.role !== "system").flatMap(agentMessagePromptParts),
       objective,
       toolSchemas,
     ]).expectedInputTokens;
@@ -580,7 +587,10 @@ export class NovaAgent {
        * grows for a year does not quietly become the largest thing in every request.
        */
       const memories = await loadMemories(this.options.root, process.env).catch(() => []);
-      const recalled = memories.length > 0 ? recallMemories(memories, objective).entries : [];
+      const recalled = memories.length > 0
+        ? recallMemories(memories, objective, { exclude: this.recalledMemoryKeys }).entries
+        : [];
+      for (const entry of recalled) this.recalledMemoryKeys.add(recalledMemoryKey(entry));
       /**
        * The system prompt is the cached prefix, so nothing turn-specific may live in it.
        *
@@ -663,6 +673,7 @@ export class NovaAgent {
         ...this.session,
         title: this.session.messages.length === 0 ? titleFromObjective(objective) : this.session.title,
         messages: this.messages,
+        recalledMemoryKeys: [...this.recalledMemoryKeys],
         approvals: this.permissions.snapshot(),
         totalRwf: this.session.totalRwf + combinedRwf,
         updatedAt: Date.now(),

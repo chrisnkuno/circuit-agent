@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Service Status</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <p class="eyebrow">Status Page</p>
+    <h1 class="site-title">Service Status</h1>
+    <p class="tagline">Live health of the core services that keep things running.</p>
+  </header>
+
+  <main id="main">
+    <section id="status-card" class="status-card" aria-labelledby="status-heading">
+      <span id="status-dot" class="status-dot" aria-hidden="true"></span>
+      <h2 id="status-heading">Current status</h2>
+
+      <p class="status-banner">
+        <span id="status-message" role="status" aria-live="polite">All systems operational.</span>
+      </p>
+
+      <div class="status-details" aria-label="Status details">
+        <dl class="details-list">
+          <div class="detail-row">
+            <dt>Last updated</dt>
+            <dd id="updated-at">—</dd>
+          </div>
+          <div class="detail-row">
+            <dt>Reporting</dt>
+            <dd>Core API · Website · Payments</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="actions">
+        <button id="toggle-status" type="button" class="status-button" aria-describedby="status-message">
+          Simulate an incident
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Status updates are simulated locally — nothing here dials home, and nothing is collected.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

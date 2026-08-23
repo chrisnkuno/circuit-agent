@@ -32,7 +32,13 @@ describe("what a tab keeps, under a real pty", () => {
   });
 
   afterEach(async () => {
-    proc?.kill();
+    if (proc) {
+      proc.kill();
+      // Reap this PTY before its stub and temporary directories disappear. Merely signalling it
+      // left shutdown work from each case alive while the next one booted; by the guide case the
+      // accumulated processes could stall the new CLI before its first prompt.
+      await proc.waitForExit(5_000).catch(() => undefined);
+    }
     proc = undefined;
     await stub.close();
     await rm(cwd, { recursive: true, force: true });
@@ -230,10 +236,14 @@ describe("what a tab keeps, under a real pty", () => {
     // the transcript can be scrolled back to and copied.
     const topic = p.output().length;
     p.writeLine("/guide tabs");
-    await p.waitFor(/its own model/, { timeoutMs: 30_000, since: topic });
+    // The guide is streamed over several PTY writes. Wait for the later example, not an earlier
+    // sentence, before asserting on it; otherwise a fast reader can sample a half-painted guide.
+    await p.waitFor(/--sandbox e2b/, { timeoutMs: 30_000, since: topic });
     expect(p.output().slice(topic)).toContain("--sandbox e2b");
-    // The prompt comes straight back: nothing took the terminal.
-    await p.waitFor(PROMPT, { timeoutMs: 30_000, since: p.output().length });
+    // The prompt can arrive in the same PTY chunk as the final guide line. Waiting from an offset
+    // sampled *after* the text match races past that prompt and then waits forever for another.
+    // `topic` is before submission, so a prompt after it is necessarily the one returned here.
+    await p.waitFor(PROMPT, { timeoutMs: 30_000, since: topic });
 
     const missing = p.output().length;
     p.writeLine("/guide nonsense");

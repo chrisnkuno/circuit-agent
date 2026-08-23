@@ -1,11 +1,13 @@
 import { BoundedAgentRuntime, type AgentTool } from "../agent-runtime";
 import { capabilitiesFor, CONSERVATIVE_CAPABILITIES } from "../providers/model-capabilities";
 import { PROVIDER_INFO } from "../providers/provider-specs";
+import { ExaSearchClient } from "../providers/exa";
 import { LocalWorkspace } from "./backends";
 import { capabilitiesForMode } from "./permissions";
 import { buildNovaSystemPrompt, collectProjectContext } from "./prompt";
 import { compactionUrgency } from "./session";
 import { createNovaTools, TodoList } from "./tools";
+import { predictAgentUsage } from "./cost";
 
 /**
  * What "optimized" means here, written down so it can be checked.
@@ -90,7 +92,13 @@ function tokensOf(text: string): number {
 /** The fixed cost of one request in a given mode: system prompt plus every tool schema. */
 async function fixedRequestTokens(root: string, mode: "build" | "plan" | "defender"): Promise<number> {
   const context = await collectProjectContext(root);
-  const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+  const tools = await createNovaTools({
+    workspace: new LocalWorkspace(root),
+    todos: new TodoList(),
+    // A real turn always wires delegation before it scopes the tool list. Omitting it here made
+    // the fixed-cost report look roughly 200 tokens cheaper than the request Nova actually sends.
+    delegate: async () => ({ report: "", status: "completed", iterations: 0, toolCallsExecuted: 0 }),
+  });
   const allowed = capabilitiesForMode(mode);
   const scoped = tools.filter((tool) => allowed.includes(tool.capabilityId));
   const schemas = JSON.stringify(scoped.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })));
@@ -309,7 +317,7 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
     what: "The same, in defender mode, where the playbooks used to live in the prompt",
     metric: "tokens",
     budget: { min: 4_000, max: 9_000 },
-    baseline: { value: 6_059, on: "2026-08-22" },
+    baseline: { value: 6_041, on: "2026-08-23" },
     evidence: "nova-cli/defender-playbooks.ts, read_playbook in nova-cli/tools.ts",
     remediation:
       "Something put playbook bodies back into the system prompt. Keep the index there and the bodies behind read_playbook; the full set is ~14,300 tokens on every request of every iteration.",
@@ -389,6 +397,35 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
     },
   },
   {
+    id: "context.structured-arguments-accounted",
+    layer: "context",
+    what: "Structured tool-call arguments count toward the transcript before another model call is admitted",
+    metric: "share of argument tokens estimated",
+    budget: { min: 0.95, max: 1.15 },
+    baseline: { value: 1, on: "2026-08-23" },
+    evidence: "agent-runtime.ts agentMessagePromptParts, nova-cli/session.ts estimateMessageTokens",
+    remediation:
+      "Restore tool call ids, names and JSON arguments to the shared prompt-parts accounting path used by both preflight and runtime affordability checks. Counting assistant content alone makes a large write_file call look empty and can admit a request that exceeds either the context or money budget.",
+    measure: async () => {
+      const { estimateMessageTokens } = await import("./session");
+      const argument = "x".repeat(40_000);
+      const withoutArguments = estimateMessageTokens([{
+        role: "assistant", content: "", toolCalls: [],
+      }]);
+      const withArguments = estimateMessageTokens([{
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call_probe", name: "write_file", arguments: { path: "large.txt", content: argument } }],
+      }]);
+      // Compare through one estimator. The prose heuristic used by the prompt-size report has a
+      // different character ratio, and mixing the two would measure that policy difference rather
+      // than whether structured arguments vanished from accounting.
+      const emptyUser = estimateMessageTokens([{ role: "user", content: "" }]);
+      const argumentAsText = estimateMessageTokens([{ role: "user", content: argument }]) - emptyUser;
+      return (withArguments - withoutArguments) / argumentAsText;
+    },
+  },
+  {
     id: "transcript.no-eviction-loss-band",
     layer: "transcript",
     what: "A result just over the per-call budget reaches the model whole, instead of being evicted for a saving that costs more than it saves",
@@ -426,15 +463,55 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
     },
   },
   {
+    id: "transcript.deep-research-synthesis-overhead",
+    layer: "transcript",
+    what: "How much of deep research's raw source text is repeated beneath a successful synthesis",
+    metric: "share of raw extract characters",
+    budget: { min: 0.01, max: 0.1 },
+    baseline: { value: 0.028, on: "2026-08-23" },
+    evidence: "nova-cli/tools.ts deep_research successful-synthesis response",
+    remediation:
+      "Return the synthesized answer and deduplicated source URLs when synthesis succeeds. Raw extracts have already informed that answer; appending them again can add tens of thousands of characters to every later model request. Keep compact hits only as the fallback when synthesis is empty.",
+    measure: async ({ root }) => {
+      const rawPerResult = 4_000;
+      const results = Array.from({ length: 6 }, (_, index) => ({
+        title: `Source ${index + 1}`,
+        url: `https://example.test/${index + 1}`,
+        publishedDate: null,
+        author: null,
+        highlights: [],
+        text: "x".repeat(rawPerResult),
+      }));
+      const search = new ExaSearchClient({
+        apiKey: "optimization-probe",
+        fetchImpl: async () => new Response(JSON.stringify({
+          requestId: "research-probe",
+          searchType: "deep",
+          results,
+          output: { content: "A".repeat(500), grounding: [] },
+        }), { status: 200, headers: { "content-type": "application/json" } }),
+      });
+      const tools = await createNovaTools({
+        workspace: new LocalWorkspace(root),
+        todos: new TodoList(),
+        search,
+      });
+      const tool = tools.find((candidate) => candidate.name === "deep_research");
+      if (!tool) throw new Error("deep_research was not registered for the probe");
+      const result = await tool.execute({ query: "probe" }, { taskId: "probe", runId: "probe", stepId: "probe" });
+      return result.content.length / (results.length * rawPerResult);
+    },
+  },
+  {
     id: "provider.capability-coverage",
     layer: "provider",
-    what: "Every hosted provider's own default model is one whose real limits Nova knows",
-    metric: "share of default models recognised",
+    what: "Every hosted provider's own default model has an explicit capability policy",
+    metric: "share of default models explicitly handled",
     budget: { min: 1 },
     baseline: { value: 1, on: "2026-08-22" },
     evidence: "providers/model-capabilities.ts KNOWN_CAPABILITIES, providers/provider-specs.ts",
     remediation:
-      "A provider's default model shipped without a row in the capability table, so that session silently runs on the conservative 200K/16K fallback — compacting five times too early and truncating long replies. Add the row with a published, dated source.",
+      "A provider's default model shipped without an explicit capability row. Add its published limits when available; otherwise add a dated, conservative row so unknown limits cannot inherit another model family's optimistic budget.",
     measure: async () => {
       // Hosted providers only. A local Ollama model's window is whatever the user's own model file
       // and quantization say — there is no published number to put in a table, and the conservative
@@ -479,6 +556,23 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
     remediation:
       "Each nudge re-sends the entire transcript — a 114-token nudge costs 100,114 input tokens on a 100K conversation — so what matters is how many round trips deliver them, not their length. The test and behaviour rungs must keep riding in one message; walking the ladder one question per model call is what this number catches. A fall below the floor is the worse bug: it means the gate stopped asking at all.",
     measure: async () => nudgeRoundTrips(),
+  },
+  {
+    id: "runtime.defender-forecast-premium",
+    layer: "runtime",
+    what: "How much more cumulative input the preflight reserves for a broad defender review than build work",
+    metric: "ratio of expected input tokens",
+    budget: { min: 1.3, max: 3 },
+    baseline: { value: 1.983, on: "2026-08-23" },
+    evidence: "nova-cli/cost.ts predictAgentUsage defender profile",
+    remediation:
+      "Restore defender's distinct forecast profile: playbook bodies, advisory research and broader inspection make its tool-result growth and iteration count materially higher than build. Actual provider usage remains accounting truth, but preflight must reserve honestly before spending starts.",
+    measure: async () => {
+      const objective = "audit the entire authentication and API surface";
+      const build = predictAgentUsage({ initialInputTokens: 6_000, objective, mode: "build" });
+      const defender = predictAgentUsage({ initialInputTokens: 6_000, objective, mode: "defender" });
+      return defender.inputTokensExpected / build.inputTokensExpected;
+    },
   },
   {
     id: "state.search-latency-p50",
@@ -538,10 +632,17 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
       "The walk reads a level of directories at once and yields them in queue order. A regression usually means it went back to awaiting one readdir at a time (41ms here, 302ms on a 3,000-directory tree) or that a large generated directory left ignoredDirectories. Budgets here are coarse on purpose — they catch a structural change, not a slow afternoon on a shared machine.",
     measure: async ({ root }) => {
       const { walkWorkspace } = await import("./workspace");
-      const started = performance.now();
-      let seen = 0;
-      for await (const entry of walkWorkspace(root)) seen += entry.isDirectory ? 0 : 1;
-      return performance.now() - started;
+      const samples: number[] = [];
+      for (let sample = 0; sample < 3; sample += 1) {
+        const started = performance.now();
+        let seen = 0;
+        for await (const entry of walkWorkspace(root)) seen += entry.isDirectory ? 0 : 1;
+        samples.push(performance.now() - started);
+      }
+      // These probes share a machine with the full test suite. The fastest warm sample represents
+      // the implementation; a one-off scheduler or disk-contention stall does not. A structural
+      // regression is slow on every sample and still crosses the deliberately coarse budget.
+      return Math.min(...samples);
     },
   },
   {
@@ -559,9 +660,13 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
     measure: async ({ root }) => {
       const { grepWorkspace } = await import("./workspace");
       await grepWorkspace(root, "compactionUrgency", {});
-      const started = performance.now();
-      await grepWorkspace(root, "compactionUrgency", {});
-      return performance.now() - started;
+      const samples: number[] = [];
+      for (let sample = 0; sample < 3; sample += 1) {
+        const started = performance.now();
+        await grepWorkspace(root, "compactionUrgency", {});
+        samples.push(performance.now() - started);
+      }
+      return Math.min(...samples);
     },
   },
   {

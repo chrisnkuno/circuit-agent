@@ -5,7 +5,7 @@ describe("the models the desktop app offers", () => {
   it("puts each provider's default first, since it is what you get by doing nothing", () => {
     expect(modelsForProvider("anthropic")[0]).toBe("claude-sonnet-5");
     expect(modelsForProvider("openai")[0]).toBe("gpt-5.6-terra");
-    expect(modelsForProvider("circuitnotion")[0]).toBe("gpt-5.6-luna");
+    expect(modelsForProvider("circuitnotion")[0]).toBe("circuit-2-turbo");
   });
 
   it("offers only text models, never embeddings or images", () => {

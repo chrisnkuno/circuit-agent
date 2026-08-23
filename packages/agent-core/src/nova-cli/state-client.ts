@@ -210,6 +210,13 @@ export class NovaStateClient {
 
 /** Missing native support is a visible capability downgrade, never a CLI startup failure. */
 export async function tryConnectNovaState(options: Omit<NovaStateClientOptions, "binary"> = {}): Promise<NovaStateClient | null> {
+  // Bun's node:child_process compatibility currently accepts the write callback but does not
+  // deliver this Rust sidecar's stdout/stderr pipe data. Waiting for the ordinary 10s protocol
+  // timeout turns every model-free history command into a 10s operation (and `history status`
+  // into 20s after list + status). The canonical JSON history remains fully functional, so take
+  // the explicit portable fallback immediately when Nova itself is launched under Bun. Published
+  // CLI entrypoints use Node and retain native SQLite + FTS5.
+  if ((process.versions as NodeJS.ProcessVersions & { bun?: string }).bun) return null;
   const binary = await resolveNovaStateBinary(options.environment);
   return binary ? NovaStateClient.connect({ ...options, binary }) : null;
 }

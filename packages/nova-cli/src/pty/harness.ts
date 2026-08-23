@@ -54,7 +54,15 @@ export function spawnNova(options: SpawnNovaOptions): NovaProcess {
     // Trimmed of undefined values: node-pty's types accept them, but some platforms' underlying
     // spawn rejects an environment record containing them outright.
     env: Object.fromEntries(
-      Object.entries({ ...process.env, ...options.env }).filter(([, value]) => value !== undefined),
+      Object.entries({
+        ...process.env,
+        // PTY feature tests own their model endpoint but not the public package registry. A fresh
+        // config directory otherwise makes every boot eligible for a real daily update check,
+        // adding nondeterministic network latency to tests that are about tabs, guides, or layout.
+        // An update-specific test can still opt back in explicitly through options.env.
+        NOVA_AUTO_UPDATE: "off",
+        ...options.env,
+      }).filter(([, value]) => value !== undefined),
     ) as Record<string, string>,
   });
 
@@ -101,12 +109,16 @@ export function spawnNova(options: SpawnNovaOptions): NovaProcess {
         waiters.push(waiter);
       });
     },
-    waitForExit: (timeoutMs = DEFAULT_TIMEOUT_MS) => Promise.race([
-      exited,
-      new Promise<{ exitCode: number; signal?: number }>((_, reject) => {
-        setTimeout(() => reject(new Error(`Process did not exit within ${timeoutMs}ms; output so far:\n${buffer}`)), timeoutMs);
-      }),
-    ]),
+    waitForExit: (timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`Process did not exit within ${timeoutMs}ms; output so far:\n${buffer}`)),
+        timeoutMs,
+      );
+      exited.then((result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+    }),
     kill: (signal) => proc.kill(signal),
   };
 }

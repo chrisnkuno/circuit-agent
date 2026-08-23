@@ -32,15 +32,19 @@ describe("the catalog as a whole", () => {
 });
 
 describe("CircuitNotion token models", () => {
-  it("prices the provider's own default model", () => {
-    // gpt-5.6-luna is PROVIDERS.circuitnotion.defaultModel in agent-matrix.ts — if this entry were
-    // missing, every session started without an explicit model would silently report unpriced.
+  it("prices the provider's published gpt-5.6-luna rate", () => {
     const prices = tokenPricesAt(PRICE_CATALOG, { provider: "circuitnotion", model: "gpt-5.6-luna" })!;
     expect(prices).toBeDefined();
     expect(prices.currency).toBe("RWF");
     expect(prices.inputPerMillion).toBe(1_610_000_000);
     expect(prices.outputPerMillion).toBe(9_660_000_000);
     expect(prices.cachedInputPerMillion).toBe(161_000_000);
+  });
+
+  it("does not invent a rate for the circuit-2-turbo routing alias", () => {
+    // The public catalog recommends this alias but does not publish its token rates. It can still
+    // run; Nova reports the cost as unknown unless MODEL_* pricing variables configure the rate.
+    expect(tokenPricesAt(PRICE_CATALOG, { provider: "circuitnotion", model: "circuit-2-turbo" })).toBeUndefined();
   });
 
   it("prices a real turn against the published table, cache included", () => {

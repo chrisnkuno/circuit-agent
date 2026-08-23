@@ -46,6 +46,7 @@ export const COMMANDS = defineCommands({
   "/tools": { description: "What the agent can call, and which skills, plugins, MCP servers or hooks a project added" },
   "/providers": { description: "Which model providers are configured" },
   "/settings": { description: "Configure API keys, URLs, models and voice input" },
+  "/update": { args: "[auto|check|off]", description: "Update Nova now, or choose whether it updates itself" },
   "/voice": { args: "[audio-file]", description: "Record or transcribe an editable voice prompt" },
   "/wander": { args: "[topic|random|daily|weekly]", description: "Run a bounded research lab and grade what it finds" },
   "/jobs": { args: "[run|cancel|approve]", description: "Durable background work: list, start, cancel, or answer" },

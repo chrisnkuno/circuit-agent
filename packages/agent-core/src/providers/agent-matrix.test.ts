@@ -70,7 +70,10 @@ describe("provider matrix", () => {
 
     const circuitnotion = resolveProvider({ CIRCUITNOTION_API_KEY: "cn-key" }, { provider: "circuitnotion" });
     expect("error" in circuitnotion).toBe(false);
-    if (!("error" in circuitnotion)) expect(typeof circuitnotion.provider.complete).toBe("function");
+    if (!("error" in circuitnotion)) {
+      expect(circuitnotion.model).toBe("circuit-2-turbo");
+      expect(typeof circuitnotion.provider.complete).toBe("function");
+    }
   });
 
   it("takes the model from an explicit flag, then the environment, then the default", () => {

@@ -43,6 +43,12 @@ const CURRENCY_CHOICES: readonly SettingChoice[] = [...new Set(SUPPORTED_COUNTRI
   .sort()
   .map((value) => ({ value, label: value }));
 
+const AUTO_UPDATE_CHOICES: readonly SettingChoice[] = [
+  { value: "check", label: "Check daily and tell me (default)" },
+  { value: "install", label: "Check daily and install automatically" },
+  { value: "off", label: "Never check" },
+];
+
 const ON_OFF_CHOICES: readonly SettingChoice[] = [
   { value: "off", label: "Off — rule-based suggestions only" },
   { value: "on", label: "On — the model may add up to two more" },
@@ -94,6 +100,9 @@ export const SETTING_FIELDS = [
   { key: "MODEL_PRICE_MODEL", label: "Model the price override applies to" },
   // Both or neither: `/pay` refuses to run half-configured rather than failing at the moment a
   // person is trying to hand over money.
+  // Three states rather than a switch: looking and installing are different decisions, and the one
+  // people want to make separately is whether Nova may replace itself without being asked.
+  { key: "NOVA_AUTO_UPDATE", label: "Automatic updates — check daily, and optionally install", choices: AUTO_UPDATE_CHOICES },
   { key: "NOVA_BILLING_URL", label: "Billing service URL (enables /pay)", url: true },
   { key: "NOVA_BILLING_KEY", label: "Billing service key", secret: true },
   { key: "NOVA_KEYS", label: "Key bindings, e.g. /diff=alt+d,/wander=off" },

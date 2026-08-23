@@ -73,7 +73,7 @@ const CIRCUITNOTION: PriceRecord[] = [
   circuitNotionTokens("gpt-5.6", 8_050, 48_300, 805),
   circuitNotionTokens("gpt-5.6-sol", 8_050, 48_300, 805),
   circuitNotionTokens("gpt-5.6-terra", 4_025, 24_150, 402.5),
-  circuitNotionTokens("gpt-5.6-luna", 1_610, 9_660, 161), // the provider default (PROVIDERS.circuitnotion.defaultModel)
+  circuitNotionTokens("gpt-5.6-luna", 1_610, 9_660, 161),
 
   // GPT-5.x
   circuitNotionTokens("gpt-5.5", 8_050, 48_300, 805),

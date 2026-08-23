@@ -117,6 +117,7 @@ export function describePrice(prices: TokenPrices | undefined, display: Currency
 
 export type ModelCommand =
   | { kind: "list" }
+  | { kind: "refresh" }
   | { kind: "pick"; index: number }
   | { kind: "query"; text: string }
   | { kind: "explicit"; provider?: string; model?: string };
@@ -138,6 +139,7 @@ export function parseModelCommand(input: string): ModelCommand | null {
   if (!match) return null;
   const rest = (match[1] ?? "").trim();
   if (!rest) return { kind: "list" };
+  if (rest === "refresh") return { kind: "refresh" };
   if (/^\d+$/.test(rest)) return { kind: "pick", index: Number(rest) };
   const [provider, model] = rest.split(/\s+/);
   if (model === undefined && !isProviderId(provider)) return { kind: "query", text: provider };

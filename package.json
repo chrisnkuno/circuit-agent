@@ -22,6 +22,11 @@
     "test:state": "cargo test --manifest-path packages/nova-state/Cargo.toml",
     "bench:state": "cargo run --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 500 --messages 40 --queries 200",
     "bench": "bun run scripts/bench.ts",
+    "reliability:audit": "bun run scripts/reliability-audit.ts",
+    "reliability:exa": "bun run scripts/exa-reliability.ts",
+    "reliability:rescore": "bun run scripts/reliability-rescore.ts",
+    "reliability:scheduled": "bun run scripts/reliability-eval.ts",
+    "reliability:publish": "bun run scripts/reliability-publish.ts",
     "optimize:map": "bun run scripts/optimization-report.ts"
   },
   "dependencies": {

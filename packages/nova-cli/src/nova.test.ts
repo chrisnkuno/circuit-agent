@@ -31,6 +31,7 @@ describe("argument parsing", () => {
   it("defaults to a local build-mode session in the working directory", () => {
     const args = parseArgs([]);
     expect(args).toMatchObject({ mode: "build", backend: "local", prompt: null, upload: false });
+    expect(args.modeExplicit).toBe(false);
     expect(args.root).toBe(process.cwd());
   });
 
@@ -40,6 +41,7 @@ describe("argument parsing", () => {
     expect(parseArgs(["--auto"]).mode).toBe("auto");
     expect(parseArgs(["-y"]).mode).toBe("auto");
     expect(parseArgs(["--build"]).mode).toBe("build");
+    expect(parseArgs(["--defender"])).toMatchObject({ mode: "defender", modeExplicit: true });
   });
 
   it("takes --json and its --headless alias, and keeps the request intact", () => {
@@ -618,6 +620,14 @@ describe("main() — branches that resolve before any interactive input is neede
     const { code, stderr } = await run(["--cwd", tmpRoot, "--sandbox", "hello"]);
     expect(code).toBe(1);
     expect(stderr).toContain("Remote sandboxes need E2B");
+  });
+
+  it("never sends a one-shot slash command to the model", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    const { code, stderr, stdout } = await run(["--cwd", tmpRoot, "/models refresh"]);
+    expect(code).toBe(2);
+    expect(stderr).toContain("Slash commands run inside an interactive Nova session");
+    expect(stdout).not.toContain("Estimated:");
   });
 
   it("refuses an interactive session with no terminal attached and no one-shot request", async () => {

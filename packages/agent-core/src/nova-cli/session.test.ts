@@ -49,12 +49,13 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
 
 describe("session storage", () => {
   it("round-trips a session, including its standing approvals", async () => {
-    const saved = record();
+    const saved = record({ mode: "plan" });
     await saveSession(saved);
     const loaded = await loadSession(root, saved.id);
     expect(loaded?.title).toBe("Add a health check");
     expect(loaded?.approvals).toEqual({ edit_file: "allow" });
     expect(loaded?.totalRwf).toBe(12);
+    expect(loaded?.mode).toBe("plan");
     expect(loaded?.revision).toBe(1);
     expect(loaded?.integrity).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -112,6 +113,16 @@ describe("context compaction", () => {
   it("does nothing while the conversation fits", () => {
     const messages: AgentMessage[] = [{ role: "system", content: "sys" }, { role: "user", content: "hi" }];
     expect(planCompaction(messages, { contextLimit: 200_000, outputBudget: 8_000 })).toBeNull();
+  });
+
+  it("counts large tool-call arguments even when the assistant text is empty", () => {
+    const plain = estimateMessageTokens([{ role: "assistant", content: "" }]);
+    const structured = estimateMessageTokens([{
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "write_1", name: "write_file", arguments: { path: "large.ts", content: "x".repeat(40_000) } }],
+    }]);
+    expect(structured - plain).toBeGreaterThan(10_000);
   });
 
   it("keeps the system prompt and the original request, and summarizes the middle", () => {

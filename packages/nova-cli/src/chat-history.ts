@@ -35,7 +35,7 @@ export type HistoryEntry = {
 };
 
 export function countTurns(messages: readonly AgentMessage[]): number {
-  return messages.filter((message) => message.role === "user").length;
+  return messages.filter((message) => message.role === "user" && !message.internal).length;
 }
 
 /** How long ago, in the units a person would say out loud. */
@@ -54,7 +54,7 @@ export function relativeTime(timestamp: number, now = Date.now()): string {
 
 export function summarizeSession(record: SessionRecord): HistoryEntry {
   const searchText = record.messages.flatMap((message): string[] => {
-    if (message.role === "system") return [];
+    if (message.role === "system" || message.internal) return [];
     if (message.role === "tool") return [message.name, message.content];
     if (message.role === "assistant" && "toolCalls" in message) {
       return [message.content, ...message.toolCalls.flatMap((call) => [call.name, JSON.stringify(call.arguments ?? {})])];
@@ -187,7 +187,7 @@ export function renderReplay(record: SessionRecord, style: SectionStyle, options
 
   // Turn boundaries are user messages; slicing by them is what makes `--turns 3` mean three
   // exchanges rather than three arbitrary log entries.
-  const boundaries = record.messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
+  const boundaries = record.messages.flatMap((message, index) => (message.role === "user" && !message.internal ? [index] : []));
   const from = options.turns !== undefined && boundaries.length > options.turns
     ? boundaries[boundaries.length - options.turns]
     : 0;
@@ -195,7 +195,7 @@ export function renderReplay(record: SessionRecord, style: SectionStyle, options
 
   let turn = 0;
   for (const message of record.messages.slice(from)) {
-    if (message.role === "system") continue;
+    if (message.role === "system" || message.internal) continue;
     if (message.role === "user") {
       turn += 1;
       out.push(rule(style, { label: `turn ${turn}`, tone: "accent" }));

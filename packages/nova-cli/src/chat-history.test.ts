@@ -46,6 +46,20 @@ describe("summarising a session", () => {
     expect(countTurns(session().messages)).toBe(2);
     expect(summarizeSession(session())).toMatchObject({ turns: 2, messages: 7, title: "fix the failing tests" });
   });
+
+  it("does not attribute Nova's internal verification prompts to the user", () => {
+    const record = session({
+      messages: [
+        { role: "user", content: "fix divide" },
+        { role: "assistant", content: "fixed" },
+        { role: "user", content: "You changed the workspace; add more tests", internal: true },
+        { role: "assistant", content: "targeted tests pass" },
+      ],
+    });
+    expect(countTurns(record.messages)).toBe(1);
+    expect(summarizeSession(record).searchText).not.toContain("add more tests");
+    expect(plain(renderReplay(record, style()))).not.toContain("You changed the workspace");
+  });
 });
 
 describe("relative time", () => {

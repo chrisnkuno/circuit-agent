@@ -357,6 +357,13 @@ fn session_message_document(
     updated_at: i64,
 ) -> Option<SourceDocument> {
     let object = message.as_object()?;
+    if object
+        .get("internal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let role = object.get("role")?.as_str()?.to_owned();
     let content = object.get("content").and_then(json_text)?;
     Some(SourceDocument {
@@ -536,5 +543,15 @@ mod tests {
             "deploy staging\n[REDACTED]\nthen verify health"
         );
         assert!(!document.text.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn internal_runtime_prompts_never_enter_search_documents() {
+        assert!(session_message_document(
+            &json!({"role":"user","content":"automatic verification nudge","internal":true}),
+            0,
+            1,
+        )
+        .is_none());
     }
 }

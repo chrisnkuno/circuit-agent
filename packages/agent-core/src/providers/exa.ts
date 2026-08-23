@@ -24,9 +24,16 @@
  * rather than always-the-best: `instant` answers in ~250ms and `deep-reasoning` can take 40s, so the
  * right pick depends on whether a person is waiting on the result or an agent is researching.
  */
-export type ExaSearchType = "auto" | "fast" | "instant" | "deep-lite" | "deep" | "deep-reasoning";
+export type ExaSearchType =
+  "auto" | "fast" | "instant" | "deep-lite" | "deep" | "deep-reasoning";
 
-export type ExaCategory = "company" | "people" | "publication" | "news" | "personal site" | "financial report";
+export type ExaCategory =
+  | "company"
+  | "people"
+  | "publication"
+  | "news"
+  | "personal site"
+  | "financial report";
 
 /** Documented ballpark upper latency per type, in ms — the basis for the per-request timeout. */
 const LATENCY_CEILING: Record<ExaSearchType, number> = {
@@ -107,14 +114,16 @@ export type ExaSearchResponse = {
   searchType: string | null;
   results: ExaSearchHit[];
   /** Synthesized answer, present when `outputSchema` was supplied. */
-  output: { content: string | Record<string, unknown> | null; grounding: ExaGrounding[] } | null;
+  output: {
+    content: string | Record<string, unknown> | null;
+    grounding: ExaGrounding[];
+  } | null;
   /**
    * What Exa says this call cost, in USD.
    *
-   * Reported rather than estimated wherever it is present. Nova's own catalog rate is a published
-   * list price applied to a guessed page count; this is the invoice. They disagree the moment a
-   * search returns fewer pages than requested or runs a deep variant at a different rate, and when
-   * they disagree the number from the provider is the true one.
+   * Exa's endpoint-provided estimated cost breakdown. It is better evidence than applying a
+   * guessed page count to a catalog rate, but it is not an invoice; Exa bills from its usage
+   * counters and those remain the accounting authority.
    */
   costDollars: number | null;
 };
@@ -123,7 +132,11 @@ export type ExaContentsResponse = {
   requestId: string | null;
   results: ExaSearchHit[];
   /** Per-URL outcomes. Exa returns HTTP 200 even when individual URLs fail, so this must be read. */
-  statuses: Array<{ url: string; status: "success" | "error"; errorTag: string | null }>;
+  statuses: Array<{
+    url: string;
+    status: "success" | "error";
+    errorTag: string | null;
+  }>;
   costDollars: number | null;
 };
 
@@ -144,17 +157,29 @@ type RawResult = {
   text?: string;
 };
 
-function boundedInteger(value: number | undefined, minimum: number, maximum: number, name: string): number | undefined {
+function boundedInteger(
+  value: number | undefined,
+  minimum: number,
+  maximum: number,
+  name: string,
+): number | undefined {
   if (value === undefined) return undefined;
-  if (!Number.isInteger(value) || value < minimum || value > maximum) throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+  if (!Number.isInteger(value) || value < minimum || value > maximum)
+    throw new Error(
+      `${name} must be an integer between ${minimum} and ${maximum}`,
+    );
   return value;
 }
 
-function domainList(value: string[] | undefined, name: string): string[] | undefined {
+function domainList(
+  value: string[] | undefined,
+  name: string,
+): string[] | undefined {
   if (!value || value.length === 0) return undefined;
   // Exa's own cap. Sending more is a 400, and a 400 discovered at request time costs a whole
   // agent iteration to learn something that is knowable here.
-  if (value.length > 1_200) throw new Error(`${name} accepts at most 1200 entries`);
+  if (value.length > 1_200)
+    throw new Error(`${name} accepts at most 1200 entries`);
   const cleaned = value.map((entry) => entry.trim()).filter(Boolean);
   return cleaned.length > 0 ? cleaned : undefined;
 }
@@ -167,7 +192,9 @@ function domainList(value: string[] | undefined, name: string): string[] | undef
  * deliberate — a search that returns titles and URLs with no excerpt makes the model fetch each
  * result to find out whether it was relevant, which costs far more than the highlights would have.
  */
-function contentsBody(request: ExaContentsRequest | undefined): Record<string, unknown> {
+function contentsBody(
+  request: ExaContentsRequest | undefined,
+): Record<string, unknown> {
   const contents = request ?? {};
   const body: Record<string, unknown> = {};
 
@@ -176,7 +203,12 @@ function contentsBody(request: ExaContentsRequest | undefined): Record<string, u
   else if (highlights && typeof highlights === "object") {
     const shaped: Record<string, unknown> = {};
     if (highlights.query?.trim()) shaped.query = highlights.query.trim();
-    const cap = boundedInteger(highlights.maxCharacters, 100, 100_000, "highlights.maxCharacters");
+    const cap = boundedInteger(
+      highlights.maxCharacters,
+      100,
+      100_000,
+      "highlights.maxCharacters",
+    );
     if (cap !== undefined) shaped.maxCharacters = cap;
     // An empty object would be a quality downgrade dressed as a request for defaults.
     body.highlights = Object.keys(shaped).length > 0 ? shaped : true;
@@ -184,19 +216,32 @@ function contentsBody(request: ExaContentsRequest | undefined): Record<string, u
 
   if (contents.text === true) body.text = true;
   else if (contents.text && typeof contents.text === "object") {
-    const cap = boundedInteger(contents.text.maxCharacters, 100, 1_000_000, "text.maxCharacters");
+    const cap = boundedInteger(
+      contents.text.maxCharacters,
+      100,
+      1_000_000,
+      "text.maxCharacters",
+    );
     body.text = cap === undefined ? true : { maxCharacters: cap };
   }
 
   if (contents.maxAgeHours !== undefined) {
-    if (!Number.isInteger(contents.maxAgeHours) || contents.maxAgeHours < -1) throw new Error("maxAgeHours must be -1, 0, or a positive integer");
+    if (!Number.isInteger(contents.maxAgeHours) || contents.maxAgeHours < -1)
+      throw new Error("maxAgeHours must be -1, 0, or a positive integer");
     body.maxAgeHours = contents.maxAgeHours;
   }
-  const livecrawl = boundedInteger(contents.livecrawlTimeoutMs, 0, 90_000, "livecrawlTimeoutMs");
+  const livecrawl = boundedInteger(
+    contents.livecrawlTimeoutMs,
+    0,
+    90_000,
+    "livecrawlTimeoutMs",
+  );
   if (livecrawl !== undefined) body.livecrawlTimeout = livecrawl;
   const subpages = boundedInteger(contents.subpages, 0, 100, "subpages");
   if (subpages !== undefined) body.subpages = subpages;
-  const targets = contents.subpageTarget?.map((entry) => entry.trim()).filter(Boolean);
+  const targets = contents.subpageTarget
+    ?.map((entry) => entry.trim())
+    .filter(Boolean);
   if (targets && targets.length > 0) body.subpageTarget = targets;
 
   return body;
@@ -208,13 +253,20 @@ function toHit(result: RawResult): ExaSearchHit {
     url: result.url!,
     publishedDate: result.publishedDate ?? null,
     author: result.author ?? null,
-    highlights: (result.highlights ?? []).map((item) => item.trim()).filter(Boolean),
-    text: typeof result.text === "string" && result.text.length > 0 ? result.text : null,
+    highlights: (result.highlights ?? [])
+      .map((item) => item.trim())
+      .filter(Boolean),
+    text:
+      typeof result.text === "string" && result.text.length > 0
+        ? result.text
+        : null,
   };
 }
 
 function toHits(results: RawResult[] | undefined): ExaSearchHit[] {
-  return (results ?? []).filter((result) => typeof result.url === "string" && result.url.length > 0).map(toHit);
+  return (results ?? [])
+    .filter((result) => typeof result.url === "string" && result.url.length > 0)
+    .map(toHit);
 }
 
 export class ExaSearchClient {
@@ -232,13 +284,20 @@ export class ExaSearchClient {
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
-  private async post(path: string, body: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+  private async post(
+    path: string,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.apiKey}`,
+        },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -246,7 +305,9 @@ export class ExaSearchClient {
         const text = await response.text();
         // The status is the actionable half — 401 is a key problem, 429 is a pacing problem, 422 is
         // a request the caller can fix — so it leads, ahead of a body that may be an HTML error page.
-        throw new Error(`Exa ${path} failed (${response.status}): ${text.slice(0, 240)}`);
+        throw new Error(
+          `Exa ${path} failed (${response.status}): ${text.slice(0, 240)}`,
+        );
       }
       return (await response.json()) as Record<string, unknown>;
     } finally {
@@ -258,7 +319,8 @@ export class ExaSearchClient {
     const query = request.query.trim();
     if (!query) throw new Error("Exa query is required");
     const type = request.type ?? "auto";
-    if (!(type in LATENCY_CEILING)) throw new Error(`Unknown Exa search type: ${type}`);
+    if (!(type in LATENCY_CEILING))
+      throw new Error(`Unknown Exa search type: ${type}`);
     // 100 is Exa's ceiling. The old client capped at 10, which silently made a research request for
     // 40 sources into a request for 10 and reported success.
     const numResults = boundedInteger(request.numResults, 1, 100, "numResults");
@@ -270,17 +332,28 @@ export class ExaSearchClient {
     if (include) body.includeDomains = include;
     const exclude = domainList(request.excludeDomains, "excludeDomains");
     if (exclude) body.excludeDomains = exclude;
-    if (request.startPublishedDate) body.startPublishedDate = request.startPublishedDate;
-    if (request.endPublishedDate) body.endPublishedDate = request.endPublishedDate;
+    if (request.startPublishedDate)
+      body.startPublishedDate = request.startPublishedDate;
+    if (request.endPublishedDate)
+      body.endPublishedDate = request.endPublishedDate;
     if (request.userLocation) body.userLocation = request.userLocation;
-    if (request.systemPrompt?.trim()) body.systemPrompt = request.systemPrompt.trim();
+    if (request.systemPrompt?.trim())
+      body.systemPrompt = request.systemPrompt.trim();
     if (request.outputSchema) body.outputSchema = request.outputSchema;
-    const extraQueries = request.additionalQueries?.map((entry) => entry.trim()).filter(Boolean);
-    if (extraQueries && extraQueries.length > 0) body.additionalQueries = extraQueries;
+    const extraQueries = request.additionalQueries
+      ?.map((entry) => entry.trim())
+      .filter(Boolean);
+    if (extraQueries && extraQueries.length > 0)
+      body.additionalQueries = extraQueries;
     // Category filters that Exa rejects outright rather than ignoring. Caught here so the model gets
     // a sentence it can act on instead of a 400 it has to interpret.
-    if ((request.category === "company" || request.category === "people") && (exclude || request.startPublishedDate || request.endPublishedDate)) {
-      throw new Error(`The ${request.category} category does not support excludeDomains or date filters`);
+    if (
+      (request.category === "company" || request.category === "people") &&
+      (exclude || request.startPublishedDate || request.endPublishedDate)
+    ) {
+      throw new Error(
+        `The ${request.category} category does not support excludeDomains or date filters`,
+      );
     }
     body.contents = contentsBody(request.contents);
 
@@ -288,27 +361,44 @@ export class ExaSearchClient {
     // to account for both or a correct deep search gets aborted for being slow as designed.
     const synthesis = request.outputSchema ? 20_000 : 0;
     const livecrawl = request.contents?.maxAgeHours === 0 ? 15_000 : 0;
-    const timeoutMs = request.timeoutMs ?? LATENCY_CEILING[type] + synthesis + livecrawl;
+    const timeoutMs =
+      request.timeoutMs ?? LATENCY_CEILING[type] + synthesis + livecrawl;
 
     const payload = await this.post("/search", body, timeoutMs);
-    const output = payload.output as { content?: unknown; grounding?: unknown[] } | undefined;
+    const output = payload.output as
+      { content?: unknown; grounding?: unknown[] } | undefined;
     return {
       requestId: (payload.requestId as string | undefined) ?? null,
       searchType: (payload.searchType as string | undefined) ?? null,
       results: toHits(payload.results as RawResult[] | undefined),
       output: output
         ? {
-          content: (output.content as string | Record<string, unknown> | undefined) ?? null,
-          grounding: ((output.grounding ?? []) as Array<Record<string, unknown>>).map((entry) => ({
-            field: (entry.field as string | undefined) ?? "content",
-            citations: ((entry.citations ?? []) as Array<{ url?: string; title?: string }>)
-              .filter((citation) => typeof citation.url === "string")
-              .map((citation) => ({ url: citation.url!, title: citation.title ?? null })),
-            confidence: (entry.confidence as ExaGrounding["confidence"] | undefined) ?? null,
-          })),
-        }
+            content:
+              (output.content as
+                string | Record<string, unknown> | undefined) ?? null,
+            grounding: (
+              (output.grounding ?? []) as Array<Record<string, unknown>>
+            ).map((entry) => ({
+              field: (entry.field as string | undefined) ?? "content",
+              citations: (
+                (entry.citations ?? []) as Array<{
+                  url?: string;
+                  title?: string;
+                }>
+              )
+                .filter((citation) => typeof citation.url === "string")
+                .map((citation) => ({
+                  url: citation.url!,
+                  title: citation.title ?? null,
+                })),
+              confidence:
+                (entry.confidence as ExaGrounding["confidence"] | undefined) ??
+                null,
+            })),
+          }
         : null,
-      costDollars: ((payload.costDollars as { total?: number } | undefined)?.total) ?? null,
+      costDollars:
+        (payload.costDollars as { total?: number } | undefined)?.total ?? null,
     };
   }
 
@@ -316,34 +406,56 @@ export class ExaSearchClient {
    * Extracts clean content from URLs Exa already knows how to render — JavaScript pages and PDFs
    * included, which a plain `fetch` plus tag-stripping cannot do at all.
    */
-  async contents(urls: readonly string[], request: ExaContentsRequest = {}): Promise<ExaContentsResponse> {
+  async contents(
+    urls: readonly string[],
+    request: ExaContentsRequest = {},
+  ): Promise<ExaContentsResponse> {
     const cleaned = urls.map((url) => url.trim()).filter(Boolean);
     if (cleaned.length === 0) throw new Error("At least one URL is required");
-    for (const url of cleaned) if (!/^https?:\/\//i.test(url)) throw new Error(`Not an http(s) URL: ${url}`);
+    for (const url of cleaned)
+      if (!/^https?:\/\//i.test(url))
+        throw new Error(`Not an http(s) URL: ${url}`);
 
     // Top-level here, not nested under `contents` — the documented difference between the two
     // endpoints, and the single most common way this integration is written wrong.
-    const body: Record<string, unknown> = { urls: cleaned, ...contentsBody(request) };
+    const body: Record<string, unknown> = {
+      urls: cleaned,
+      ...contentsBody(request),
+    };
     const timeoutMs = this.timeoutMs + (request.maxAgeHours === 0 ? 15_000 : 0);
     const payload = await this.post("/contents", body, timeoutMs);
 
     return {
       requestId: (payload.requestId as string | undefined) ?? null,
       results: toHits(payload.results as RawResult[] | undefined),
-      statuses: ((payload.statuses ?? []) as Array<{ id?: string; status?: string; error?: { tag?: string } }>)
+      statuses: (
+        (payload.statuses ?? []) as Array<{
+          id?: string;
+          status?: string;
+          error?: { tag?: string };
+        }>
+      )
         .filter((status) => typeof status.id === "string")
         .map((status) => ({
           url: status.id!,
           status: status.status === "error" ? "error" : "success",
           errorTag: status.error?.tag ?? null,
         })),
-      costDollars: ((payload.costDollars as { total?: number } | undefined)?.total) ?? null,
+      costDollars:
+        (payload.costDollars as { total?: number } | undefined)?.total ?? null,
     };
   }
 }
 
-export function createExaClient(environment: { EXA_API_KEY?: string; EXA_BASE_URL?: string }, fetchImpl?: typeof fetch): ExaSearchClient | undefined {
+export function createExaClient(
+  environment: { EXA_API_KEY?: string; EXA_BASE_URL?: string },
+  fetchImpl?: typeof fetch,
+): ExaSearchClient | undefined {
   const apiKey = environment.EXA_API_KEY?.trim();
   if (!apiKey) return undefined;
-  return new ExaSearchClient({ apiKey, baseUrl: environment.EXA_BASE_URL?.trim() || undefined, fetchImpl });
+  return new ExaSearchClient({
+    apiKey,
+    baseUrl: environment.EXA_BASE_URL?.trim() || undefined,
+    fetchImpl,
+  });
 }

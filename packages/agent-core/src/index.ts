@@ -56,6 +56,8 @@ export type { NovaMode, PermissionDecision, ToolApprovalOutcome } from "./nova-c
 export { assessTaskSafety, assessToolSafety } from "./nova-cli/safety";
 export type { SafetyAssessment, SensitiveCategory } from "./nova-cli/safety";
 export { CheckpointStore } from "./nova-cli/checkpoints";
+export { scoreReliability, type ReliabilityCase, type ReliabilityReport } from "./nova-cli/reliability";
+export { scoreExaReliability, type ExaReliabilityCase, type ExaReliabilityReport } from "./nova-cli/exa-reliability";
 export { CostLedger } from "./nova-cli/cost";
 export { CircuitPayGateway, BillingError, billingFromEnvironment, parseAmountRwf, assertTopUpAmount, newIdempotencyKey, waitForPayment, isPaymentSettled, MINIMUM_TOP_UP_RWF, MAXIMUM_TOP_UP_RWF } from "./nova-cli/billing";
 export type { Balance, BillingGateway, Checkout, CheckoutRequest, Payment, PaymentStatus, WaitResult } from "./nova-cli/billing";

@@ -94,12 +94,17 @@ export function predictAgentUsage(input: { initialInputTokens: number; objective
   const objective = input.objective.toLowerCase();
   const broad = /\b(migrate|refactor|redesign|audit|all|entire|cross-platform|production|architecture|extensive)\b/.test(objective);
   const narrow = /\b(explain|find|rename|one line|small|single|typo)\b/.test(objective);
-  // Defender falls in with build: it reads broadly like a scan, but every effectful call still
-  // goes through the same per-call approval build does, not auto's wider single-pass cadence.
-  const base = input.mode === "plan" ? 3 : input.mode === "auto" ? 7 : 6;
-  const expectedIterations = Math.max(1, Math.min(12, base + (broad ? 2 : 0) - (narrow ? 1 : 0)));
-  const toolResultTokensPerIteration = input.mode === "plan" ? 850 : 1_350;
-  const outputTokensPerIteration = input.mode === "plan" ? 450 : 650;
+  const constrained = /\b(reply with exactly|exactly one|one grep|one search|smallest (?:correct )?(?:source )?fix|run only|only (?:read|review|search|grep)|do not (?:edit|change|run))\b/.test(objective);
+  // Defender is deliberately its own profile. A real review pulls two or three playbooks, reads
+  // broad code surfaces, and may ground a dependency finding in current advisory data. Treating it
+  // as build hid precisely the expensive work that distinguishes the mode. Delegation is still
+  // not assumed — it is optional — so the high range remains the place for that possibility.
+  const base = input.mode === "plan" ? 2 : input.mode === "defender" ? 6 : 5;
+  const expectedIterations = constrained
+    ? 2
+    : Math.max(1, Math.min(10, base + (broad ? 2 : 0) - (narrow ? 1 : 0)));
+  const toolResultTokensPerIteration = input.mode === "plan" ? 850 : input.mode === "defender" ? 2_500 : 1_350;
+  const outputTokensPerIteration = input.mode === "plan" ? 450 : input.mode === "defender" ? 750 : 650;
   // Every later request contains the earlier assistant/tool material. The triangular term is the
   // part fixed per-request calculators miss.
   const growth = toolResultTokensPerIteration + outputTokensPerIteration;
@@ -111,7 +116,7 @@ export function predictAgentUsage(input: { initialInputTokens: number; objective
     expectedIterations,
     inputTokensLow: Math.max(input.initialInputTokens, Math.round(inputTokensExpected * 0.62)),
     inputTokensExpected,
-    inputTokensHigh: Math.round(inputTokensExpected * 1.65),
+    inputTokensHigh: Math.round(inputTokensExpected * (input.mode === "defender" ? 2 : 1.65)),
     outputTokensLow: Math.round(outputTokensExpected * 0.55),
     outputTokensExpected,
     outputTokensHigh: Math.round(outputTokensExpected * 1.7),
@@ -119,6 +124,17 @@ export function predictAgentUsage(input: { initialInputTokens: number; objective
 }
 
 const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+
+/** Below this, cache writes are too small to be worth anyone's attention, whatever their ratio. */
+const CACHE_CHURN_FLOOR_TOKENS = 20_000;
+
+/** Said once, where the numbers are, when the cache is being paid for and not used. */
+export const CACHE_CHURN_HINT = [
+  "The prompt cache is being rewritten more than it is read, which costs more than not caching at all.",
+  "Something near the front of each request is changing between turns — a timestamp or per-turn text in",
+  "the system prompt, or a tool list whose order or contents move. Caching is a prefix match: one changed",
+  "byte invalidates everything after it.",
+].join(" ");
 
 export class CostLedger {
   private readonly turns: TurnCost[] = [];
@@ -276,6 +292,37 @@ export class CostLedger {
     return { micros: full.micros - discounted.micros, currency: prices.currency };
   }
 
+  /**
+   * Whether the provider's prompt cache is actually working for this session.
+   *
+   * The cache is the single largest lever on what a long session costs — a cached input token is
+   * billed at about a tenth of a fresh one — and it is a *prefix* match, so it is defeated silently.
+   * Anything that changes near the front of the request (a timestamp in the system prompt, a
+   * per-turn memory block, a tool list that reorders) invalidates everything behind it, and the
+   * session goes on working exactly as before while paying full price.
+   *
+   * The tell is not a low hit rate on its own — the first turns of any session are all misses.
+   * It is *writes exceeding reads once a conversation is under way*: Nova keeps paying the 1.25x
+   * premium to store a prefix that is never read back, which is strictly worse than not caching at
+   * all. That is what `churning` reports, and it is worth more than the hit rate because it names a
+   * bug rather than a condition.
+   */
+  get cacheHealth(): { readTokens: number; writeTokens: number; freshTokens: number; hitRate: number; churning: boolean } {
+    const usage = this.totalUsage;
+    return {
+      readTokens: usage.cachedInputTokens,
+      writeTokens: usage.cacheWriteTokens,
+      // Provider adapters normalize inputTokens as the complete input, including cached reads.
+      // Adding reads again would double-count them and turn a real 80% hit rate into 44%.
+      freshTokens: Math.max(0, usage.inputTokens - usage.cachedInputTokens),
+      hitRate: usage.inputTokens === 0 ? 0 : Math.min(1, usage.cachedInputTokens / usage.inputTokens),
+      // Three turns before judging: a session that has only just started has legitimately written
+      // more than it has read, and warning there would train everyone to ignore the warning. The
+      // floor keeps a handful of tiny turns from raising it on a few hundred tokens of noise.
+      churning: this.turns.length >= 3 && usage.cacheWriteTokens > CACHE_CHURN_FLOOR_TOKENS && usage.cacheWriteTokens > usage.cachedInputTokens,
+    };
+  }
+
   /** Fraction of the budget spent, or undefined when uncapped or unpriceable. */
   get budgetFraction(): number | undefined {
     const budget = this.options.budget;
@@ -351,6 +398,13 @@ export class CostLedger {
       `  input   ${usage.inputTokens.toLocaleString()} tokens${usage.cachedInputTokens > 0 ? ` (${usage.cachedInputTokens.toLocaleString()} cached${shownSavings ? `, saving ${formatMoney(shownSavings)}` : ""})` : ""}`,
       `  output  ${usage.outputTokens.toLocaleString()} tokens${usage.reasoningTokens > 0 ? ` (${usage.reasoningTokens.toLocaleString()} reasoning)` : ""}`,
     ];
+    // Only once there is a cache to describe. A session that never touched one should not carry a
+    // row of zeroes explaining a feature it did not use.
+    const cache = this.cacheHealth;
+    if (cache.readTokens > 0 || cache.writeTokens > 0) {
+      lines.push(`  cache   ${Math.round(cache.hitRate * 100)}% of input served from cache · ${cache.writeTokens.toLocaleString()} written`);
+      if (cache.churning) lines.push(`  ${CACHE_CHURN_HINT}`);
+    }
     // Named rather than folded in silently: the request count and the token lines above describe
     // only what this process did, so without this line a resumed session reads as one that spent
     // far more per token than it did.

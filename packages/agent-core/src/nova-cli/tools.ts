@@ -496,12 +496,17 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       });
     };
 
+    // Search is a discovery surface, not a bulk document loader. Enough text to establish why a
+    // result matters belongs here; the full page is one targeted web_fetch away if it is actually
+    // needed. This cap matters most in DEFENDER, where several advisory hits otherwise remain in
+    // every later model request.
+    const SEARCH_RESULT_TEXT_CHARS = 1_500;
     const renderHits = (hits: readonly ExaSearchHit[]): string =>
       hits
         .map((hit, index) => [
           `[${index + 1}] ${hit.title}${hit.publishedDate ? ` (${hit.publishedDate.slice(0, 10)})` : ""}`,
           hit.url,
-          ...(hit.text ? [hit.text.slice(0, 4_000)] : hit.highlights.slice(0, 3)),
+          ...(hit.text ? [hit.text.slice(0, SEARCH_RESULT_TEXT_CHARS)] : hit.highlights.slice(0, 3)),
         ].join("\n"))
         .join("\n\n");
 
@@ -513,7 +518,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         type: "object",
         properties: {
           query: { type: "string", description: "A natural-language description. Long, specific queries work better than keywords." },
-          numResults: { type: "integer", description: "1-25. Defaults to 5." },
+          numResults: { type: "integer", description: "1-25. Defaults to 3; request more only when coverage requires it." },
           includeDomains: { type: "array", items: { type: "string" }, description: "Restrict to these domains, e.g. [\"nvd.nist.gov\", \"github.com\"]." },
           excludeDomains: { type: "array", items: { type: "string" } },
           category: { type: "string", enum: ["company", "people", "publication", "news", "personal site", "financial report"] },
@@ -531,7 +536,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const query = requiredString(args.query, "query");
         const response = await search.search({
           query,
-          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 5, 25),
+          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 3, 25),
           type: "auto",
           ...(optionalStringArray(args.includeDomains, "includeDomains") ? { includeDomains: optionalStringArray(args.includeDomains, "includeDomains")! } : {}),
           ...(optionalStringArray(args.excludeDomains, "excludeDomains") ? { excludeDomains: optionalStringArray(args.excludeDomains, "excludeDomains")! } : {}),
@@ -571,7 +576,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         properties: {
           query: { type: "string", description: "The research question, stated in full." },
           effort: { type: "string", enum: ["lite", "standard", "maximum"], description: "Reasoning depth. Defaults to standard." },
-          numResults: { type: "integer", description: "How many sources to gather. 1-25, defaults to 10." },
+          numResults: { type: "integer", description: "How many sources to gather. 1-25, defaults to 6." },
           instructions: { type: "string", description: "How to research, e.g. \"prefer official advisories over blog posts\". Not what shape to return." },
           includeDomains: { type: "array", items: { type: "string" } },
           startPublishedDate: { type: "string", description: "ISO date; excludes anything older." },
@@ -591,7 +596,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const response = await search.search({
           query,
           type,
-          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 10, 25),
+          numResults: Math.min(optionalInteger(args.numResults, "numResults") ?? 6, 25),
           ...(typeof args.instructions === "string" && args.instructions.trim() ? { systemPrompt: args.instructions.trim() } : {}),
           ...(optionalStringArray(args.includeDomains, "includeDomains") ? { includeDomains: optionalStringArray(args.includeDomains, "includeDomains")! } : {}),
           ...(typeof args.startPublishedDate === "string" ? { startPublishedDate: args.startPublishedDate } : {}),
@@ -609,11 +614,14 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const citations = (response.output?.grounding ?? []).flatMap((entry) => entry.citations.map((citation) => citation.url));
         const sources = [...new Set([...citations, ...response.results.map((hit) => hit.url)])];
         if (!answer && sources.length === 0) return { content: "No results." };
+        // When synthesis succeeded, the extracts have already done their job. Appending them all
+        // again duplicates the evidence beneath the answer and can add tens of thousands of tokens
+        // to every later request. If synthesis failed, compact hits remain the useful fallback.
         return {
           content: [
             answer || "(no synthesized answer returned)",
             sources.length > 0 ? `\nSources:\n${sources.map((url, index) => `[${index + 1}] ${url}`).join("\n")}` : "",
-            response.results.length > 0 ? `\n${renderHits(response.results)}` : "",
+            !answer && response.results.length > 0 ? `\n${renderHits(response.results)}` : "",
           ].filter(Boolean).join("\n"),
           data: { requestId: response.requestId, searchType: response.searchType, sources, grounding: response.output?.grounding ?? [] },
         };
@@ -641,7 +649,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         // *less* capable than it was by being wired to a second provider.
         if (options.search) {
           try {
-            const extracted = await options.search.contents([url], { text: { maxCharacters: 40_000 } });
+            const extracted = await options.search.contents([url], { text: { maxCharacters: 16_000 } });
             const failure = extracted.statuses.find((status) => status.status === "error");
             const page = extracted.results[0];
             if (page?.text) {
@@ -652,7 +660,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
                 ...(extracted.costDollars !== null ? { reportedUsd: extracted.costDollars } : {}),
                 label: `fetch: ${url.length > 56 ? `${url.slice(0, 55)}…` : url}`,
               });
-              return { content: page.text, data: { url, title: page.title, via: "exa" } };
+              return { content: page.text.slice(0, 16_000), data: { url, title: page.title, via: "exa" } };
             }
             if (failure) throw new Error(failure.errorTag ?? "extraction failed");
           } catch {
@@ -663,7 +671,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         const response = await fetchImpl(url, { signal: AbortSignal.timeout(30_000) });
         if (!response.ok) return { content: `Fetch failed with status ${response.status}.`, isError: true };
         const text = await response.text();
-        return { content: stripMarkup(text).slice(0, 40_000), data: { url, via: "fetch" } };
+        return { content: stripMarkup(text).slice(0, 16_000), data: { url, via: "fetch" } };
       },
     });
   }

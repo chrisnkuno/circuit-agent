@@ -13,6 +13,12 @@ describe("what a model can hold and produce", () => {
     expect(capabilitiesFor("claude-haiku-4-5")).toEqual({ contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false });
   });
 
+  it("handles CircuitNotion's default alias explicitly without guessing unpublished limits", () => {
+    const capabilities = capabilitiesFor("circuit-2-turbo");
+    expect(capabilities).toEqual({ contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false });
+    expect(capabilities).not.toBe(CONSERVATIVE_CAPABILITIES);
+  });
+
   it("treats an unknown model exactly as Nova did before this table existed", () => {
     // The dangerous failure is optimism: assuming a big window for an id nobody recognises turns a
     // local decision into a provider 400 halfway through the work.

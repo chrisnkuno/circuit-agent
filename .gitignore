@@ -20,6 +20,7 @@ packages/nova-state/target/
 
 # Scratch output from local agent runs
 tmp/
+reliability/site/data.json
 
 dev-server.log
 dev-server.err.log

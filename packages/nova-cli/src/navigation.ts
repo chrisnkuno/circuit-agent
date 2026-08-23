@@ -95,7 +95,7 @@ export const COMMAND_GROUP: Readonly<Record<string, NavGroupId>> = {
   "/tab": "parallel", "/workspace": "parallel",
   "/guide": "learn", "/help": "learn", "/keys": "learn", "/palette": "learn", "/tools": "learn",
   "/edit": "work", "/exit": "steer",
-  "/settings": "setup", "/providers": "setup", "/theme": "setup",
+  "/settings": "setup", "/providers": "setup", "/theme": "setup", "/update": "setup",
 };
 
 /**

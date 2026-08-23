@@ -23,11 +23,19 @@ Every input line is one request and every output line is one response:
 Search returns one best hit per session, a contextual window around the match, opening and closing
 session bookends, and a short explanation of why the evidence matched. Snapshot messages and journal
 events remain explicitly labelled so derived history never blurs into authoritative audit evidence.
+Runtime-generated verification prompts are marked internal and omitted here, so search results and
+turn counts never attribute Nova's own nudges to the user.
+
+The CLI uses the sidecar for `/history`, ranked search, status, and its resume chooser. Startup
+incrementally indexes changed records; a missing or incompatible binary falls back to verified JSON
+rather than making conversation history unavailable.
 
 ## Development
 
 ```sh
 cargo test --manifest-path packages/nova-state/Cargo.toml
+cargo fmt --manifest-path packages/nova-state/Cargo.toml -- --check
+cargo clippy --manifest-path packages/nova-state/Cargo.toml --all-targets -- -D warnings
 cargo run --manifest-path packages/nova-state/Cargo.toml
 cargo run --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 500 --messages 40 --queries 200
 ```

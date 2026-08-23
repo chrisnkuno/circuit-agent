@@ -600,6 +600,40 @@ describe("the cached prompt prefix", () => {
     expect(userMessages.join("\n")).toMatch(/durable memory/i);
     await agent.dispose();
   });
+
+  it("sends a recalled fact once per thread, including after resume", async () => {
+    await fs.mkdir(path.join(root, ".nova"), { recursive: true });
+    await fs.writeFile(path.join(root, ".nova", "memory.md"), "- the deployment pipeline runs on netlify\n");
+    const firstModel = scriptedModel([{ content: "First." }, { content: "Second." }]);
+    const first = new NovaAgent({
+      root, model: firstModel, prices, mode: "build", approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+
+    await first.send("check the netlify deployment pipeline");
+    await first.send("check the netlify deployment pipeline again");
+    const headers = firstModel.requests[1].messages
+      .filter((message) => message.role === "user")
+      .reduce((count, message) => count + (message.content.match(/Relevant durable memory/g)?.length ?? 0), 0);
+    expect(headers).toBe(1);
+
+    const record = await loadSession(root, first.sessionId);
+    expect(record?.recalledMemoryKeys).toHaveLength(1);
+    await first.dispose();
+
+    const resumedModel = scriptedModel([{ content: "Third." }]);
+    const resumed = new NovaAgent({
+      root, model: resumedModel, prices, mode: "build", approve: async () => "allow",
+      git: async () => ({ exitCode: 1, stdout: "", stderr: "not a repo" }),
+    });
+    resumed.resume(record!);
+    await resumed.send("check the netlify deployment pipeline once more");
+    const resumedHeaders = resumedModel.requests[0].messages
+      .filter((message) => message.role === "user")
+      .reduce((count, message) => count + (message.content.match(/Relevant durable memory/g)?.length ?? 0), 0);
+    expect(resumedHeaders).toBe(1);
+    await resumed.dispose();
+  });
 });
 
 describe("tool-result allowances", () => {

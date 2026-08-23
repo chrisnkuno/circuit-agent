@@ -1,0 +1,231 @@
+:root {
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text: #16233b;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --ok: #16a34a;
+  --ok-soft: #e9f7ef;
+  --down: #dc2626;
+  --down-soft: #fdecec;
+  --radius: 16px;
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.site-header {
+  text-align: center;
+  padding: 3rem 1.25rem 0.5rem;
+}
+
+.eyebrow {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.6rem;
+}
+
+.site-title {
+  font-size: clamp(1.9rem, 4.5vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.status-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 2rem 1.75rem 1.75rem;
+  text-align: center;
+  transition: border-color 0.3s ease;
+}
+
+.status-card[data-status="ok"] {
+  border-top: 4px solid var(--ok);
+}
+
+.status-card[data-status="down"] {
+  border-top: 4px solid var(--down);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 5px var(--ok-soft);
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.status-card[data-status="down"] .status-dot {
+  background: var(--down);
+  box-shadow: 0 0 0 5px var(--down-soft);
+}
+
+.status-card h2 {
+  margin-top: 0.9rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.status-banner {
+  margin-top: 1.5rem;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  background: var(--ok-soft);
+  color: var(--ok);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.status-card[data-status="down"] .status-banner {
+  background: var(--down-soft);
+  color: var(--down);
+}
+
+.status-details {
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+}
+
+.details-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.95rem;
+}
+
+.detail-row dt {
+  color: var(--muted);
+}
+
+.detail-row dd {
+  font-weight: 600;
+}
+
+.actions {
+  margin-top: 1.75rem;
+}
+
+.status-button {
+  appearance: none;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.8rem 1.6rem;
+  min-height: 48px;
+  min-width: 200px;
+  cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.status-button:hover,
+.status-button:focus-visible {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.status-button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.status-button:active {
+  transform: scale(0.98);
+}
+
+.status-button[aria-pressed="true"] {
+  border-color: var(--down);
+  background: var(--down);
+}
+
+.status-button[aria-pressed="true"]:hover,
+.status-button[aria-pressed="true"]:focus-visible {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.site-footer {
+  text-align: center;
+  padding: 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 480px) {
+  .status-card {
+    padding: 1.5rem 1.1rem;
+  }
+
+  .detail-row {
+    flex-direction: column;
+    gap: 0.15rem;
+    align-items: center;
+  }
+
+  .status-button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

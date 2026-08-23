@@ -8,6 +8,7 @@ describe("parsing the model command", () => {
   it("reads every form a user actually types", () => {
     expect(parseModelCommand("/model")).toEqual({ kind: "list" });
     expect(parseModelCommand("/models")).toEqual({ kind: "list" });
+    expect(parseModelCommand("/models refresh")).toEqual({ kind: "refresh" });
     expect(parseModelCommand("  /model  ")).toEqual({ kind: "list" });
     expect(parseModelCommand("/model 3")).toEqual({ kind: "pick", index: 3 });
     expect(parseModelCommand("/model anthropic claude-sonnet-5")).toEqual({ kind: "explicit", provider: "anthropic", model: "claude-sonnet-5" });

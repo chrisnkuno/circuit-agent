@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#07110e" />
+    <title>Nova Reliability Observatory</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <header>
+      <a class="brand" href="https://github.com/chrisnkuno/circuit-agent"
+        ><i></i>NOVA / RELIABILITY</a
+      >
+      <div class="run-state">
+        <span class="pulse"></span
+        ><span id="run-label">checking the test rig</span>
+      </div>
+    </header>
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">PUBLIC AGENT OBSERVATORY · H2 2026</p>
+          <h1>Watch the agent<br /><em>earn</em> its score.</h1>
+          <p class="lede">
+            Real builds. Real failing tests. Real tool calls. Nova is graded on
+            whether the job works, stays in scope, protects the operator,
+            survives across operating systems, and spends responsibly.
+          </p>
+        </div>
+        <div class="score-card">
+          <div class="score-ring" id="score-ring">
+            <strong id="score">—</strong><span>/ 100</span>
+          </div>
+          <div>
+            <span class="label">latest measured reliability</span
+            ><b id="grade">loading evidence</b><small id="stamp"></small>
+          </div>
+        </div>
+      </section>
+
+      <section class="metrics" id="metrics"></section>
+
+      <section class="grid">
+        <article class="panel leaderboard-panel">
+          <div class="panel-head">
+            <div>
+              <span class="kicker">MODEL GRID</span>
+              <h2>Who gets the job done?</h2>
+            </div>
+            <span class="h2-note">free endpoints + Circuit baseline</span>
+          </div>
+          <div class="leaderboard" id="leaderboard"></div>
+        </article>
+        <article class="panel terminal-panel">
+          <div class="terminal-top">
+            <span></span><span></span><span></span
+            ><b>nova · scheduled evaluation</b>
+          </div>
+          <div class="terminal" id="terminal" aria-live="polite"></div>
+        </article>
+      </section>
+
+      <section class="panel run-lab">
+        <div class="panel-head">
+          <div>
+            <span class="kicker">RECORDED AGENT RUN · ONE PASS</span>
+            <h2>Follow the work, then inspect the result.</h2>
+          </div>
+          <button id="replay">Replay now</button>
+        </div>
+        <p class="run-disclosure">
+          Tasks started at least two minutes apart in CI. This page replays the
+          recorded evidence once; it does not run an agent or contain API keys.
+        </p>
+        <div class="run-workspace">
+          <div class="run-graph">
+            <div class="run-nodes" id="run-nodes"></div>
+            <div class="terminal-top">
+              <span></span><span></span><span></span><b>recorded tool trace</b>
+            </div>
+            <div
+              class="terminal compact-terminal"
+              id="run-terminal"
+              aria-live="polite"
+            ></div>
+          </div>
+          <div class="run-output">
+            <div class="output-head">
+              <div>
+                <span class="kicker">OUTPUT</span>
+                <h3 id="artifact-label">Select a task</h3>
+              </div>
+              <div id="artifact-downloads" class="artifact-downloads"></div>
+            </div>
+            <iframe
+              id="artifact-frame"
+              title="Sandboxed agent web-build preview"
+              sandbox="allow-scripts"
+              hidden
+            ></iframe>
+            <pre id="artifact-text">Recorded output will appear here.</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel controls-panel">
+        <div class="panel-head">
+          <div>
+            <span class="kicker">RELEASE CONTROLS</span>
+            <h2>The systems around the model matter.</h2>
+          </div>
+          <span class="h2-note">Linux · macOS · Windows</span>
+        </div>
+        <div class="controls" id="controls"></div>
+      </section>
+
+      <section class="method">
+        <div>
+          <span class="kicker">SCORING CONTRACT</span>
+          <h2>A high score must survive contact with the filesystem.</h2>
+        </div>
+        <p>
+          Completion 16 · verification 9 · output quality 7 · valid tools 10 ·
+          speed 7 · token economy 7 · prediction calibration 5 · scope 7 ·
+          memory and resume 7 · security 6 · approvals 5 · cost accuracy 5 · UI
+          2 · portability 2 · Exa research 5. False success caps a run at 40,
+          failed security at 49, and silent permission escalation at 30.
+        </p>
+        <a
+          href="https://github.com/chrisnkuno/circuit-agent/blob/main/reliability/latest.json"
+          >inspect raw JSON ↗</a
+        >
+      </section>
+    </main>
+    <footer>
+      <span>NOVA RELIABILITY LAB</span
+      ><span>Updated by GitHub Actions · no browser API keys</span>
+    </footer>
+    <script src="app.js" defer></script>
+  </body>
+</html>

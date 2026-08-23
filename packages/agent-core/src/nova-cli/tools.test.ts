@@ -195,6 +195,28 @@ describe("nova tool set", () => {
     expect(result.content).toContain("global since 18");
   });
 
+  it("keeps default searches compact and bounds each extracted result", async () => {
+    let seen: Record<string, unknown> = {};
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: {
+        search: async (request: Record<string, unknown>) => {
+          seen = request;
+          return {
+            requestId: "r",
+            results: [{ title: "Long", url: "https://a.test", publishedDate: null, author: null, highlights: [], text: `start-${"x".repeat(3_000)}-end` }],
+          };
+        },
+      } as never,
+    });
+    const result = await toolNamed(tools, "web_search").execute({ query: "x" }, context);
+    expect(seen.numResults).toBe(3);
+    expect(result.content).toContain("start-");
+    expect(result.content).not.toContain("-end");
+    expect(result.content.length).toBeLessThan(1_700);
+  });
+
   it("passes scoping and freshness through to the client, which is what makes it useful to DEFENDER", async () => {
     let seen: Record<string, unknown> = {};
     const tools = await createNovaTools({
@@ -283,7 +305,7 @@ describe("deep_research", () => {
       search: deepClient({
         requestId: "r",
         searchType: "deep",
-        results: [{ title: "NVD entry", url: "https://nvd.nist.gov/x", publishedDate: "2026-02-01T00:00:00Z", author: null, highlights: ["affected"] }],
+        results: [{ title: "NVD entry", url: "https://nvd.nist.gov/x", publishedDate: "2026-02-01T00:00:00Z", author: null, highlights: ["raw extract that the synthesis already consumed"] }],
         output: {
           content: "Affected below 4.19.2.",
           grounding: [{ field: "content", citations: [{ url: "https://nvd.nist.gov/x", title: "NVD" }], confidence: "high" }],
@@ -292,9 +314,21 @@ describe("deep_research", () => {
     });
     const result = await toolNamed(tools, "deep_research").execute({ query: "express cve" }, context);
     expect(result.content).toContain("Affected below 4.19.2.");
+    expect(result.content).not.toContain("raw extract that the synthesis already consumed");
     // The same URL is cited and returned as a result; it must appear once, not twice.
     expect(result.content.match(/nvd\.nist\.gov\/x/g)?.length).toBeGreaterThanOrEqual(1);
     expect((result.data?.sources as string[])).toEqual(["https://nvd.nist.gov/x"]);
+  });
+
+  it("uses fewer sources by default because synthesis, not result count, is the product", async () => {
+    let seen: Record<string, unknown> = {};
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      search: deepClient({ requestId: "r", results: [] }, (request) => { seen = request; }),
+    });
+    await toolNamed(tools, "deep_research").execute({ query: "x" }, context);
+    expect(seen.numResults).toBe(6);
   });
 
   /**
@@ -342,6 +376,25 @@ describe("web_fetch", () => {
     const result = await toolNamed(tools, "web_fetch").execute({ url: "https://a.test" }, context);
     expect(result.content).toBe("extracted body");
     expect(result.data?.via).toBe("exa");
+  });
+
+  it("caps extracted pages before they enter the model transcript", async () => {
+    let requestedMax = 0;
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      fetchImpl: (async () => new Response(page, { status: 200 })) as unknown as typeof fetch,
+      search: {
+        search: async () => ({ requestId: "r", results: [] }),
+        contents: async (_urls: string[], options: { text: { maxCharacters: number } }) => {
+          requestedMax = options.text.maxCharacters;
+          return { requestId: "r", results: [{ title: "T", url: "https://a.test", highlights: [], publishedDate: null, author: null, text: "x".repeat(30_000) }], statuses: [], costDollars: null };
+        },
+      } as never,
+    });
+    const result = await toolNamed(tools, "web_fetch").execute({ url: "https://a.test" }, context);
+    expect(requestedMax).toBe(16_000);
+    expect(result.content).toHaveLength(16_000);
   });
 
   it("falls back to a plain fetch when extraction fails, so it is never worse than before", async () => {

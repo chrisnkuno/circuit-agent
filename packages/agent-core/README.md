@@ -9,24 +9,28 @@ npm install @circuit-nova/nova-core
 ## What's in it
 
 - **`BoundedAgentRuntime`** — a tool-use loop that turns a list of `AgentTool`s and an `AgentTurnProvider` into a bounded, event-driven run. Emits `assistant_delta` events as the model streams text, so a caller can render output live instead of waiting for a full turn.
-- **Model adapters** — `resolveProvider()` / `PROVIDERS` give you Anthropic, OpenAI, and OpenAI-compatible (CircuitNotion) turn providers behind one interface, each streaming natively rather than buffering.
+- **Model adapters** — `resolveProvider()` / `PROVIDERS` give you Anthropic, OpenAI and arbitrary OpenAI-compatible endpoints, CircuitNotion, and local Ollama behind one interface. CircuitNotion defaults to `circuit-2-turbo`.
 - **`NovaAgent`** — the higher-level agent Nova's CLI runs: wires the runtime to a workspace, a permission ledger, checkpoints, and a todo list.
-- **Workspace backends** — `LocalWorkspace` runs tools against a real directory on disk; `E2BWorkspace` runs the same tool set inside an isolated [E2B](https://e2b.dev) sandbox (`e2b` is an optional peer dependency — only required if you use it).
-- **`PermissionLedger`** — per-tool approval state (`plan` / `build` / `auto` modes), so effectful calls can require confirmation without the caller re-implementing that policy.
+- **Workspace backends** — `LocalWorkspace` runs against a real directory; `E2BWorkspace` and `DockerWorkspace` run the same contracts in remote or local isolation (`e2b` is optional).
+- **`PermissionLedger`** — per-tool approval state for `plan`, `build`, `auto`, and `defender`, so callers do not reimplement the safety posture.
 - **`CheckpointStore`** — snapshots a workspace into a private git index per turn, so a caller can offer real undo (reverts both edited and agent-created files).
 - **`CostLedger`** and `money.ts` — currency-aware token pricing (`priceUsage`, `tokenPrices`, `convertTo`, `formatMoney`) with explicit, dated FX rates rather than implicit conversion. An unpriced model reports "cost unknown" instead of showing zero.
+- **Durable state** — integrity-checked JSON snapshots and hash-chained journals remain canonical; the optional `nova-state` sidecar provides rebuildable SQLite/FTS5 recall.
+- **`scoreReliability`** — an evaluator for completion, verification, valid tools, token economy, estimate calibration, scope, and resumed state, with hard caps for false success and permission escalation.
 
 ## Example
 
 ```ts
-import { BoundedAgentRuntime, resolveProvider, type AgentTool } from "@circuit-nova/nova-core";
+import { resolveProvider } from "@circuit-nova/nova-core";
 
-const provider = resolveProvider("anthropic", { apiKey: process.env.ANTHROPIC_API_KEY! });
-const runtime = new BoundedAgentRuntime({ provider, tools: myTools /* AgentTool[] */ });
+const resolved = resolveProvider(process.env, {
+  provider: "openai",
+  model: "cohere/north-mini-code:free",
+});
+if ("error" in resolved) throw new Error(resolved.error);
 
-for await (const event of runtime.execute({ messages: [{ role: "user", content: "list the files here" }] })) {
-  if (event.type === "assistant_delta") process.stdout.write(event.text);
-}
+// Supply resolved.provider to BoundedAgentRuntime or NovaAgent. OPENAI_BASE_URL may point at an
+// OpenAI-compatible endpoint; provider-reported usage remains the accounting truth.
 ```
 
 ## Upgrading to 0.5.0

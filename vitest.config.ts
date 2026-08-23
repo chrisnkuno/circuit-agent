@@ -15,8 +15,17 @@ const PTY_TESTS = "packages/nova-cli/src/pty/**/*.test.ts";
 export default defineConfig({
   resolve: {
     alias: [
-      { find: /^@circuit-nova\/nova-core$/, replacement: path.resolve(__dirname, "packages/agent-core/src/index.ts") },
-      { find: /^@circuit-nova\/nova-core\/(.*)$/, replacement: path.resolve(__dirname, "packages/agent-core/src/$1.ts") },
+      {
+        find: /^@circuit-nova\/nova-core$/,
+        replacement: path.resolve(
+          __dirname,
+          "packages/agent-core/src/index.ts",
+        ),
+      },
+      {
+        find: /^@circuit-nova\/nova-core\/(.*)$/,
+        replacement: path.resolve(__dirname, "packages/agent-core/src/$1.ts"),
+      },
     ],
   },
   test: {
@@ -24,7 +33,11 @@ export default defineConfig({
     // left in place, its tests double-run under a different name than vitest's defaults exclude,
     // and an in-progress worktree's half-finished code shouldn't gate this checkout's own suite
     // anyway. Extends vitest's own defaults rather than replacing them — `exclude` is not merged.
-    exclude: [...configDefaults.exclude, ".claude/worktrees/**"],
+    exclude: [
+      ...configDefaults.exclude,
+      ".claude/worktrees/**",
+      "reliability/site/runs/**",
+    ],
     /**
      * Terminal tests get the machine to themselves.
      *
@@ -58,7 +71,12 @@ export default defineConfig({
         extends: true,
         test: {
           name: "unit",
-          exclude: [...configDefaults.exclude, ".claude/worktrees/**", PTY_TESTS],
+          exclude: [
+            ...configDefaults.exclude,
+            ".claude/worktrees/**",
+            "reliability/site/runs/**",
+            PTY_TESTS,
+          ],
         },
       },
     ],

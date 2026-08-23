@@ -43,7 +43,10 @@ import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
 import { hostOf, providerBaseUrl } from "./endpoints";
 import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
 import { classifyNetworkError } from "./network";
-import { NOVA_CLI_VERSION, runSelfUpdate } from "./update";
+import { NOVA_CLI_VERSION, compareVersions, fetchLatestVersion, runSelfUpdate } from "./update";
+import { readAutoUpdateMode, runAutoUpdate } from "./auto-update";
+import { renderReliabilityStatus } from "./reliability-status";
+import { CACHE_CHURN_HINT } from "@circuit-nova/nova-core/nova-cli/cost";
 import { MODEL_FIELD_PROVIDER, SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingChoice, type SettingKey, type SettingsPrompts } from "./settings";
 import { loadHistory, saveHistory } from "./history";
 import { renderTabStrip, parseTabCommand, SEQUENTIAL_TABS_NOTE, shortModel, WorkspaceController } from "./tabs";
@@ -94,7 +97,6 @@ import {
   memoryPromptBlock,
   parseMemoryCommand,
   recallMemories,
-  recalledMemoryKey,
   replaceMemory,
   renderMemories,
   type MemoryEntry,
@@ -189,6 +191,8 @@ export function describeLocation(backend: SandboxBackend): string {
 
 type ParsedArgs = {
   mode: NovaMode;
+  /** Whether a command-line mode flag should override a resumed session's saved posture. */
+  modeExplicit: boolean;
   /** Speak the Agent Client Protocol on stdio instead of running a terminal session. */
   acp: boolean;
   /** Draw every UI component once and exit, for looking at rendering rather than behaviour. */
@@ -283,7 +287,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const settingsRequested = argv[0] === "settings" || argv.includes("--settings");
   const historyRequested = argv[0] === "history";
   const parsed: ParsedArgs = {
-    mode: "build", prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false, doctor: false,
+    mode: "build", modeExplicit: false, prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false, doctor: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
     root: process.cwd(), help: false, pace: "off", ascii: false, theme: undefined, pin: false,
     acp: acpRequested,
@@ -294,10 +298,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
   for (let index = argv[0] === "update" || argv[0] === "settings" || argv[0] === "acp" || argv[0] === "gallery" || historyRequested ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === "--plan" || argument === "-p") parsed.mode = "plan";
-    else if (argument === "--auto" || argument === "-y") parsed.mode = "auto";
-    else if (argument === "--build") parsed.mode = "build";
-    else if (argument === "--defender") parsed.mode = "defender";
+    if (argument === "--plan" || argument === "-p") { parsed.mode = "plan"; parsed.modeExplicit = true; }
+    else if (argument === "--auto" || argument === "-y") { parsed.mode = "auto"; parsed.modeExplicit = true; }
+    else if (argument === "--build") { parsed.mode = "build"; parsed.modeExplicit = true; }
+    else if (argument === "--defender") { parsed.mode = "defender"; parsed.modeExplicit = true; }
     else if (argument === "--help" || argument === "-h") parsed.help = true;
     else if (argument === "--version" || argument === "-v") parsed.version = true;
     else if (argument === "--settings") parsed.settings = true;
@@ -1429,6 +1433,15 @@ async function main(): Promise<number> {
     environment.NO_COLOR = "1";
   }
 
+  // Refuse before provider discovery, workspace construction, history loading and update checks.
+  // There is nobody to answer the prompt, and making a pipe wait for interactive-only setup turns
+  // a simple usage error into a several-second startup under load.
+  if (!args.prompt && !process.stdin.isTTY) {
+    process.stderr.write(`${style.red("No terminal attached.")} Pass a request as an argument to run a single turn: nova "your request".\n`);
+    await stateHistory.close();
+    return 1;
+  }
+
   let resolved = resolveProvider(environment, { provider: args.provider, model: args.model });
   // Nothing configured yet is the ordinary first run, not an error. Exporting a key into the shell
   // leaves it in shell history and dies with the shell; Nova already stores keys itself, so the
@@ -2189,6 +2202,7 @@ async function main(): Promise<number> {
       // above for one opened against the resumed record, the same handoff every mode/model switch
       // below performs.
       await agent.relinquish();
+      if (record.mode && !args.modeExplicit) mode = record.mode;
       agent = await openClient(record);
       await carryResumedSpend(record);
       out.write(style.dim(`Resumed ${record.id} — ${record.title}\n`));
@@ -2270,6 +2284,8 @@ async function main(): Promise<number> {
    * *suggestion* would open every session by offering a way out of a failure that never happened.
    */
   let lastFailure: { status: NavContext["lastStatus"]; message: string } | null = null;
+  /** Said once per session: the cache hint describes how the session is built, not this turn. */
+  let cacheChurnReported = false;
   /**
    * The runtime's stop reason as the protocol's turn status.
    *
@@ -2364,16 +2380,6 @@ async function main(): Promise<number> {
   let lastTurnStatus: AgentRuntimeResult["status"] = "failed";
   /** When the last turn finished, for the pace's cooldown. */
   let lastTurnEndedAt: number | undefined;
-  /**
-   * Whether this thread has already been told what Nova remembers.
-   *
-   * Sent once per thread, not once per turn: the conversation carries it forward, so re-sending the
-   * same paragraph every turn would bill the user for it every turn. Reset whenever the set changes
-   * or the thread does, which are exactly the two moments the model's copy goes stale.
-   */
-  // Recall is incremental within a thread: a topic change can pull in newly relevant knowledge,
-  // while facts already present in the conversation are never billed twice.
-  const recalledMemoryKeys = new Set<string>();
   const runTurn = async (request: string): Promise<boolean> => {
     headless?.turnStart(request);
     streamedAnswer = false;
@@ -2492,13 +2498,10 @@ async function main(): Promise<number> {
     turnActive = true;
     currentTurnAbort = new AbortController();
     try {
-      // A small lexical recall runs locally for each request. It adds only memories not already in
-      // this thread, preserving the prompt prefix and avoiding the fixed cost of sending the whole
-      // memory file to every conversation regardless of subject.
-      const recalled = recallMemories(memories, request, { exclude: recalledMemoryKeys });
-      for (const entry of recalled.entries) recalledMemoryKeys.add(recalledMemoryKey(entry));
-      const preamble = memoryPromptBlock(recalled.entries);
-      const result = await agent.send(preamble ? `${preamble}\n${request}` : request);
+      // Durable recall belongs to the shared agent, so CLI, desktop and jobs pay for each selected
+      // fact once per thread. Wrapping here as well duplicated it on the first turn and left every
+      // other front end without the incremental-deduplication policy.
+      const result = await agent.send(request);
       // `agent.send` has atomically saved the canonical snapshot and closed the turn's journal at
       // this point. Rebuild in the background so `/history` is instant after ordinary work; the
       // service coalesces this with a history command if the user asks before replay finishes.
@@ -2563,6 +2566,21 @@ async function main(): Promise<number> {
       })}\n`);
       const warning = ledger.budgetWarning();
       if (warning) out.write(`  ${style.yellow(warning)}\n`);
+      /**
+       * The cache failure, said out loud, once.
+       *
+       * A defeated prompt cache is the most expensive thing that can go wrong in a long session —
+       * a cached input token bills at about a tenth of a fresh one — and it is *silent*: the
+       * session keeps working, the answers stay good, and the only symptom is the bill. Nobody
+       * types `/cost` when nothing looks wrong, which is exactly when this is happening.
+       *
+       * Once per session, because it is a property of how the session is built rather than of this
+       * turn: repeating it every turn would be repeating the same sentence about the same cause.
+       */
+      if (!cacheChurnReported && ledger.cacheHealth.churning) {
+        cacheChurnReported = true;
+        out.write(`  ${style.yellow(CACHE_CHURN_HINT)}\n`);
+      }
       // A turn ending is the one moment a person is deciding what to do next, so this is where the
       // suggestions go: what the situation calls for, with the reason attached, plus — only when
       // the situation was quiet enough to leave room — one thing about Nova worth knowing.
@@ -2641,6 +2659,16 @@ async function main(): Promise<number> {
   };
 
   if (args.prompt) {
+    if (args.prompt.trimStart().startsWith("/")) {
+      // A one-shot argument is an objective, not an interactive input queue. Sending a slash
+      // command to the model is the costly failure mode: it spends tokens trying to interpret a
+      // local control it can never execute. Fail before estimation or provider contact instead.
+      process.stderr.write(`Slash commands run inside an interactive Nova session. Start nova, then type ${args.prompt.trim()}.\n`);
+      await agent.dispose();
+      await stateHistory.close();
+      exitCleanly();
+      return EXIT_CODES.usage;
+    }
     // Announced before any work, so a consumer knows what it is reading before the first event.
     headless?.session({
       sessionId: agent.sessionId,
@@ -2663,12 +2691,6 @@ async function main(): Promise<number> {
     exitCleanly();
     // Headless callers get the specific outcome; the human path keeps its long-standing 0/1.
     return args.json ? exitCodeForStatus(lastTurnStatus) : (ran ? 0 : 1);
-  }
-
-  if (!interactive) {
-    process.stderr.write(`${style.red("No terminal attached.")} Pass a request as an argument to run a single turn: nova "your request".\n`);
-    exitCleanly();
-    return 1;
   }
 
   const where = workspace.kind === "e2b" ? `sandbox ${workspace.label.split(":")[1]}` : path.basename(args.root);
@@ -2707,6 +2729,7 @@ async function main(): Promise<number> {
   // one lists what you can type, the other explains what any of it is for — and a manual nobody is
   // told about is a manual nobody reads.
   out.write(`${renderTagline(`  /help ${controlLabel(language, "help")} ${glyphs.middot} /guide ${controlLabel(language, "guide")} ${glyphs.middot} /exit ${controlLabel(language, "exit")} ${glyphs.middot} # ${controlLabel(language, "remember")}`, depth)}\n`);
+  out.write(`${style.green(`  ${renderReliabilityStatus(process.stdout.columns ?? 80, glyphs.middot)}`)}\n`);
   out.write(style.dim(`  costs: ${display}${preference.countryCode ? ` ${glyphs.middot} location ${preference.countryCode}` : ""} ${glyphs.middot} ${preference.source === "location" ? "auto-detected" : preference.source}\n`));
   if (localCurrencyWarning) out.write(`${style.yellow(`  ${localCurrencyWarning}`)}\n`);
   if (!args.budget) {
@@ -3069,6 +3092,40 @@ async function main(): Promise<number> {
    */
   const queuedInput: string[] = [];
 
+  /**
+   * One update round, before the first prompt and never again in this session.
+   *
+   * Here rather than on a timer, because this is the only moment that is unambiguously safe: no
+   * turn is running, no job is attached, and nothing is half-written to the screen. The check
+   * itself is bounded at three seconds, and every reason not to act — a pipe, CI, a session that
+   * already looked today — is decided before the network is touched at all.
+   */
+  const startupUpdate = await runAutoUpdate({
+    context: {
+      mode: readAutoUpdateMode(environment),
+      interactive: interactive && liveTerminal,
+      environment,
+      currentVersion: NOVA_CLI_VERSION,
+    },
+    fetchLatest: (timeoutMs) => fetchLatestVersion({ environment, timeoutMs }),
+    install: async (version) => {
+      const result = await runSelfUpdate({
+        yes: true,
+        interactive: false,
+        environment,
+        // Silent unless it has something to say: the outcome is reported through the notice below,
+        // and a package manager's own progress output has no business interrupting a prompt.
+        stdout: () => {},
+        stderr: () => {},
+      });
+      return result.status === "updated" && result.latestVersion === version;
+    },
+  }).catch(() => {
+    // An update check must never be the reason a session fails to start.
+    return undefined;
+  });
+  for (const line of startupUpdate?.notice ?? []) out.write(`  ${style.dim(line)}\n`);
+
   for (;;) {
     showIdleStatus();
     screen?.positionInput();
@@ -3165,7 +3222,7 @@ async function main(): Promise<number> {
       // here", and it is the only path that waits on the network.
       // The list is wanted now, so this is the moment to pay for it: on demand, and only when the
       // cache has nothing fresh to offer or the user asked for a refresh outright.
-      const wantsRefresh = /\brefresh\b/.test(input);
+      const wantsRefresh = modelCommand.kind === "refresh";
       if (wantsRefresh || Object.keys(liveModels).length === 0) {
         if (wantsRefresh) out.write(style.dim("  asking every provider what it has…\n"));
         const { errors } = await refreshLiveModels(wantsRefresh ? { refresh: true } : {});
@@ -3191,7 +3248,7 @@ async function main(): Promise<number> {
       };
 
       let picked: ModelChoice | undefined;
-      if (modelCommand.kind === "list") {
+      if (modelCommand.kind === "list" || modelCommand.kind === "refresh") {
         // Nothing configured is not a list to show — it is one thing to do. Printing "run
         // /settings" here would be telling someone the name of the door they are standing at.
         if (catalog.choices.length === 0) {
@@ -3365,7 +3422,6 @@ async function main(): Promise<number> {
           try {
             const result = await addMemory(memoryCommand.scope, memoryCommand.text, args.root, environment, { kind: memoryCommand.memoryKind, pinned: memoryCommand.pinned });
             memories = await loadMemories(args.root, environment);
-            recalledMemoryKeys.clear();
             out.write(result.changed
               ? `${describeAdded({ scope: memoryCommand.scope, text: memoryCommand.text }, style_)}\n`
               : style.dim("  already remembered\n"));
@@ -3378,7 +3434,6 @@ async function main(): Promise<number> {
           try {
             await replaceMemory(memoryCommand.scope, memoryCommand.oldText, memoryCommand.newText, args.root, environment);
             memories = await loadMemories(args.root, environment);
-            recalledMemoryKeys.clear();
             out.write(style.green(`  memory updated: ${memoryCommand.newText}\n`));
           } catch (error) {
             out.write(style.yellow(`  ${error instanceof Error ? error.message : String(error)}\n`));
@@ -3395,7 +3450,6 @@ async function main(): Promise<number> {
         case "forget": {
           const result = await forgetMemory(memoryCommand.scope, memoryCommand.index, args.root, environment);
           memories = await loadMemories(args.root, environment);
-          recalledMemoryKeys.clear();
           out.write(result.removed
             ? style.green(`  forgot: ${result.removed.text}\n`)
             : style.yellow(`  there is no ${memoryCommand.scope} memory ${memoryCommand.index} — /memory lists them\n`));
@@ -3406,7 +3460,6 @@ async function main(): Promise<number> {
           if (answer !== "y" && answer !== "yes") { out.write(style.dim("  kept\n")); break; }
           await clearMemories(memoryCommand.scope, args.root, environment);
           memories = await loadMemories(args.root, environment);
-          recalledMemoryKeys.clear();
           out.write(style.dim(`  ${memoryCommand.scope} memory cleared\n`));
           break;
         }
@@ -3707,11 +3760,9 @@ async function main(): Promise<number> {
           const record = await loadSession(args.root, id);
           if (!record) { out.write(style.yellow(`  No session ${id}.\n`)); break; }
           await agent.relinquish();
+          if (record.mode) mode = record.mode;
           agent = await openClient(record);
           await carryResumedSpend(record);
-          // A resumed thread has already been told what Nova remembers only if the memory set has
-          // not changed since — which cannot be known, so it is told again on the next turn.
-          recalledMemoryKeys.clear();
           expandables.clear();
           out.write(`${renderReplay(record, style_, { turns: 2 })}\n`);
           out.write(style.green(`  resumed ${record.id}\n`));
@@ -4078,10 +4129,8 @@ async function main(): Promise<number> {
     if (input === "/clear") {
       await agent.relinquish();
       agent = await openClient();
-      // A new thread has neither the old thread's folded output nor its copy of what Nova
-      // remembers: the first is unreachable output, the second is context the new thread lacks.
+      // A new thread has neither the old thread's folded output nor its remembered context.
       expandables.clear();
-      recalledMemoryKeys.clear();
       out.write(style.dim("  new thread\n"));
       continue;
     }
@@ -4204,6 +4253,63 @@ async function main(): Promise<number> {
       }
       continue;
     }
+    if (input === "/update" || input.startsWith("/update ")) {
+      const argument = input.slice("/update".length).trim().toLowerCase();
+      if (argument) {
+        // Setting the policy, not running an update. Persisted, so the answer survives the session
+        // that gave it — an update preference nobody remembers giving is worse than none.
+        const mode = argument === "auto" || argument === "install" || argument === "on" ? "install"
+          : argument === "off" || argument === "never" ? "off"
+          : argument === "check" || argument === "notify" ? "check"
+          : undefined;
+        if (!mode) {
+          out.write(style.yellow("  Say /update auto, /update check or /update off — or /update on its own to install now.\n"));
+          continue;
+        }
+        const saved = await saveSettings({ ...await loadSettings(environment), NOVA_AUTO_UPDATE: mode }, environment).catch(() => undefined);
+        environment.NOVA_AUTO_UPDATE = mode;
+        const described = mode === "install" ? "check daily and install automatically"
+          : mode === "check" ? "check daily and tell you" : "never check for updates";
+        out.write(`  ${style.green(glyphs.check)} Nova will ${described}.${saved ? "" : style.dim(" (not saved — settings are read-only here)")}\n`);
+        continue;
+      }
+
+      out.write(style.dim(`  checking for a newer Nova than ${NOVA_CLI_VERSION}…\n`));
+      const latest = await fetchLatestVersion({ environment, timeoutMs: 10_000 }).catch(() => undefined);
+      if (!latest) {
+        out.write(style.yellow("  Could not reach the registry. Nothing was changed.\n"));
+        continue;
+      }
+      const versionOrder = compareVersions(NOVA_CLI_VERSION, latest);
+      if (versionOrder === 0) {
+        out.write(`  ${style.green(glyphs.check)} Already on the newest version (${latest}).\n`);
+        continue;
+      }
+      if (versionOrder > 0) {
+        out.write(`  ${style.green(glyphs.check)} This Nova (${NOVA_CLI_VERSION}) is newer than the registry release (${latest}); no downgrade offered.\n`);
+        continue;
+      }
+      statusBar.clear();
+      const confirmation = (await readline.question(`  ${style.yellow("?")} Install Nova ${style.bold(latest)}, replacing ${NOVA_CLI_VERSION}? ${style.dim("[y/N]: ")}`)).trim().toLowerCase();
+      if (confirmation !== "y" && confirmation !== "yes") {
+        out.write(style.dim("  Left as it is.\n"));
+        continue;
+      }
+      // `yes` because the question above was the consent; a second prompt from inside the updater
+      // would be asking the same thing twice through a second readline on the same terminal.
+      const result = await runSelfUpdate({
+        yes: true,
+        interactive: false,
+        environment,
+        stdout: (text) => out.write(text),
+        stderr: (text) => out.write(style.yellow(text)),
+      });
+      out.write(result.status === "updated"
+        ? `  ${style.green(glyphs.check)} Updated to ${result.latestVersion}. This session keeps running ${NOVA_CLI_VERSION} until you restart.\n`
+        : style.yellow(`  Update did not complete (${result.status}).\n`));
+      continue;
+    }
+
     const payCommand = parsePayCommand(input);
     if (payCommand) {
       if (payCommand.kind === "invalid") {

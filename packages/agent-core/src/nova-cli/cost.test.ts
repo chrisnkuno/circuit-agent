@@ -23,6 +23,16 @@ describe("cost ledger", () => {
     const ledger = new CostLedger({ prices: opus, display: "USD" });
     expect(ledger.formatPrediction(prediction)).toMatch(/input \+ .* output tokens .*\$.*model turns/);
   });
+
+  it("budgets defender reviews for playbooks and research instead of pretending they are build turns", () => {
+    const objective = "audit the entire authentication and API surface";
+    const build = predictAgentUsage({ initialInputTokens: 6_000, objective, mode: "build" });
+    const defender = predictAgentUsage({ initialInputTokens: 6_000, objective, mode: "defender" });
+
+    expect(defender.expectedIterations).toBeGreaterThan(build.expectedIterations);
+    expect(defender.inputTokensExpected).toBeGreaterThan(build.inputTokensExpected);
+    expect(defender.outputTokensExpected).toBeGreaterThan(build.outputTokensExpected);
+  });
   it("prices each turn from its usage, in the provider's currency", () => {
     const ledger = new CostLedger({ prices: opus, display: "USD" });
     const turn = ledger.record({ usage: usage(100_000, 2_000), iterations: 3, toolCalls: 4, elapsedMs: 12_000 });
@@ -386,5 +396,75 @@ describe("spending beyond the model", () => {
       expect(() => ledger.carryForward("session_a", { micros: -1, currency: "USD" })).toThrow(/non-negative/);
       expect(ledger.carriedTotal).toBeUndefined();
     });
+  });
+});
+
+/**
+ * The prompt cache is the largest lever on what a long session costs, and it fails silently — a
+ * prefix match is defeated by one changed byte near the front, and the session goes on working
+ * while paying full price. These are the numbers that make that visible.
+ */
+describe("whether the prompt cache is actually working", () => {
+  const cacheUsage = (input: number, cached: number, written: number) => ({
+    inputTokens: input,
+    outputTokens: 500,
+    totalTokens: input + 500,
+    cachedInputTokens: cached,
+    cacheWriteTokens: written,
+    reasoningTokens: 0,
+  });
+
+  function ledgerWith(turns: Array<{ input: number; cached: number; written: number }>): CostLedger {
+    const ledger = new CostLedger({ prices: opus, display: "USD" });
+    for (const turn of turns) {
+      ledger.record({ usage: cacheUsage(turn.input, turn.cached, turn.written), iterations: 1, toolCalls: 1, elapsedMs: 1_000 });
+    }
+    return ledger;
+  }
+
+  it("reports the share of input that came from the cache", () => {
+    const ledger = ledgerWith([{ input: 100_000, cached: 80_000, written: 0 }]);
+    expect(ledger.cacheHealth.hitRate).toBeCloseTo(0.8, 3);
+    expect(ledger.cacheHealth.readTokens).toBe(80_000);
+    expect(ledger.cacheHealth.freshTokens).toBe(20_000);
+    expect(ledger.formatReport()).toContain("80% of input served from cache");
+  });
+
+  it("says nothing about a cache the session never used", () => {
+    const ledger = ledgerWith([{ input: 10_000, cached: 0, written: 0 }]);
+    expect(ledger.formatReport()).not.toContain("cache");
+    expect(ledger.cacheHealth.hitRate).toBe(0);
+  });
+
+  it("flags a prefix that keeps being rewritten and never read back", () => {
+    // Writes exceeding reads, turn after turn, is the signature of an invalidated prefix: Nova pays
+    // the 1.25x storage premium for something nothing ever reads, which is worse than not caching.
+    const ledger = ledgerWith([
+      { input: 40_000, cached: 0, written: 40_000 },
+      { input: 45_000, cached: 0, written: 45_000 },
+      { input: 50_000, cached: 0, written: 50_000 },
+    ]);
+    expect(ledger.cacheHealth.churning).toBe(true);
+    expect(ledger.formatReport()).toContain("rewritten more than it is read");
+  });
+
+  it("does not cry wolf on a healthy session that is simply young", () => {
+    // Early turns legitimately write more than they read; warning there teaches everyone to ignore
+    // the warning by the time it means something.
+    expect(ledgerWith([{ input: 40_000, cached: 0, written: 40_000 }]).cacheHealth.churning).toBe(false);
+    expect(ledgerWith([
+      { input: 40_000, cached: 0, written: 40_000 },
+      { input: 45_000, cached: 40_000, written: 0 },
+      { input: 50_000, cached: 45_000, written: 0 },
+    ]).cacheHealth.churning).toBe(false);
+  });
+
+  it("ignores churn too small to be worth anyone's attention", () => {
+    const ledger = ledgerWith([
+      { input: 300, cached: 0, written: 300 },
+      { input: 300, cached: 0, written: 300 },
+      { input: 300, cached: 0, written: 300 },
+    ]);
+    expect(ledger.cacheHealth.churning).toBe(false);
   });
 });

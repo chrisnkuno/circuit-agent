@@ -35,6 +35,12 @@ nova update                 Check and install the latest published CLI
 nova update --check         Check without changing the installed version
 ```
 
+With a CircuitNotion key, Nova defaults to `circuit-2-turbo`. `/models refresh` asks configured
+providers for their current catalog; ordinary `/models` uses the cache so opening a menu does not
+wait on the network. Slash commands belong inside an interactive session. Passing one as a one-shot
+objective is rejected before model contact, preventing an invocation mistake from becoming a paid
+prompt.
+
 In a session: `/mode` shows the current permission posture, `/mode plan|build|auto|defender` switches it, and `/plan` `/build` `/auto` `/defender` remain quick shortcuts. Defender mode turns Nova into a security reviewer — the full tool set to actually run a scanner (including a built-in `scan_secrets` that matches likely credentials by pattern and always masks what it finds) and propose a fix, gated exactly like build so nothing is ever auto-approved. It works from a bundled, OWASP-2025-aligned set of playbooks: access control, security misconfiguration, software supply chain & CI/CD integrity, injection, client-side & browser security, auth/session handling, API security, SSRF, secrets, dependency risk, cryptography misuse, IaC/container hardening, exceptional-condition handling, business logic & race conditions, fuzzing and invariant-based testing, logging/monitoring/deterrence, and LLM/AI application security. `/undo` reverts the last turn, `/cost` shows the breakdown — totals, a table of every turn's tokens, tools, seconds and spend, and the shape of it as charts — `/pull` copies sandbox work back to disk, `/settings` opens configuration, `/voice` records a prompt, and `/keys` shows keyboard controls.
 
 ## Setup
@@ -109,6 +115,12 @@ Use `--yes` for an explicitly unattended update. Without it, Nova refuses to mut
 
 **Verification is required.** An agent that changes files and then declares success without running anything is reported as `needs_verification`, not `completed`.
 
+Passing targeted tests finish a focused change. Nova does not automatically pay another model
+round to demand new property tests and an assembled-app smoke test after every small fix; when no
+verification ran, it asks once for the smallest relevant existing check. If a model names a tool
+the current mode does not expose, the runtime returns that fact once so Plan mode can recover with
+a useful answer, then fails closed if the model repeats it.
+
 **Paying happens on the provider's page, never in the terminal.** `/pay 5000` tops up your Nova credit: Nova creates a checkout, shows the link, a short code and a reference, and waits. Your card, PIN and mobile-money confirmation are entered on Circuit Pay's own page — Nova never sees them and never asks. Nothing is created until you answer the confirmation, amounts are whole RWF (a decimal is refused, not rounded), and every attempt carries an idempotency key so a retried request cannot become a second charge. Ctrl+C stops waiting without cancelling the payment; if it is still unconfirmed, Nova says so and keeps the reference for `/pay status <ref>` rather than calling it failed. `/pay` on its own shows the balance — always the figure the service reports, never one Nova worked out. Set `NOVA_BILLING_URL` and `NOVA_BILLING_KEY` to enable it.
 
 **Costs are honest.** Sub-cent amounts display as `$0.0034` rather than `$0.00`, converted amounts name the daily rate and its date, and an unpriced model says so instead of showing zero. Automatic conversion uses the keyless daily [exchange-api](https://github.com/fawazahmed0/exchange-api) endpoints with their fallback host; set `NOVA_FX_OFFLINE=true` to disable lookup.
@@ -130,6 +142,19 @@ Memory is deliberately smaller than history. Core facts marked with `--core` are
 ```
 
 Kinds are `preference`, `convention`, `decision`, `lesson`, and `fact`. Memory writes reject invisible formatting and instruction-shaped injection content. A unique text fragment can replace an entry, avoiding fragile row numbers when correcting knowledge. `/history search <text>` uses the local native SQLite + FTS5 index when its platform package is installed, returning ranked snapshot or journal evidence with context. It falls back automatically to verified session JSON when the native engine is unavailable. `/history status` shows which path is active. This is the larger episodic layer for details that do not deserve permanent prompt space.
+
+`/history resume` opens a searchable conversation chooser and works across processes. The saved
+permission mode returns with the transcript, while an explicit startup flag such as
+`nova --auto --resume …` deliberately overrides it. Nova's verification nudges are internal: they
+are neither counted as user turns nor indexed as things you said.
+
+## Reliability evidence
+
+Nova's scheduled end-to-end suite runs build, debug, scoped search, Defender review, and
+cross-process resume journeys. It independently validates the result and scores completion,
+verification, valid tools, token economy, estimate calibration, scope, and state. The repository's
+`reliability/` directory contains the raw report and animated spectator UI. False success and
+silent permission escalation impose hard score caps.
 
 ## Voice, language and keyboard input
 

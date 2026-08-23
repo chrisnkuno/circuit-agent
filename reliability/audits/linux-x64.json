@@ -1,0 +1,57 @@
+{
+  "platform": "linux",
+  "architecture": "x64",
+  "generatedAt": "2026-08-23T03:36:38.167Z",
+  "categories": [
+    {
+      "name": "ui",
+      "passed": true,
+      "tests": 317,
+      "failed": 0,
+      "durationMs": 8661
+    },
+    {
+      "name": "taskExecution",
+      "passed": true,
+      "tests": 181,
+      "failed": 0,
+      "durationMs": 17654
+    },
+    {
+      "name": "memoryResume",
+      "passed": true,
+      "tests": 127,
+      "failed": 0,
+      "durationMs": 19442
+    },
+    {
+      "name": "security",
+      "passed": true,
+      "tests": 96,
+      "failed": 0,
+      "durationMs": 4538
+    },
+    {
+      "name": "approvals",
+      "passed": true,
+      "tests": 127,
+      "failed": 0,
+      "durationMs": 12343
+    },
+    {
+      "name": "costAccuracy",
+      "passed": true,
+      "tests": 95,
+      "failed": 0,
+      "durationMs": 3362
+    },
+    {
+      "name": "portability",
+      "passed": true,
+      "tests": 105,
+      "failed": 0,
+      "durationMs": 4694
+    }
+  ],
+  "historyStartupP50Ms": 166
+}

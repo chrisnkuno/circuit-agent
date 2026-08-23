@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "../agent-runtime";
+import { agentMessagePromptParts, type AgentMessage } from "../agent-runtime";
 import { approximateInputTokens } from "../model-cost";
+import type { NovaMode } from "./permissions";
 
 /**
  * Session persistence and context compaction.
@@ -23,6 +24,10 @@ export type SessionRecord = {
   root: string;
   title: string;
   messages: AgentMessage[];
+  /** Permission posture to restore on resume; absent on sessions written before this field. */
+  mode?: NovaMode;
+  /** Durable-memory entries already present in this transcript, so resume does not bill them twice. */
+  recalledMemoryKeys?: string[];
   /** Standing tool approvals, so a resumed session does not re-ask what was already decided. */
   approvals: Record<string, "allow" | "deny">;
   totalRwf: number;
@@ -202,12 +207,7 @@ export function estimateMessageTokens(messages: readonly AgentMessage[]): number
    * in the opposite direction, hidden behind the first one.
    */
   const parts: string[] = [];
-  for (const message of messages) {
-    parts.push(message.content ?? "");
-    if ("toolCalls" in message && Array.isArray(message.toolCalls)) {
-      for (const call of message.toolCalls) parts.push(call.name, JSON.stringify(call.arguments ?? {}));
-    }
-  }
+  for (const message of messages) parts.push(...agentMessagePromptParts(message));
   return approximateInputTokens(parts).expectedInputTokens;
 }
 

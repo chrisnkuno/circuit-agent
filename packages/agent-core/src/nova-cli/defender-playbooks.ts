@@ -608,6 +608,24 @@ or platform this project actually uses can have a disclosure that postdates this
 - **Distinguish a real finding from a search result.** A CVE only becomes a finding once you have
   confirmed the vulnerable code path is actually reachable here — the same standard as every other
   playbook. Cite the advisory (id and source) alongside the file/line that makes it apply.
+- **Use exploit and tool intelligence defensively.** Look for common exploit prerequisites,
+  proof-of-concept availability, CISA KEV status, observed campaigns, scanners, hardening tools,
+  and incident-response utilities only to determine exposure, detection, containment, and repair.
+  Prefer maintained defensive tools and their official repositories. Never turn search results into
+  autonomous exploitation, credential collection, persistence, evasion, or instructions for
+  targeting a person or third-party system.
+- **Discover GitHub security tools for the exact defensive need.** Search for the affected
+  platform and capability (scanner, SBOM, secret detection, incident response, OSINT validation),
+  then compare the official repository, recent releases and commits, issue responsiveness,
+  security policy, documentation, license, archive status, and operating-system fit. Stars and
+  trending activity are adoption signals, not proof of safety or suitability. Explain why each
+  candidate fits the finding and its trade-offs; never install or execute a discovered tool
+  without the user's approval.
+- **Keep OSINT and OPSEC scoped to the system under review.** Public metadata can confirm an exposed
+  asset, leaked secret, typosquatted package, malicious domain, or compromised dependency, but the
+  review must minimize personal data, avoid deanonymization, and record only evidence needed to
+  defend the user's own assets. Explain safe evidence handling and disclosure boundaries when a
+  finding could expose an operator, researcher, or victim.
 - **Persist what you learn, so the next review does not start from zero.** When a search turns up
   something durable and specific to this project — a CVE affecting a pinned version, a technique
   actively being used against this project's exact stack, a hardening step this project has not
@@ -683,7 +701,6 @@ export const DEFENDER_PLAYBOOKS = [
   HARDENING_RESOURCES_PLAYBOOK,
 ].join("\n\n");
 
-
 /**
  * The same playbooks, addressable one at a time.
  *
@@ -697,7 +714,11 @@ export const DEFENDER_PLAYBOOKS = [
  * three that actually apply. Nothing is lost: the full text of every playbook is one tool call
  * away, and the prompt still tells the model to work them in order of what the project is.
  */
-export const DEFENDER_PLAYBOOK_CATALOG: ReadonlyArray<{ id: string; title: string; text: string }> = [
+export const DEFENDER_PLAYBOOK_CATALOG: ReadonlyArray<{
+  id: string;
+  title: string;
+  text: string;
+}> = [
   ACCESS_CONTROL_PLAYBOOK,
   SECURITY_MISCONFIGURATION_PLAYBOOK,
   SUPPLY_CHAIN_INTEGRITY_PLAYBOOK,
@@ -720,17 +741,34 @@ export const DEFENDER_PLAYBOOK_CATALOG: ReadonlyArray<{ id: string; title: strin
 ].map((text) => {
   // The `## Heading` each playbook already starts with is its title — derived rather than
   // restated, so a renamed playbook cannot disagree with the index that lists it.
-  const title = text.trim().split("\n")[0].replace(/^#+\s*/, "").trim();
-  return { id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""), title, text: text.trim() };
+  const title = text
+    .trim()
+    .split("\n")[0]
+    .replace(/^#+\s*/, "")
+    .trim();
+  return {
+    id: title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, ""),
+    title,
+    text: text.trim(),
+  };
 });
 
 /** The compact list that goes in the prompt: ids the model can actually pass to `read_playbook`. */
 export function defenderPlaybookIndex(): string {
-  return DEFENDER_PLAYBOOK_CATALOG.map((entry) => `- ${entry.id} — ${entry.title}`).join("\n");
+  return DEFENDER_PLAYBOOK_CATALOG.map(
+    (entry) => `- ${entry.id} — ${entry.title}`,
+  ).join("\n");
 }
 
 /** One playbook by id, or undefined. Ids come from the index, so an unknown one is a model mistake worth reporting. */
-export function playbookFor(id: string): { id: string; title: string; text: string } | undefined {
+export function playbookFor(
+  id: string,
+): { id: string; title: string; text: string } | undefined {
   const wanted = id.trim().toLowerCase();
-  return DEFENDER_PLAYBOOK_CATALOG.find((entry) => entry.id === wanted || entry.title.toLowerCase() === wanted);
+  return DEFENDER_PLAYBOOK_CATALOG.find(
+    (entry) => entry.id === wanted || entry.title.toLowerCase() === wanted,
+  );
 }

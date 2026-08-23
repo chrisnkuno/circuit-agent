@@ -18,4 +18,6 @@ available in the registry.
 
 The TypeScript bridge also supports `NOVA_STATE_BINARY` for development and unsupported packagers.
 If no compatible binary exists, Nova can retain its TypeScript projection instead of failing to
-start. Native indexing is a capability upgrade until the migration is deliberately completed.
+start. Native indexing is the preferred CLI history path, with verified JSON as the portable
+fallback. It remains a rebuildable projection, never the authority: deleting its SQLite file cannot
+delete a conversation, approval, job, memory entry, or checkpoint.

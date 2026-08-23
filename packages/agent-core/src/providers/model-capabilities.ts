@@ -57,6 +57,13 @@ export const CONSERVATIVE_CAPABILITIES: ModelCapabilities = { contextWindow: 200
  * family rather than falling through to the conservative default.
  */
 const KNOWN_CAPABILITIES: ReadonlyArray<{ prefix: string; match: "prefix" | "exact"; capabilities: ModelCapabilities }> = [
+  /**
+   * CircuitNotion documents `circuit-2-turbo` as its recommended speed-optimized everyday alias
+   * and its API default, but does not publish a numeric context or output ceiling. Keep an explicit
+   * conservative policy (checked 2026-08-23) so the alias cannot accidentally inherit the much
+   * larger limits of whichever provider model it may route to on a given deployment.
+   */
+  { prefix: "circuit-2-turbo", match: "exact", capabilities: { contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false } },
   { prefix: "claude-fable-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   { prefix: "claude-mythos-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   { prefix: "claude-opus-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },

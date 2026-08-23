@@ -1,0 +1,120 @@
+name: Nova scheduled reliability
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: nova-reliability
+  cancel-in-progress: false
+
+jobs:
+  platform-audit:
+    name: ${{ matrix.os }} controls
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Linux
+            runner: ubuntu-latest
+          - os: macOS
+            runner: macos-latest
+          - os: Windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run build:packages
+      - run: bun run reliability:audit
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-audit-${{ matrix.os }}
+          path: reliability/audits/*.json
+
+  benchmark:
+    needs: platform-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment:
+      name: github-pages
+    env:
+      CIRCUITNOTION_API_KEY: ${{ secrets.CIRCUITNOTION_API_KEY }}
+      EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+      NOVA_RELIABILITY_SPACING_MS: 120000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run build:packages
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nova-audit-*
+          path: reliability/audits
+          merge-multiple: true
+      - name: Measure Exa research quality and alpha discovery
+        run: |
+          if [[ -n "$EXA_API_KEY" ]]; then
+            bun run reliability:exa
+          else
+            echo "::warning::EXA_API_KEY is absent; Exa quality remains unmeasured"
+          fi
+      - name: Run bounded end-to-end reliability journeys
+        run: |
+          if [[ -n "$CIRCUITNOTION_API_KEY" ]]; then
+            bun run reliability:scheduled -- --update-readme
+          else
+            echo "::warning::CIRCUITNOTION_API_KEY is absent; retaining the last Circuit 2 Turbo baseline"
+          fi
+      - name: Test the H2 2026 free agentic pool
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_BASE_URL: https://openrouter.ai/api/v1
+          NOVA_RELIABILITY_PROVIDER: openai
+        run: |
+          if [[ -z "$OPENAI_API_KEY" ]]; then echo "OPENROUTER_API_KEY repository secret is required"; exit 1; fi
+          set +e
+          NOVA_RELIABILITY_MODEL='cohere/north-mini-code:free' NOVA_RELIABILITY_REPORT='reports/north-mini-code.json' bun run reliability:scheduled
+          NOVA_RELIABILITY_MODEL='nvidia/nemotron-3-super-120b-a12b:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3-super.json' bun run reliability:scheduled
+          NOVA_RELIABILITY_MODEL='z-ai/glm-5.2:free' NOVA_RELIABILITY_REPORT='reports/glm-5.2.json' bun run reliability:scheduled
+          exit 0
+      - name: Build public spectator data
+        run: bun run reliability:publish
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nova-reliability-${{ github.run_id }}
+          path: |
+            reliability/latest.json
+            reliability/reports/*.json
+            reliability/audits/*.json
+            reliability/exa/latest.json
+            reliability/site/runs/**
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: reliability/site
+      - name: Deploy spectator UI
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Publish latest evidence to README
+        if: success()
+        run: |
+          if git diff --quiet -- README.md reliability/latest.json; then exit 0; fi
+          git config user.name "nova-reliability[bot]"
+          git config user.email "nova-reliability[bot]@users.noreply.github.com"
+          git add README.md reliability/latest.json
+          git commit -m "chore: refresh Nova reliability score"
+          git push

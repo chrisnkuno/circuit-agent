@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
+import { agentMessagePromptParts, BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
 
 const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 const prices = { inputRwfPerMillionTokens: 1_610, outputRwfPerMillionTokens: 9_660 };
@@ -34,6 +34,16 @@ function turn(overrides: Partial<AgentModelTurn>): AgentModelTurn {
 }
 
 describe("bounded agent runtime", () => {
+  it("counts structured tool-call arguments as prompt input", () => {
+    const content = "x".repeat(20_000);
+    const parts = agentMessagePromptParts({
+      role: "assistant", content: "", toolCalls: [{ id: "write_1", name: "write_file", arguments: { path: "large.ts", content } }],
+    });
+    expect(parts.join("").length).toBeGreaterThanOrEqual(content.length);
+    expect(parts).toContain("write_file");
+    expect(parts).toContain("write_1");
+  });
+
   it("resumes a turn that stopped at the output limit instead of failing the run", async () => {
     // `finish_reason: "length"` is a successful, incomplete reply — the tokens are spent and the
     // text is real. Failing here threw away a paid-for partial answer and told the user their
@@ -97,19 +107,16 @@ describe("bounded agent runtime", () => {
       turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "call-1", name: "write_file", arguments: { path: "a.ts" } }] }),
       turn({ finishReason: "tool_calls", content: "", toolCalls: [{ id: "call-2", name: "run_tests", arguments: {} }] }),
       turn({ content: "Implemented and verified." }),
-      // Unit tests alone now draw one ask for an exercise of the assembled program; answering it
-      // is what ends the run.
-      turn({ content: "This is a pure function with no entry point to assemble." }),
     ], tools);
     const result = await harnessValue.runtime.execute(baseRequest);
-    expect(result).toMatchObject({ status: "completed", iterations: 4, toolCallsExecuted: 2 });
+    expect(result).toMatchObject({ status: "completed", iterations: 3, toolCallsExecuted: 2 });
     expect(calls).toEqual(["write", "test"]);
     // Each tool is announced before it runs and reported after, so a front end can show the work
     // in progress rather than only its outcome.
     expect(harnessValue.events.map((event) => event.type)).toEqual([
       "model_turn", "tool_call", "tool_result",
       "model_turn", "tool_call", "tool_result",
-      "model_turn", "model_turn", "runtime_stop",
+      "model_turn", "runtime_stop",
     ]);
   });
 
@@ -152,7 +159,7 @@ describe("bounded agent runtime", () => {
     // Both rungs were asked for in one message, so clearing compile-only evidence costs one round
     // trip rather than two.
     expect(value.executed()).toBe(5);
-    expect(value.requests.some((request) => request.messages.some((message) => message.role === "user" && message.content.includes("invariants")))).toBe(true);
+    expect(value.requests.some((request) => request.messages.some((message) => message.role === "user" && message.content.includes("smallest relevant")))).toBe(true);
   });
 
   it("accepts compile-only evidence once the model explains there is no behaviour to assert", async () => {
@@ -196,19 +203,17 @@ describe("bounded agent runtime", () => {
     async execute() { return { content: "ok", verification: { passed: true, kind, scope: "targeted", summary: name } }; },
   });
 
-  it("does not ask for tests again once tests ran, but does ask once for the assembled program", async () => {
-    // Units passing is not the same claim as the program working: a component whose invariants all
-    // hold is still useless if it was never mounted. The ask escalates one rung, it does not repeat.
+  it("accepts passing targeted tests without spending another turn on a generic smoke request", async () => {
     const value = harness([
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "w1", name: "write_file", arguments: {} }] }),
       turn({ finishReason: "tool_calls", toolCalls: [{ id: "t1", name: "run_tests", arguments: {} }] }),
       turn({ content: "Implemented and tested." }),
-      turn({ content: "It is a pure library; there is nothing to assemble." }),
     ], [writeTool, verifier("run_tests", "tests")]);
     const result = await value.runtime.execute(baseRequest);
     expect(result).toMatchObject({ status: "completed" });
     const asks = value.requests.at(-1)!.messages.filter((message) => message.role === "user" && message.content.includes("assembled"));
-    expect(asks).toHaveLength(1);
+    expect(asks).toHaveLength(0);
+    expect(value.executed()).toBe(3);
     // And never the compile-level ask, which tests already cleared.
     expect(value.requests.at(-1)!.messages.some((message) => message.content.includes("shows the code compiles"))).toBe(false);
   });
@@ -320,7 +325,7 @@ describe("bounded agent runtime", () => {
       toolCallsExecuted: 1,
       summary: expect.stringContaining("The agent reported:"),
     });
-    expect(value.executed()).toBe(4); // the tool-call turn, the first stop, then two nudged retries before the gate gives up
+    expect(value.executed()).toBe(3); // tool-call turn, first stop, then one bounded retry
   });
 
   it("halts before an unapproved external action", async () => {
@@ -332,8 +337,19 @@ describe("bounded agent runtime", () => {
     expect(executed).toBe(false);
   });
 
-  it("fails closed when the model reaches outside its capability scope", async () => {
-    const value = harness([turn({ finishReason: "tool_calls", toolCalls: [{ id: "bad-1", name: "unknown_tool", arguments: {} }] })], []);
+  it("recovers once when the model reaches outside its capability scope", async () => {
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "bad-1", name: "unknown_tool", arguments: {} }] }),
+      turn({ content: "I can answer without it." }),
+    ], []);
+    await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "completed", toolCallsExecuted: 0 });
+  });
+
+  it("fails closed when an unavailable tool is requested twice", async () => {
+    const value = harness([
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "bad-1", name: "unknown_tool", arguments: {} }] }),
+      turn({ finishReason: "tool_calls", toolCalls: [{ id: "bad-2", name: "unknown_tool", arguments: {} }] }),
+    ], []);
     await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "failed", toolCallsExecuted: 0 });
   });
 
@@ -650,13 +666,12 @@ describe("what a nudge costs", () => {
 
     const asks = result.messages.filter((message) => message.role === "user" && message.content.startsWith("That build/typecheck"));
     expect(asks).toHaveLength(1);
-    // The behaviour rung rides along in the same message rather than costing a second model call.
-    expect(asks[0].content).toContain("Your unit tests pass");
+    expect(asks[0].content).toContain("smallest relevant existing test or smoke command");
     const behaviourAlone = result.messages.filter((message) => message.role === "user" && message.content.startsWith("Your unit tests pass"));
     expect(behaviourAlone).toHaveLength(0);
   });
 
-  it("asks for verification at most twice, and never gives up on the run", async () => {
+  it("asks for verification at most once, and never gives up on the run", async () => {
     const writer: AgentTool[] = [{
       name: "write_file",
       description: "Writes a file",
@@ -680,7 +695,7 @@ describe("what a nudge costs", () => {
     const result = await value.runtime.execute(baseRequest);
     const asks = result.messages.filter((message) => message.role === "user" && message.content.startsWith("You changed the workspace"));
     // A model that never verifies still terminates, and the gate reports what happened.
-    expect(asks).toHaveLength(2);
+    expect(asks).toHaveLength(1);
     expect(result.status).toBe("needs_verification");
   });
 });

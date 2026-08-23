@@ -55,7 +55,7 @@ export function catalogPrices(provider: ProviderId, model: string, asOf?: string
 export const PROVIDER_INFO: Record<ProviderId, ProviderInfo> = {
   anthropic: { id: "anthropic", label: "Anthropic", requires: ["ANTHROPIC_API_KEY"], defaultModel: "claude-sonnet-5" },
   openai: { id: "openai", label: "OpenAI", requires: ["OPENAI_API_KEY"], defaultModel: "gpt-5.6-terra" },
-  circuitnotion: { id: "circuitnotion", label: "CircuitNotion", requires: ["CIRCUITNOTION_API_KEY"], defaultModel: "gpt-5.6-luna" },
+  circuitnotion: { id: "circuitnotion", label: "CircuitNotion", requires: ["CIRCUITNOTION_API_KEY"], defaultModel: "circuit-2-turbo" },
   // No key required — an Ollama daemon accepts anything in the Authorization header — so this
   // provider is always "configured" and only fails at call time if nothing is listening on the
   // base URL, the same way a bad OPENAI_BASE_URL override would.

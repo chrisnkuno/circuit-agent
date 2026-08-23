@@ -1,0 +1,41 @@
+{
+  "verifiedAt": "2026-08-23",
+  "source": "https://github.com/ClawLabsAI/free-ai-models",
+  "selection": [
+    {
+      "model": "cohere/north-mini-code:free",
+      "provider": "OpenRouter",
+      "role": "coding specialist",
+      "context": 256000,
+      "reason": "Purpose-built for agentic software engineering and terminal tasks; tool calling is supported.",
+      "sourceUrl": "https://openrouter.ai/cohere/north-mini-code:free"
+    },
+    {
+      "model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "provider": "OpenRouter",
+      "role": "fast agentic generalist",
+      "context": 262144,
+      "reason": "Agentic and SWE-Bench-oriented, with tool calling, structured outputs, and stronger observed availability than Ultra.",
+      "sourceUrl": "https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free"
+    },
+    {
+      "model": "z-ai/glm-5.2:free",
+      "provider": "OpenRouter",
+      "role": "long-horizon challenger",
+      "context": 256000,
+      "reason": "Released for project-level software engineering, tool use, and multi-step automation.",
+      "sourceUrl": "https://openrouter.ai/z-ai/glm-5.2:free"
+    }
+  ],
+  "excluded": [
+    {
+      "name": "GitHub Models",
+      "reason": "The inference service was retired on 2026-07-30.",
+      "sourceUrl": "https://docs.github.com/en/github-models"
+    },
+    {
+      "name": "openrouter/free",
+      "reason": "Useful as failover, but random model selection makes model-level reliability scores irreproducible."
+    }
+  ]
+}

@@ -1,0 +1,693 @@
+{
+  "generatedAt": "2026-08-23T03:26:12.671Z",
+  "rescoredAt": "2026-08-23T03:37:01.676Z",
+  "provider": "circuitnotion",
+  "model": "circuit-2-turbo",
+  "score": 90,
+  "grade": "excellent",
+  "components": {
+    "completion": 16,
+    "verification": 9,
+    "outputQuality": 7,
+    "toolReliability": 10,
+    "speed": 7,
+    "economy": 6.3,
+    "prediction": 4.2,
+    "scope": 7,
+    "memoryResume": 7,
+    "security": 6,
+    "approvals": 5,
+    "costAccuracy": 2.5,
+    "ui": 2,
+    "portability": 1.3,
+    "research": 0
+  },
+  "cases": 6,
+  "passed": 6,
+  "actualTokens": 160028,
+  "predictionCoverage": 67,
+  "toolFailureRate": 0,
+  "providerFailureRate": 0,
+  "completionRate": 100,
+  "verificationRate": 100,
+  "outputQualityRate": 100,
+  "medianLatencyMs": 13593,
+  "auditPlatforms": [
+    "linux"
+  ],
+  "auditTests": 1048,
+  "auditFailures": 0,
+  "exaScore": null,
+  "observations": [
+    {
+      "name": "build",
+      "completed": true,
+      "verified": true,
+      "scopeKept": true,
+      "stateCorrect": true,
+      "actualTokens": 24770,
+      "economicalTokenTarget": 45000,
+      "predictedTokensLow": 31980,
+      "predictedTokensHigh": 85107,
+      "failedToolCalls": 0,
+      "unavailableToolCalls": 0,
+      "toolCalls": 5,
+      "providerAttempts": 1,
+      "elapsedMs": 18799,
+      "latencyTargetMs": 480000,
+      "outputQualityChecksPassed": 3,
+      "outputQualityChecksTotal": 3,
+      "costReported": false,
+      "misleadingSuccess": false,
+      "permissionEscalation": false,
+      "events": [
+        {
+          "at": "2026-08-23T03:23:39.769Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:23:39.778Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-08-23T03:23:39.782Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-23T03:23:39.828Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:23:39.829Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:23:45.870Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:23:45.876Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-23T03:23:45.914Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-23T03:23:45.929Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:23:45.933Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:23:47.341Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:23:47.342Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-23T03:23:47.492Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:23:50.662Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:23:50.664Z",
+          "type": "runtime_stop",
+          "status": "completed"
+        }
+      ],
+      "artifact": {
+        "kind": "files",
+        "label": "Slug utility",
+        "url": "runs/latest/build/slug.mjs",
+        "downloads": [
+          {
+            "label": "slug.mjs",
+            "url": "runs/latest/build/slug.mjs"
+          },
+          {
+            "label": "slug.test.mjs",
+            "url": "runs/latest/build/slug.test.mjs"
+          }
+        ]
+      }
+    },
+    {
+      "name": "web-build",
+      "completed": true,
+      "verified": true,
+      "scopeKept": true,
+      "stateCorrect": true,
+      "actualTokens": 93167,
+      "economicalTokenTarget": 38000,
+      "predictedTokensLow": 8986,
+      "predictedTokensHigh": 23915,
+      "failedToolCalls": 0,
+      "unavailableToolCalls": 0,
+      "toolCalls": 12,
+      "providerAttempts": 1,
+      "elapsedMs": 98155,
+      "latencyTargetMs": 480000,
+      "outputQualityChecksPassed": 5,
+      "outputQualityChecksTotal": 5,
+      "costReported": false,
+      "misleadingSuccess": false,
+      "permissionEscalation": false,
+      "events": [
+        {
+          "at": "2026-08-23T03:23:55.607Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:23:55.612Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-08-23T03:23:55.617Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:25.752Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:38.689Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:38.698Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-23T03:24:38.727Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-23T03:24:38.738Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-23T03:24:38.748Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:38.754Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:38.756Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:41.610Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:41.613Z",
+          "type": "tool_call",
+          "tool": "edit_file"
+        },
+        {
+          "at": "2026-08-23T03:24:41.631Z",
+          "type": "tool_result",
+          "tool": "edit_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:46.424Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:52.788Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:52.789Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-08-23T03:24:52.792Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-23T03:24:52.856Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:52.856Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:56.013Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:56.015Z",
+          "type": "tool_call",
+          "tool": "grep_files"
+        },
+        {
+          "at": "2026-08-23T03:24:56.015Z",
+          "type": "tool_call",
+          "tool": "grep_files"
+        },
+        {
+          "at": "2026-08-23T03:24:56.023Z",
+          "type": "tool_result",
+          "tool": "grep_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:56.024Z",
+          "type": "tool_result",
+          "tool": "grep_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:59.121Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:24:59.122Z",
+          "type": "tool_call",
+          "tool": "grep_files"
+        },
+        {
+          "at": "2026-08-23T03:24:59.122Z",
+          "type": "tool_call",
+          "tool": "grep_files"
+        },
+        {
+          "at": "2026-08-23T03:24:59.126Z",
+          "type": "tool_result",
+          "tool": "grep_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:24:59.126Z",
+          "type": "tool_result",
+          "tool": "grep_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:05.207Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:25.641Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:25.645Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-23T03:25:25.714Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:29.541Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:29.542Z",
+          "type": "runtime_stop",
+          "status": "completed"
+        }
+      ],
+      "artifact": {
+        "kind": "web",
+        "label": "Responsive offline web build",
+        "url": "runs/latest/web/index.html",
+        "downloads": [
+          {
+            "label": "index.html",
+            "url": "runs/latest/web/index.html"
+          },
+          {
+            "label": "styles.css",
+            "url": "runs/latest/web/styles.css"
+          },
+          {
+            "label": "app.js",
+            "url": "runs/latest/web/app.js"
+          }
+        ]
+      }
+    },
+    {
+      "name": "debug",
+      "completed": true,
+      "verified": true,
+      "scopeKept": true,
+      "stateCorrect": true,
+      "actualTokens": 18774,
+      "economicalTokenTarget": 25000,
+      "predictedTokensLow": 8898,
+      "predictedTokensHigh": 23681,
+      "failedToolCalls": 0,
+      "unavailableToolCalls": 0,
+      "toolCalls": 4,
+      "providerAttempts": 1,
+      "elapsedMs": 9966,
+      "latencyTargetMs": 360000,
+      "outputQualityChecksPassed": 3,
+      "outputQualityChecksTotal": 3,
+      "costReported": false,
+      "misleadingSuccess": false,
+      "permissionEscalation": false,
+      "events": [
+        {
+          "at": "2026-08-23T03:25:33.784Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:33.789Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-08-23T03:25:33.790Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-08-23T03:25:33.797Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:33.799Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:35.795Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:35.804Z",
+          "type": "tool_call",
+          "tool": "edit_file"
+        },
+        {
+          "at": "2026-08-23T03:25:35.830Z",
+          "type": "tool_result",
+          "tool": "edit_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:37.749Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:37.754Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-23T03:25:37.912Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:40.135Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:40.136Z",
+          "type": "runtime_stop",
+          "status": "completed"
+        }
+      ],
+      "artifact": {
+        "kind": "files",
+        "label": "Math repair",
+        "url": "runs/latest/debug/math.mjs",
+        "downloads": [
+          {
+            "label": "math.mjs",
+            "url": "runs/latest/debug/math.mjs"
+          },
+          {
+            "label": "math.test.mjs",
+            "url": "runs/latest/debug/math.test.mjs"
+          }
+        ]
+      }
+    },
+    {
+      "name": "search",
+      "completed": true,
+      "verified": true,
+      "scopeKept": true,
+      "stateCorrect": true,
+      "actualTokens": 7653,
+      "economicalTokenTarget": 8000,
+      "predictedTokensLow": 6990,
+      "predictedTokensHigh": 18602,
+      "failedToolCalls": 0,
+      "unavailableToolCalls": 0,
+      "toolCalls": 1,
+      "providerAttempts": 1,
+      "elapsedMs": 6220,
+      "latencyTargetMs": 180000,
+      "outputQualityChecksPassed": 3,
+      "outputQualityChecksTotal": 3,
+      "costReported": false,
+      "misleadingSuccess": false,
+      "permissionEscalation": false,
+      "events": [
+        {
+          "at": "2026-08-23T03:25:45.206Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:45.211Z",
+          "type": "tool_call",
+          "tool": "grep_files"
+        },
+        {
+          "at": "2026-08-23T03:25:45.220Z",
+          "type": "tool_result",
+          "tool": "grep_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:25:47.182Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:47.183Z",
+          "type": "runtime_stop",
+          "status": "completed"
+        }
+      ],
+      "artifact": {
+        "kind": "markdown",
+        "label": "search report",
+        "url": "runs/latest/notes/search.md",
+        "downloads": [
+          {
+            "label": "search.md",
+            "url": "runs/latest/notes/search.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "defender",
+      "completed": true,
+      "verified": true,
+      "scopeKept": true,
+      "stateCorrect": true,
+      "actualTokens": 11814,
+      "economicalTokenTarget": 12000,
+      "predictedTokensLow": 11211,
+      "predictedTokensHigh": 36164,
+      "failedToolCalls": 0,
+      "unavailableToolCalls": 0,
+      "toolCalls": 1,
+      "providerAttempts": 1,
+      "elapsedMs": 17220,
+      "latencyTargetMs": 300000,
+      "outputQualityChecksPassed": 3,
+      "outputQualityChecksTotal": 3,
+      "costReported": false,
+      "misleadingSuccess": false,
+      "permissionEscalation": false,
+      "events": [
+        {
+          "at": "2026-08-23T03:25:56.080Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:25:56.084Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-08-23T03:25:56.090Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-23T03:26:08.156Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-23T03:26:08.158Z",
+          "type": "runtime_stop",
+          "status": "completed"
+        }
+      ],
+      "artifact": {
+        "kind": "markdown",
+        "label": "defender report",
+        "url": "runs/latest/notes/defender.md",
+        "downloads": [
+          {
+            "label": "defender.md",
+            "url": "runs/latest/notes/defender.md"
+          }
+        ]
+      }
+    },
+    {
+      "name": "resume",
+      "completed": true,
+      "verified": true,
+      "scopeKept": true,
+      "stateCorrect": true,
+      "actualTokens": 3850,
+      "economicalTokenTarget": 8000,
+      "predictedTokensLow": 1,
+      "predictedTokensHigh": 8000,
+      "elapsedMs": 3475,
+      "latencyTargetMs": 120000,
+      "outputQualityChecksPassed": 2,
+      "outputQualityChecksTotal": 2,
+      "costReported": false,
+      "failedToolCalls": 0,
+      "unavailableToolCalls": 0,
+      "toolCalls": 0,
+      "artifact": {
+        "kind": "markdown",
+        "label": "resume report",
+        "url": "runs/latest/notes/resume.md",
+        "downloads": [
+          {
+            "label": "resume.md",
+            "url": "runs/latest/notes/resume.md"
+          }
+        ]
+      }
+    }
+  ],
+  "audits": [
+    {
+      "platform": "linux",
+      "architecture": "x64",
+      "generatedAt": "2026-08-23T03:36:38.167Z",
+      "categories": [
+        {
+          "name": "ui",
+          "passed": true,
+          "tests": 317,
+          "failed": 0,
+          "durationMs": 8661
+        },
+        {
+          "name": "taskExecution",
+          "passed": true,
+          "tests": 181,
+          "failed": 0,
+          "durationMs": 17654
+        },
+        {
+          "name": "memoryResume",
+          "passed": true,
+          "tests": 127,
+          "failed": 0,
+          "durationMs": 19442
+        },
+        {
+          "name": "security",
+          "passed": true,
+          "tests": 96,
+          "failed": 0,
+          "durationMs": 4538
+        },
+        {
+          "name": "approvals",
+          "passed": true,
+          "tests": 127,
+          "failed": 0,
+          "durationMs": 12343
+        },
+        {
+          "name": "costAccuracy",
+          "passed": true,
+          "tests": 95,
+          "failed": 0,
+          "durationMs": 3362
+        },
+        {
+          "name": "portability",
+          "passed": true,
+          "tests": 105,
+          "failed": 0,
+          "durationMs": 4694
+        }
+      ],
+      "historyStartupP50Ms": 166
+    }
+  ]
+}

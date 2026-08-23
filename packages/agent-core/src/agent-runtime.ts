@@ -1,14 +1,30 @@
+/**
+ * Provider-neutral bounded tool loop: accounts for every prompt-bearing part, enforces money and
+ * iteration limits, executes approved tools, and keeps oversized results out of the transcript.
+ */
 import { addPart, affordableOutputTokensFor, newPartTotals, priceActualModelUsage, tokenEstimateFrom, type ModelPriceCatalog } from "./model-cost";
 import type { ModelUsage } from "./providers/model";
 import type { ModelCapabilities } from "./providers/model-capabilities";
 import { createHash } from "node:crypto";
 
 export type AgentMessage =
-  | { role: "system" | "user" | "assistant"; content: string }
-  | { role: "assistant"; content: string; toolCalls: AgentToolCall[] }
-  | { role: "tool"; content: string; toolCallId: string; name: string };
+  | { role: "system" | "user" | "assistant"; content: string; internal?: boolean }
+  | { role: "assistant"; content: string; toolCalls: AgentToolCall[]; internal?: boolean }
+  | { role: "tool"; content: string; toolCallId: string; name: string; internal?: boolean };
 
 export type AgentToolCall = { id: string; name: string; arguments: unknown };
+
+/** Prompt-bearing parts of one message, including structured tool calls that are not in content. */
+export function agentMessagePromptParts(message: AgentMessage): string[] {
+  const parts = [message.content ?? ""];
+  if ("toolCalls" in message && Array.isArray(message.toolCalls)) {
+    for (const call of message.toolCalls) parts.push(call.id, call.name, JSON.stringify(call.arguments ?? {}));
+  } else if (message.role === "tool") {
+    // Small, but present on every provider wire and numerous in a tool-heavy run.
+    parts.push(message.toolCallId, message.name);
+  }
+  return parts;
+}
 
 export type AgentModelTurn = {
   responseId: string;
@@ -215,7 +231,8 @@ export type AgentRuntimeResult = {
 };
 
 /** How many times a turn is sent back to the model to verify before the gate gives up and stops. */
-const MAX_VERIFICATION_NUDGES = 2;
+const MAX_VERIFICATION_NUDGES = 1;
+const MAX_UNAVAILABLE_TOOL_RECOVERIES = 1;
 
 /**
  * How many times a truncated turn is resumed before the run gives up.
@@ -239,7 +256,7 @@ const LENGTH_CONTINUATION_NUDGE =
   "Your previous message hit the output token limit and was cut off mid-answer. Continue from exactly where it stopped — do not repeat what you already wrote, and do not restart. If you were part-way through a tool call, send that tool call again from the beginning, since the truncated one was discarded. If the remaining work does not fit in one reply, do the part that fits and keep each reply shorter.";
 
 const VERIFICATION_NUDGE =
-  "You changed the workspace but ended the turn without running anything that verifies it. Write tests that assert the invariants your change must satisfy — the properties that hold for every valid input, not one happy-path example — then run them and report the real result. If this project genuinely has nothing to run, say so explicitly instead of stopping silently.";
+  "You changed the workspace but ended the turn without running anything that verifies it. Run the smallest relevant existing test, check, or smoke command and report the real result. Add a regression test only when the change would otherwise be unprotected. If this project genuinely has nothing relevant to run, say so explicitly instead of stopping silently.";
 
 /**
  * Sent when the only evidence was a build, typecheck or lint.
@@ -250,22 +267,7 @@ const VERIFICATION_NUDGE =
  * behaviour to assert.
  */
 const TEST_EVIDENCE_NUDGE =
-  "That build/typecheck passing shows the code compiles, not that it behaves correctly. Add or run tests that execute the changed behaviour and assert its invariants — properties true for every valid input (round-trips, bounds, ordering, conservation, idempotence, error cases), not a single example. Run them and report the real result. If the change genuinely has no behaviour to assert (documentation, formatting, configuration), say so explicitly and stop.";
-
-/**
- * Sent when units pass but the assembled program was never exercised.
- *
- * Passing units are routinely assembled into something broken, and no unit test can see it: a
- * component whose every invariant holds is still useless if it was never mounted, if the route was
- * never registered, or if the bundle does not load. This asks for one cheap end-to-end exercise of
- * the thing a user actually meets.
- *
- * Asked at most once, and only when the run produced something assemblable — the same shape as the
- * test-evidence nudge above. A library change with no entry point to start has nothing to smoke,
- * and a model that says so must be able to finish.
- */
-const BEHAVIOR_EVIDENCE_NUDGE =
-  "Your unit tests pass, which proves the pieces work in isolation — not that the assembled program does. Units routinely pass while the thing is broken: a component that was never mounted, a route never registered, a build whose output does not load. Exercise it once the way a user meets it and assert on the real output: render the entry point and assert the expected element or text is present, start the server and request the route, or run the CLI and check its output and exit code. Keep it to one fast command — seconds, not a browser suite. Report what it actually printed. If this change genuinely has nothing assemblable to exercise, say so explicitly and stop.";
+  "That build/typecheck passing shows the code compiles, not that it behaves correctly. Run the smallest relevant existing test or smoke command for the changed behaviour and report the real result. Add a regression test only when the change would otherwise be unprotected. If the change genuinely has no behaviour to assert (documentation, formatting, configuration), say so explicitly and stop.";
 
 const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 
@@ -473,6 +475,7 @@ export class BoundedAgentRuntime {
     const sentResults = new Map<string, { toolName: string; path?: string }>();
     let workspaceNeedsVerification = false;
     let verificationNudges = 0;
+    let unavailableToolRecoveries = 0;
     // Truncated turns resumed so far in this run, capped by `MAX_LENGTH_CONTINUATIONS`.
     let lengthContinuations = 0;
     // Strongest evidence seen for the workspace changes in this run, as a rung on `EVIDENCE_RANK`,
@@ -480,7 +483,6 @@ export class BoundedAgentRuntime {
     // model that answers "this change has nothing to assert" must be able to finish.
     let strongestEvidence = 0;
     let askedForTestEvidence = false;
-    let askedForBehaviorEvidence = false;
     // Measured once per part, not once per iteration: `messages` only ever grows inside this loop,
     // so a message already measured cannot change. The tool definitions are constant for the run
     // and are folded in first, which is why `measured` starts at zero rather than tracking them.
@@ -497,7 +499,9 @@ export class BoundedAgentRuntime {
       if (await this.dependencies.control.isCancellationRequested()) return stop("cancelled", "Run cancelled at a safe checkpoint.", iteration - 1);
 
       const approvedRemaining = request.modelReservationRwf - actualModelRwf;
-      for (; measured < messages.length; measured += 1) addPart(promptTotals, messages[measured].content);
+      for (; measured < messages.length; measured += 1) {
+        for (const part of agentMessagePromptParts(messages[measured])) addPart(promptTotals, part);
+      }
       const maximumOutputTokens = affordableOutputTokensFor(
         tokenEstimateFrom(promptTotals),
         request.maxOutputTokens,
@@ -545,7 +549,7 @@ export class BoundedAgentRuntime {
           // reporting that it didn't. The nudge cap keeps this bounded by the same iteration and
           // tool-call budgets as everything else — a model that never verifies still terminates.
           verificationNudges += 1;
-          messages.push({ role: "user", content: VERIFICATION_NUDGE });
+          messages.push({ role: "user", content: VERIFICATION_NUDGE, internal: true });
           continue;
         }
         // One rung at a time up `EVIDENCE_RANK`, each asked at most once. Compile-only evidence is
@@ -555,17 +559,7 @@ export class BoundedAgentRuntime {
         // the truth, and a gate that cannot be satisfied honestly is a gate that gets worked around.
         if (strongestEvidence === EVIDENCE_RANK.check && !askedForTestEvidence) {
           askedForTestEvidence = true;
-          // Both rungs asked for at once, and both marked as asked. Escalating one level per round
-          // trip would cost two extra model calls to say something that fits in one message, and a
-          // gate that is expensive to satisfy is a gate that makes every run slower whether or not
-          // it finds anything. The model can run its tests and its smoke check in the same turn.
-          askedForBehaviorEvidence = true;
-          messages.push({ role: "user", content: `${TEST_EVIDENCE_NUDGE}\n\n${BEHAVIOR_EVIDENCE_NUDGE}` });
-          continue;
-        }
-        if (strongestEvidence === EVIDENCE_RANK.tests && !askedForBehaviorEvidence) {
-          askedForBehaviorEvidence = true;
-          messages.push({ role: "user", content: BEHAVIOR_EVIDENCE_NUDGE });
+          messages.push({ role: "user", content: TEST_EVIDENCE_NUDGE, internal: true });
           continue;
         }
         return workspaceNeedsVerification
@@ -579,13 +573,36 @@ export class BoundedAgentRuntime {
       if (turn.toolCalls.length > request.maxToolCallsPerTurn) return stop("failed", "Model exceeded the per-turn tool-call limit.", iteration);
       if (toolCallsExecuted + turn.toolCalls.length > request.maxToolCalls) return stop("iteration_limit", "Run reached its tool-call budget.", iteration);
 
+      const unavailable = turn.toolCalls.find((call) => {
+        const tool = this.toolsByName.get(call.name);
+        return !tool || !capabilities.has(tool.capabilityId);
+      });
+      if (unavailable) {
+        if (unavailableToolRecoveries >= MAX_UNAVAILABLE_TOOL_RECOVERIES) {
+          return stop("failed", `Tool ${unavailable.name} is outside the run capability scope.`, iteration);
+        }
+        unavailableToolRecoveries += 1;
+        messages.push({ role: "assistant", content: turn.content, toolCalls: turn.toolCalls });
+        for (const call of turn.toolCalls) {
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            name: call.name,
+            internal: true,
+            content: call.id === unavailable.id
+              ? `Tool ${call.name} is unavailable in the current mode. Continue with the listed tools, or answer without it.`
+              : "This batch was not executed because another call was unavailable. Retry any still-needed available call separately.",
+          });
+        }
+        continue;
+      }
+
       const prepared: Array<{ call: AgentToolCall; tool: AgentTool; argumentsValue: Record<string, unknown> }> = [];
       const seenCallIds = new Set<string>();
       for (const call of turn.toolCalls) {
         if (!call.id.trim() || seenCallIds.has(call.id)) return stop("failed", "Model returned a missing or duplicate tool-call identifier.", iteration);
         seenCallIds.add(call.id);
-        const tool = this.toolsByName.get(call.name);
-        if (!tool || !capabilities.has(tool.capabilityId)) return stop("failed", `Tool ${call.name} is outside the run capability scope.`, iteration);
+        const tool = this.toolsByName.get(call.name)!;
         const argumentsValue = normalizeArguments(call.arguments);
         if (!argumentsValue) return stop("failed", `Tool ${call.name} arguments must be a JSON object.`, iteration);
         if (tool.requiresApproval) {

@@ -61,13 +61,24 @@ describe("what the transcript shows, under a real pty", () => {
     return proc;
   }
 
+  it("shows the measured reliability direction on every interactive startup", async () => {
+    const p = boot();
+    await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+    const output = plain(p.output());
+    expect(output).toMatch(/reliability \d+\/100/);
+    expect(output).toContain("improving toward best-in-class");
+  }, 60_000);
+
   it("shows the code a write actually contained, not only that a write happened", async () => {
     const p = boot();
     await p.waitFor(PROMPT, { timeoutMs: 30_000 });
     stub.enqueue({
       kind: "tool_call",
       toolName: "write_file",
-      input: { path: "hello.ts", content: 'export const greeting = "hi";\nexport const answer = 42;\n' },
+      input: {
+        path: "hello.ts",
+        content: 'export const greeting = "hi";\nexport const answer = 42;\n',
+      },
     });
     stub.enqueue({ kind: "text", text: "Done." });
 
@@ -87,13 +98,23 @@ describe("what the transcript shows, under a real pty", () => {
   it("folds a long write and expands it again on request, in the same scrolling transcript", async () => {
     const p = boot();
     await p.waitFor(PROMPT, { timeoutMs: 30_000 });
-    const content = Array.from({ length: 60 }, (_unused, index) => `const value${index} = ${index};`).join("\n");
-    stub.enqueue({ kind: "tool_call", toolName: "write_file", input: { path: "big.ts", content } });
+    const content = Array.from(
+      { length: 60 },
+      (_unused, index) => `const value${index} = ${index};`,
+    ).join("\n");
+    stub.enqueue({
+      kind: "tool_call",
+      toolName: "write_file",
+      input: { path: "big.ts", content },
+    });
     stub.enqueue({ kind: "text", text: "Written." });
 
     const turnStarted = p.output().length;
     p.writeLine("write the big file");
-    await p.waitFor(/more lines hidden/, { timeoutMs: 30_000, since: turnStarted });
+    await p.waitFor(/more lines hidden/, {
+      timeoutMs: 30_000,
+      since: turnStarted,
+    });
     expect(p.output()).not.toContain("value59");
 
     // The folded panel is printed during the tool call, before the model's final response and the
@@ -131,10 +152,18 @@ describe("what the transcript shows, under a real pty", () => {
     // frame, as `| >`. The old pattern could therefore never match, and the test timed out for
     // thirty seconds before failing — reported as a broken ASCII mode when ASCII mode was fine.
     // Both cells are coloured separately, hence the escapes between them.
-    await p.waitFor(/\|(?:\x1b\[[0-9;]*m)*\s*(?:\x1b\[[0-9;]*m)*>/, { timeoutMs: 30_000 });
+    await p.waitFor(/\|(?:\x1b\[[0-9;]*m)*\s*(?:\x1b\[[0-9;]*m)*>/, {
+      timeoutMs: 30_000,
+    });
     const banner = p.output();
     // Nothing above the ASCII range reaches a terminal that asked for ASCII.
-    const nonAscii = [...new Set([...banner].filter((character) => (character.codePointAt(0) ?? 0) > 127))];
+    const nonAscii = [
+      ...new Set(
+        [...banner].filter(
+          (character) => (character.codePointAt(0) ?? 0) > 127,
+        ),
+      ),
+    ];
     expect(nonAscii).toEqual([]);
   }, 60_000);
 
