@@ -60,6 +60,22 @@ describe("session storage", () => {
     expect(loaded?.integrity).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("resumes through a different OS alias for the same physical workspace", async () => {
+    const alias = `${root}-alias`;
+    try {
+      await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return; // Some locked-down Windows environments do not permit links.
+    }
+    try {
+      const saved = record({ root: alias });
+      await saveSession(saved);
+      expect((await loadSession(root, saved.id))?.title).toBe("Add a health check");
+    } finally {
+      await fs.unlink(alias).catch(() => undefined);
+    }
+  });
+
   it("writes atomically and rejects a stale writer instead of losing a newer turn", async () => {
     const first = record({ id: "shared" });
     await saveSession(first);
@@ -340,6 +356,7 @@ describe("checkpoints against a real repository", () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), "nova-git-"));
     try {
       await runGit(["init", "-q"], { cwd: repo });
+      await runGit(["config", "core.autocrlf", "false"], { cwd: repo });
       await runGit(["config", "user.email", "nova@test"], { cwd: repo });
       await runGit(["config", "user.name", "Nova"], { cwd: repo });
       await fs.writeFile(path.join(repo, "app.ts"), "export const port = 3000;\n");

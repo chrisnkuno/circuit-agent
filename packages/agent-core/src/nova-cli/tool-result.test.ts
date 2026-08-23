@@ -119,6 +119,14 @@ describe("normalizing a result for comparison", () => {
     expect(result.data).toEqual({ path: `${WORKSPACE_TOKEN}/app.ts` });
   });
 
+  it("normalizes both separator styles even when the evidence came from another OS", () => {
+    const result = normalizeToolResult(
+      { content: "POSIX /tmp/build/app.ts; Windows C:\\work\\build\\app.ts" },
+      { root: "/tmp/build", realRoot: "C:\\work\\build" },
+    );
+    expect(result.content).toBe(`POSIX ${WORKSPACE_TOKEN}/app.ts; Windows ${WORKSPACE_TOKEN}\\app.ts`);
+  });
+
   it("handles a root containing regex metacharacters", () => {
     // `+` and `(` are legal in directory names, and a normalizer built on RegExp would either
     // throw or silently match the wrong thing.

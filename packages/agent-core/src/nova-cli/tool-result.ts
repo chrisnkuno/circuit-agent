@@ -40,10 +40,14 @@ function rootTokens(options: NormalizeOptions): string[] {
   const roots = new Set<string>();
   for (const value of [options.root, options.realRoot]) {
     if (!value) continue;
-    const resolved = path.resolve(value);
-    roots.add(resolved);
-    // A trailing separator appears when output joins the root to a relative path.
-    roots.add(`${resolved}${path.sep}`);
+    // Keep producer and host spellings. A POSIX result may be compared on Windows, where resolving
+    // `/tmp/x` would otherwise turn the only usable token into a drive-qualified path.
+    for (const candidate of [value, path.resolve(value)]) {
+      const trimmed = candidate.replace(/[\\/]+$/, "");
+      roots.add(trimmed);
+      roots.add(trimmed.replaceAll("\\", "/"));
+      roots.add(trimmed.replaceAll("/", "\\"));
+    }
   }
   return [...roots].sort((left, right) => right.length - left.length);
 }
@@ -53,8 +57,7 @@ function replaceRoots(text: string, tokens: readonly string[]): string {
   for (const token of tokens) {
     // `split`/`join` rather than a RegExp: a path is a literal and may contain regex metacharacters
     // (`+` and `(` are legal in directory names), and escaping them correctly is easy to get wrong.
-    const replacement = token.endsWith(path.sep) ? `${WORKSPACE_TOKEN}/` : WORKSPACE_TOKEN;
-    result = result.split(token).join(replacement);
+    result = result.split(token).join(WORKSPACE_TOKEN);
   }
   return result;
 }

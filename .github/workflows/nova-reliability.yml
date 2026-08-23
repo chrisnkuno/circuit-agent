@@ -49,7 +49,6 @@ jobs:
     environment:
       name: github-pages
     env:
-      CIRCUITNOTION_API_KEY: ${{ secrets.CIRCUITNOTION_API_KEY }}
       EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
       NOVA_RELIABILITY_SPACING_MS: 120000
     steps:
@@ -71,13 +70,10 @@ jobs:
           else
             echo "::warning::EXA_API_KEY is absent; Exa quality remains unmeasured"
           fi
-      - name: Run bounded end-to-end reliability journeys
+      - name: Score platform and Exa evidence without paid providers
         run: |
-          if [[ -n "$CIRCUITNOTION_API_KEY" ]]; then
-            bun run reliability:scheduled -- --update-readme
-          else
-            echo "::warning::CIRCUITNOTION_API_KEY is absent; retaining the last Circuit 2 Turbo baseline"
-          fi
+          echo "Paid CircuitNotion journeys are intentionally disabled; scoring the free-model and platform evidence"
+          bun run reliability:rescore
       - name: Test the H2 2026 free agentic pool
         env:
           OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -90,6 +86,8 @@ jobs:
           NOVA_RELIABILITY_MODEL='nvidia/nemotron-3-super-120b-a12b:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3-super.json' bun run reliability:scheduled
           NOVA_RELIABILITY_MODEL='z-ai/glm-5.2:free' NOVA_RELIABILITY_REPORT='reports/glm-5.2.json' bun run reliability:scheduled
           exit 0
+      - name: Promote the strongest fully passing free model
+        run: bun run reliability:promote
       - name: Build public spectator data
         run: bun run reliability:publish
       - uses: actions/upload-artifact@v4

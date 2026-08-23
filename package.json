@@ -26,6 +26,7 @@
     "reliability:exa": "bun run scripts/exa-reliability.ts",
     "reliability:rescore": "bun run scripts/reliability-rescore.ts",
     "reliability:scheduled": "bun run scripts/reliability-eval.ts",
+    "reliability:promote": "bun run scripts/reliability-promote.ts",
     "reliability:publish": "bun run scripts/reliability-publish.ts",
     "optimize:map": "bun run scripts/optimization-report.ts"
   },

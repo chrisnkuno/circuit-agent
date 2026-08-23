@@ -19,6 +19,18 @@ afterEach(async () => {
 /** Writes an executable script that decodes NOVA_HOOK_EVENT_B64 and acts on it — a real script, not a mock. */
 async function writeHookScript(scriptPath: string, body: string): Promise<void> {
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  if (process.platform === "win32") {
+    const windowsPath = scriptPath.replace(/\.sh$/, ".cmd");
+    let windowsBody = body
+      .replace(/echo '([^']*)' >&2/g, "echo $1 1>&2")
+      .replace(/echo (\w+) >> (.+)/g, 'echo $1>>"$2"')
+      .replace(/^exit (\d+)$/gm, "exit /b $1");
+    if (body.includes("payload=$(")) {
+      windowsBody = `node -e "const p=Buffer.from(process.env.NOVA_HOOK_EVENT_B64,'base64').toString();process.exit(p.includes('\\\"toolName\\\":\\\"run_command\\\"')&&p.includes('\\\"command\\\":\\\"rm -rf /tmp/x\\\"')?0:1)"`;
+    }
+    await fs.writeFile(windowsPath, `@echo off\r\n${windowsBody.replaceAll("\n", "\r\n")}\r\n`);
+    return;
+  }
   await fs.writeFile(scriptPath, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
 
@@ -32,7 +44,7 @@ describe("hook invocation across shells", () => {
     // The POSIX spelling did not merely misbehave under cmd.exe — `env` is not a program there, so
     // there was nothing to run at all.
     const command = hookCommand(".nova/hooks/pre-tool-use/x.cmd", "eyJhIjoxfQ==", "win32");
-    expect(command).toBe("set NOVA_HOOK_EVENT_B64=eyJhIjoxfQ==&& .nova\\hooks\\pre-tool-use\\x.cmd");
+    expect(command).toBe('set "NOVA_HOOK_EVENT_B64=eyJhIjoxfQ=="&& call ".nova\\hooks\\pre-tool-use\\x.cmd"');
     expect(command).not.toContain("env ");
   });
 
@@ -84,7 +96,7 @@ describe("HookRegistry.local pre-tool-use", () => {
     const outcome = await registry.runPreToolUse("write_file", { path: "a.txt" });
     expect(outcome.blocked).toBe(true);
     const log = await fs.readFile(order, "utf8");
-    expect(log.trim().split("\n")).toEqual(["first", "second"]); // never reached the third
+    expect(log.trim().split(/\r?\n/)).toEqual(["first", "second"]); // never reached the third
   });
 });
 

@@ -720,6 +720,14 @@ describe("external tools merged in from providers", () => {
 describe("hooks wired through the real tool wrapping", () => {
   async function writeHookScript(scriptPath: string, body: string): Promise<void> {
     await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+    if (process.platform === "win32") {
+      const windowsPath = scriptPath.replace(/\.sh$/, ".cmd");
+      const windowsBody = body
+        .replace(/echo '([^']*)' >&2/g, "echo $1 1>&2")
+        .replace(/^exit (\d+)$/gm, "exit /b $1");
+      await fs.writeFile(windowsPath, `@echo off\r\n${windowsBody.replaceAll("\n", "\r\n")}\r\n`);
+      return;
+    }
     await fs.writeFile(scriptPath, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   }
 

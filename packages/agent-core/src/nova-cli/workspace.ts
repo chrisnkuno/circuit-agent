@@ -87,7 +87,10 @@ export async function realPathWithin(root: string, candidate: string): Promise<s
   if (real !== absoluteRoot && !real.startsWith(absoluteRoot + path.sep)) {
     throw new WorkspaceViolation(`path resolves outside the workspace root: ${candidate}`);
   }
-  return real;
+  // Preserve the caller's lexical spelling after using the canonical path for confinement.
+  // macOS commonly canonicalizes /var to /private/var; returning that spelling would make a
+  // workspace-relative result look as though it escaped through several parent directories.
+  return resolved;
 }
 
 /** Path as the user would recognise it — relative to the root, forward-slashed. */

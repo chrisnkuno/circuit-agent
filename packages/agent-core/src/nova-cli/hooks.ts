@@ -59,7 +59,7 @@ function runHookScript(workspace: NovaWorkspace, scriptPath: string, event: Hook
  */
 export function hookCommand(scriptPath: string, payload: string, platform: NodeJS.Platform): string {
   if (platform !== "win32") return `env NOVA_HOOK_EVENT_B64=${payload} ${scriptPath}`;
-  return `set NOVA_HOOK_EVENT_B64=${payload}&& ${scriptPath.split("/").join("\\")}`;
+  return `set "NOVA_HOOK_EVENT_B64=${payload}"&& call "${scriptPath.split("/").join("\\")}"`;
 }
 
 export type PreToolUseOutcome = { blocked: false } | { blocked: true; reason: string };

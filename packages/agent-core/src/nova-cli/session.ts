@@ -139,7 +139,14 @@ export async function loadSession(root: string, id: string): Promise<SessionReco
   try {
     assertSessionId(id);
     const parsed = JSON.parse(await fs.readFile(path.join(sessionDirectory(root), `${id}.json`), "utf8")) as Partial<SessionRecord>;
-    if (!parsed || typeof parsed !== "object" || parsed.id !== id || path.resolve(parsed.root ?? "") !== path.resolve(root)) return null;
+    if (!parsed || typeof parsed !== "object" || parsed.id !== id || typeof parsed.root !== "string") return null;
+    const [storedRoot, requestedRoot] = await Promise.all(
+      [parsed.root, root].map(async (candidate) => fs.realpath(path.resolve(candidate)).catch(() => path.resolve(candidate))),
+    );
+    const rootsMatch = process.platform === "win32"
+      ? storedRoot.toLocaleLowerCase("en-US") === requestedRoot.toLocaleLowerCase("en-US")
+      : storedRoot === requestedRoot;
+    if (!rootsMatch) return null;
     if (!Array.isArray(parsed.messages) || typeof parsed.approvals !== "object" || parsed.approvals === null) return null;
     if (!Number.isSafeInteger(parsed.totalRwf) || (parsed.totalRwf ?? -1) < 0) return null;
     if (typeof parsed.schemaVersion === "number" && parsed.schemaVersion > SESSION_SCHEMA_VERSION) return null;

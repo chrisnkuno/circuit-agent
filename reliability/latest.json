@@ -1,6 +1,6 @@
 {
   "generatedAt": "2026-08-23T03:26:12.671Z",
-  "rescoredAt": "2026-08-23T03:37:01.676Z",
+  "rescoredAt": "2026-08-23T03:56:28.450Z",
   "provider": "circuitnotion",
   "model": "circuit-2-turbo",
   "score": 90,
@@ -35,7 +35,7 @@
   "auditPlatforms": [
     "linux"
   ],
-  "auditTests": 1048,
+  "auditTests": 1051,
   "auditFailures": 0,
   "exaScore": null,
   "observations": [
@@ -635,59 +635,59 @@
     {
       "platform": "linux",
       "architecture": "x64",
-      "generatedAt": "2026-08-23T03:36:38.167Z",
+      "generatedAt": "2026-08-23T03:56:27.535Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 317,
           "failed": 0,
-          "durationMs": 8661
+          "durationMs": 4657
         },
         {
           "name": "taskExecution",
           "passed": true,
-          "tests": 181,
+          "tests": 182,
           "failed": 0,
-          "durationMs": 17654
+          "durationMs": 7713
         },
         {
           "name": "memoryResume",
           "passed": true,
-          "tests": 127,
+          "tests": 128,
           "failed": 0,
-          "durationMs": 19442
+          "durationMs": 9764
         },
         {
           "name": "security",
           "passed": true,
-          "tests": 96,
+          "tests": 97,
           "failed": 0,
-          "durationMs": 4538
+          "durationMs": 2593
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 127,
           "failed": 0,
-          "durationMs": 12343
+          "durationMs": 6389
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 95,
           "failed": 0,
-          "durationMs": 3362
+          "durationMs": 2131
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 105,
           "failed": 0,
-          "durationMs": 4694
+          "durationMs": 2862
         }
       ],
-      "historyStartupP50Ms": 166
+      "historyStartupP50Ms": 160
     }
   ]
 }

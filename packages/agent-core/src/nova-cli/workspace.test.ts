@@ -51,6 +51,20 @@ describe("workspace confinement", () => {
     await fs.rm(outside, { recursive: true, force: true });
   });
 
+  it("reports paths relative to the spelling of an aliased workspace root", async () => {
+    const alias = `${root}-alias`;
+    try {
+      await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return; // Some locked-down Windows environments do not permit links.
+    }
+    try {
+      expect((await readTextFile(alias, "src/main.ts")).path).toBe("src/main.ts");
+    } finally {
+      await fs.unlink(alias).catch(() => undefined);
+    }
+  });
+
   it("refuses binary files and oversized reads rather than feeding them to the model", async () => {
     await fs.writeFile(path.join(root, "image.bin"), Buffer.from([0x89, 0x50, 0x00, 0x01, 0x02]));
     await expect(readTextFile(root, "image.bin")).rejects.toThrow(/binary/);
