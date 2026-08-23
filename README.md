@@ -5,7 +5,7 @@ An early foundation for a task-priced, multi-interface AI agent system.
 Users should know a task's expected RWF cost and maximum approved spend before an agent executes it. Convex persists the durable work state; E2B is the intended isolated execution layer; Circuit Pay is the intended billing adapter.
 
 [![Nova reliability](https://img.shields.io/endpoint?url=https%3A%2F%2Fchrisnkuno.github.io%2Fcircuit-agent%2Fbadge.json)](https://chrisnkuno.github.io/circuit-agent/)
-[![Daily reliability](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-reliability.yml/badge.svg?branch=main)](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-reliability.yml)
+[![Spectator deploy](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-pages.yml/badge.svg?branch=main)](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-pages.yml)
 [![Linux macOS Windows](https://img.shields.io/badge/audited-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-7c5cff)](https://chrisnkuno.github.io/circuit-agent/)
 
 **[Watch Nova work](https://chrisnkuno.github.io/circuit-agent/)** · [inspect the evidence](reliability/latest.json) · [follow daily runs](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-reliability.yml)
