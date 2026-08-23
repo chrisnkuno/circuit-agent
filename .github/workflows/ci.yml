@@ -146,27 +146,23 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Install desktop dependencies
-        working-directory: apps/nova-desktop
-        run: npm ci
-
       # The sidecar imports @circuit-nova/nova-core through its published `exports` map, which
       # points at dist. Compiling before that exists fails on a missing module.
       - run: bun run build:packages
 
       - name: Typecheck the UI and the sidecar
         working-directory: apps/nova-desktop
-        run: npm run typecheck
+        run: bun run typecheck
 
       - name: Build the frontend
         working-directory: apps/nova-desktop
-        run: npm run build
+        run: bun run build
 
       # Cross-compiled from Linux, which is the whole reason `bun build --compile` is used here
       # rather than Node's SEA: producing the Windows artifact does not need a Windows host.
       - name: Compile the sidecar for Linux and Windows
         working-directory: apps/nova-desktop
-        run: npm run sidecar:binary -- x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
+        run: bun run sidecar:binary -- x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
 
       - name: The Windows sidecar must be a real PE executable, not a wrapper
         working-directory: apps/nova-desktop
@@ -214,15 +210,11 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Install desktop dependencies
-        working-directory: apps/nova-desktop
-        run: npm ci
-
       - run: bun run build:packages
 
       - name: Build the installers
         working-directory: apps/nova-desktop
-        run: npm run package:windows
+        run: bun run package:windows
 
       - uses: actions/upload-artifact@v4
         with:
