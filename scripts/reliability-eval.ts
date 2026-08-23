@@ -83,8 +83,12 @@ async function publishFile(
   source: string,
   destination: string,
   kind: "web" | "text",
-): Promise<void> {
-  const content = await fs.readFile(source, "utf8");
+): Promise<boolean> {
+  const content = await fs.readFile(source, "utf8").catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  });
+  if (content === null) return false;
   if (Buffer.byteLength(content) > 250_000)
     throw new Error(`Artifact exceeds 250 KB: ${path.basename(source)}`);
   if (secretPattern.test(content))
@@ -101,6 +105,7 @@ async function publishFile(
     );
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.writeFile(destination, content);
+  return true;
 }
 
 async function publishRunArtifacts(input: {
@@ -109,8 +114,9 @@ async function publishRunArtifacts(input: {
   debugRoot: string;
   summaries: Record<string, string>;
   observations: ReliabilityCase[];
+  runId: string;
 }): Promise<void> {
-  const output = path.join(repo, "reliability", "site", "runs", "latest");
+  const output = path.join(repo, "reliability", "site", "runs", input.runId);
   await fs.rm(output, { recursive: true, force: true });
   const copies: Array<[string, string, "web" | "text"]> = [
     [
@@ -133,8 +139,10 @@ async function publishRunArtifacts(input: {
     [path.join(input.webRoot, "styles.css"), "web/styles.css", "web"],
     [path.join(input.webRoot, "app.js"), "web/app.js", "web"],
   ];
-  for (const [source, relative, kind] of copies)
-    await publishFile(source, path.join(output, relative), kind);
+  const published = new Set<string>();
+  for (const [source, relative, kind] of copies) {
+    if (await publishFile(source, path.join(output, relative), kind)) published.add(relative);
+  }
   for (const [name, summary] of Object.entries(input.summaries)) {
     const safe = `# ${name[0].toUpperCase()}${name.slice(1)} run\n\n${summary.trim()}\n`;
     if (secretPattern.test(safe))
@@ -153,28 +161,27 @@ async function publishRunArtifacts(input: {
     downloads,
   });
   const build = byName.get("build");
-  if (build)
+  const url = (relative: string) => `runs/${input.runId}/${relative}`;
+  if (build && published.has("build/slug.mjs") && published.has("build/slug.test.mjs"))
     build.artifact = files("Slug utility", [
-      { label: "slug.mjs", url: "runs/latest/build/slug.mjs" },
-      { label: "slug.test.mjs", url: "runs/latest/build/slug.test.mjs" },
+      { label: "slug.mjs", url: url("build/slug.mjs") },
+      { label: "slug.test.mjs", url: url("build/slug.test.mjs") },
     ]);
   const web = byName.get("web-build");
-  if (web)
+  if (web && published.has("web/index.html"))
     web.artifact = {
       kind: "web",
       label: "Responsive offline web build",
-      url: "runs/latest/web/index.html",
-      downloads: [
-        { label: "index.html", url: "runs/latest/web/index.html" },
-        { label: "styles.css", url: "runs/latest/web/styles.css" },
-        { label: "app.js", url: "runs/latest/web/app.js" },
-      ],
+      url: url("web/index.html"),
+      downloads: ["index.html", "styles.css", "app.js"]
+        .filter((name) => published.has(`web/${name}`))
+        .map((name) => ({ label: name, url: url(`web/${name}`) })),
     };
   const debug = byName.get("debug");
-  if (debug)
+  if (debug && published.has("debug/math.mjs") && published.has("debug/math.test.mjs"))
     debug.artifact = files("Math repair", [
-      { label: "math.mjs", url: "runs/latest/debug/math.mjs" },
-      { label: "math.test.mjs", url: "runs/latest/debug/math.test.mjs" },
+      { label: "math.mjs", url: url("debug/math.mjs") },
+      { label: "math.test.mjs", url: url("debug/math.test.mjs") },
     ]);
   for (const name of ["search", "defender", "resume"]) {
     const observation = byName.get(name);
@@ -182,9 +189,9 @@ async function publishRunArtifacts(input: {
       observation.artifact = {
         kind: "markdown",
         label: `${name} report`,
-        url: `runs/latest/notes/${name}.md`,
+        url: url(`notes/${name}.md`),
         downloads: [
-          { label: `${name}.md`, url: `runs/latest/notes/${name}.md` },
+          { label: `${name}.md`, url: url(`notes/${name}.md`) },
         ],
       };
   }
@@ -342,7 +349,7 @@ async function runCase(input: {
     ? path.join(input.root, ".nova", "sessions", `${sessionId}.json`)
     : "";
   const saved = sessionFile
-    ? (JSON.parse(await fs.readFile(sessionFile, "utf8")) as {
+    ? (await fs.readFile(sessionFile, "utf8").then((value) => JSON.parse(value)).catch(() => ({})) as {
         messages?: Array<{ content?: string }>;
         mode?: string;
       })
@@ -633,6 +640,11 @@ async function main(): Promise<void> {
     debugRoot,
     summaries,
     observations,
+    runId: reportName === "latest.json"
+      ? "latest"
+      : path.basename(reportName, ".json").replace(/[^A-Za-z0-9._-]/g, "-"),
+  }).catch((error) => {
+    process.stderr.write(`Artifact publication withheld: ${error instanceof Error ? error.message : String(error)}\n`);
   });
 
   const audits = await loadAudits();
