@@ -141,5 +141,5 @@ jobs:
           # A release or another reliability run may update main while the
           # benchmark is running. Replay this small evidence commit first so a
           # non-fast-forward race does not turn a successful run red.
-          git pull --rebase origin main
+          git pull --rebase --autostash origin main
           git push

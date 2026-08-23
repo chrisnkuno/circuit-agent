@@ -377,6 +377,7 @@ async function runCase(input: {
   }
   const session = stream.find((record) => record.type === "session");
   const summary = String(end?.summary ?? "");
+  const runtimeStop = lastRecord(stream, "runtime_stop");
   const usage = (end?.usage ?? {}) as Record<string, number>;
   const actualTokens =
     Number(usage.inputTokens ?? 0) + Number(usage.outputTokens ?? 0);
@@ -412,6 +413,9 @@ async function runCase(input: {
     result.code === 0 && end?.status === "completed" && verified;
   const failureReasons = [
     ...(result.code !== 0 ? [`process exited ${result.code}`] : []),
+    ...(runtimeStop?.status && end?.status !== "completed"
+      ? [`runtime stopped: ${String(runtimeStop.status)}`]
+      : []),
     ...(!end ? ["turn result missing"] : []),
     ...(!sessionId ? ["session record missing"] : []),
     ...(!verified ? ["verification failed"] : []),
@@ -501,6 +505,25 @@ async function main(): Promise<void> {
     path.join(defenderRoot, "server.js"),
     "import { exec } from 'node:child_process';\nexport const lookup = (name) => exec(`grep ${name} users.txt`);\n",
   );
+  await fs.mkdir(path.join(webRoot, ".nova"), { recursive: true });
+  await fs.writeFile(
+    path.join(webRoot, ".nova", "reliability-web.test.mjs"),
+    [
+      'import test from "node:test";',
+      'import assert from "node:assert/strict";',
+      'import { readFile } from "node:fs/promises";',
+      "",
+      'test("offline responsive status page contract", async () => {',
+      '  const [html, css, js] = await Promise.all(["index.html", "styles.css", "app.js"].map((file) => readFile(file, "utf8")));',
+      '  assert.match(html, /<main\\b/i, "index.html must contain a main element");',
+      '  assert.match(html, /<button\\b/i, "index.html must contain a button");',
+      '  assert.match(css, /@media/i, "styles.css must contain a responsive @media rule");',
+      '  assert.match(js, /addEventListener/i, "app.js must attach the button interaction");',
+      '  assert.doesNotMatch(`${html}\\n${css}\\n${js}`, /(?:https?:\\/\\/|<(?:iframe|object|embed|form)\\b)/i, "the page must remain offline and sandboxed");',
+      "});",
+      "",
+    ].join("\n"),
+  );
 
   const observations: ReliabilityCase[] = [];
   const summaries: Record<string, string> = {};
@@ -508,10 +531,11 @@ async function main(): Promise<void> {
     name: "build",
     root: buildRoot,
     modeFlag: "--auto",
+    pace: "gentle",
     target: 45_000,
     latencyTargetMs: 8 * 60_000,
     objective:
-      "Build a dependency-free slug utility in slugger/slug.mjs and export slugify(text). Its contract is: coerce input with String(), normalize NFKD and strip combining marks, lowercase, replace every run of non-ASCII-alphanumeric characters with one hyphen, and trim edge hyphens. In slugger/slug.test.mjs use node:test to cover exactly: 'Hello, World!' -> 'hello-world', 'Café déjà vu' -> 'cafe-deja-vu', 'Version 2.0' -> 'version-2-0', repeated separators, empty input, and idempotence. Run that test and keep the project to those two files only.",
+      "Build a dependency-free slug utility in slugger/slug.mjs and export slugify(text). Its contract is: coerce input with String(), call normalize with the exact uppercase literal \"NFKD\" (lowercase is invalid), strip combining marks, lowercase, replace every run of non-ASCII-alphanumeric characters with one hyphen, and trim edge hyphens. In slugger/slug.test.mjs use node:test to cover exactly: 'Hello, World!' -> 'hello-world', 'Café déjà vu' -> 'cafe-deja-vu', 'Version 2.0' -> 'version-2-0', repeated separators, empty input, and idempotence. Run exactly `node --test slugger/slug.test.mjs`, correct any failure, and keep the project to those two files only.",
     validate: async () =>
       (
         await runProcess(
@@ -544,7 +568,7 @@ async function main(): Promise<void> {
     target: 38_000,
     latencyTargetMs: 8 * 60_000,
     objective:
-      "Build a polished, responsive, dependency-free product status page using only index.html, styles.css, and app.js. Include semantic headings, a visible status card, and an accessible button that changes a status message. Use no external URLs, forms, iframes, images, or dependencies. Do not run verification commands; after writing the three files, summarize and stop because the harness verifies them independently.",
+      "Build a polished, responsive, dependency-free product status page using only index.html, styles.css, and app.js. Include semantic headings, a visible status card, an accessible button that changes a status message, and at least one CSS @media rule. Use no external URLs, forms, iframes, images, or dependencies. After writing the three product files, run exactly `node --test .nova/reliability-web.test.mjs`, correct any failure without editing that provided verifier, and stop only after it passes.",
     validate: async () => {
       const [html, css, js] = await Promise.all([
         fs.readFile(path.join(webRoot, "index.html"), "utf8"),
