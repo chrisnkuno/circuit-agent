@@ -11,14 +11,6 @@
       "sourceUrl": "https://openrouter.ai/cohere/north-mini-code:free"
     },
     {
-      "model": "thinkingmachines/inkling:free",
-      "provider": "OpenRouter",
-      "role": "agentic challenger",
-      "context": 262144,
-      "reason": "Current free multimodal model with tool calling and a 262K context window; selected for direct Nova journey testing.",
-      "sourceUrl": "https://openrouter.ai/thinkingmachines/inkling:free"
-    },
-    {
       "model": "nvidia/nemotron-3.5-lightning:free",
       "provider": "OpenRouter",
       "role": "fast agentic generalist",
@@ -28,6 +20,11 @@
     }
   ],
   "excluded": [
+    {
+      "name": "thinkingmachines/inkling:free",
+      "reason": "Live Nova evaluation completed 0/6 agentic journeys with zero tool calls; unsuitable for this tool-driven benchmark.",
+      "sourceUrl": "https://openrouter.ai/thinkingmachines/inkling:free"
+    },
     {
       "name": "GitHub Models",
       "reason": "The inference service was retired on 2026-07-30.",

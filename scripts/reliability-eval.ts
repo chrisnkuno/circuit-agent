@@ -604,6 +604,7 @@ async function main(): Promise<void> {
     name: "debug",
     root: debugRoot,
     modeFlag: "--auto",
+    pace: "gentle",
     target: 25_000,
     latencyTargetMs: 6 * 60_000,
     objective:
