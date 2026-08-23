@@ -5,18 +5,27 @@ describe("what a model can hold and produce", () => {
   it("gives the current models their real window instead of a 200K guess", () => {
     for (const id of ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"]) {
       expect(capabilitiesFor(id).contextWindow, id).toBe(1_000_000);
-      expect(capabilitiesFor(id).maxOutputTokens, id).toBe(128_000);
     }
+    expect(capabilitiesFor("claude-opus-5").maxOutputTokens).toBe(128_000);
+    expect(capabilitiesFor("claude-sonnet-4-6").maxOutputTokens).toBe(64_000);
   });
 
   it("does not inflate a model that really is 200K", () => {
-    expect(capabilitiesFor("claude-haiku-4-5")).toEqual({ contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false });
+    expect(capabilitiesFor("claude-haiku-4-5")).toEqual({ contextWindow: 200_000, maxOutputTokens: 64_000, supportsEffort: false });
   });
 
-  it("handles CircuitNotion's default alias explicitly without guessing unpublished limits", () => {
+  it("uses CircuitNotion's published limits for the default alias", () => {
     const capabilities = capabilitiesFor("circuit-2-turbo");
-    expect(capabilities).toEqual({ contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false });
+    expect(capabilities).toEqual({ contextWindow: 1_000_000, maxOutputTokens: 384_000, supportsEffort: false });
     expect(capabilities).not.toBe(CONSERVATIVE_CAPABILITIES);
+  });
+
+  it("covers the other CircuitNotion and Moonshot routes", () => {
+    for (const id of ["auto", "circuit-1", "circuit-1-mini", "circuit-2", "circuit-3", "deepseek-v4-flash", "deepseek-v4-pro"]) {
+      expect(capabilitiesFor(id), id).toEqual({ contextWindow: 1_000_000, maxOutputTokens: 384_000, supportsEffort: false });
+    }
+    expect(capabilitiesFor("kimi-k3")).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 1_048_576, supportsEffort: false });
+    expect(capabilitiesFor("kimi-k2.7-code")).toEqual({ contextWindow: 262_144, maxOutputTokens: 32_768, supportsEffort: false });
   });
 
   it("treats an unknown model exactly as Nova did before this table existed", () => {
@@ -50,17 +59,16 @@ describe("what a model can hold and produce", () => {
 
 describe("models matched exactly rather than by family", () => {
   it("gives the verified OpenAI flagships their real window", () => {
-    for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4"]) {
+    for (const id of ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(capabilitiesFor(id), id).toEqual({ contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsEffort: true });
     }
   });
 
-  it("does not hand a smaller sibling the flagship's limits on no evidence", () => {
-    // `gpt-5.4-mini` is a different model whose published numbers nobody has verified here. A
-    // prefix rule would have quietly given it a million-token window.
-    for (const id of ["gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.6", "gpt-5.6-sol-preview"]) {
-      expect(capabilitiesFor(id), id).toEqual(CONSERVATIVE_CAPABILITIES);
+  it("keeps smaller siblings on their own published windows", () => {
+    for (const id of ["gpt-5.4-mini", "gpt-5.4-nano", "gpt-5", "gpt-5-mini", "gpt-5-nano"]) {
+      expect(capabilitiesFor(id).contextWindow, id).toBe(400_000);
     }
+    expect(capabilitiesFor("gpt-5.6-sol-preview")).toEqual(CONSERVATIVE_CAPABILITIES);
   });
 });
 
@@ -70,8 +78,8 @@ describe("the budgets a session derives from its model", () => {
   });
 
   it("never asks for more output than the model will produce", () => {
-    // Haiku's 16K ceiling is below the default, so the default must not raise it.
-    expect(budgetsFor("claude-haiku-4-5").maxOutputTokens).toBe(16_000);
+    // Haiku's 64K ceiling equals the CLI default and must not be raised beyond it.
+    expect(budgetsFor("claude-haiku-4-5").maxOutputTokens).toBe(64_000);
     expect(budgetsFor("who-knows").maxOutputTokens).toBe(16_000);
   });
 

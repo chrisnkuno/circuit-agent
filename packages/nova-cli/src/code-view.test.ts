@@ -114,6 +114,7 @@ describe("rendering a diff", () => {
 describe("the inline file-change view", () => {
   it("titles the panel with the path and badges a write with its size and language", () => {
     const rendered = plain(renderFileChange({ path: "src/app.ts", kind: "write", content: "const a = 1;" }, style()).text);
+    expect(rendered).toContain("new file");
     expect(rendered).toContain("src/app.ts");
     expect(rendered).toContain("typescript");
   });
@@ -123,6 +124,7 @@ describe("the inline file-change view", () => {
       { path: "src/app.ts", kind: "edit", before: "const a = 1;", after: "const a = 2;\nconst b = 3;" },
       style(),
     ).text);
+    expect(rendered).toContain("diff");
     expect(rendered).toContain("+2");
     expect(rendered).toContain("-1");
   });

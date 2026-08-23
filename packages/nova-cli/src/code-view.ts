@@ -273,9 +273,9 @@ export function renderFileChange(
     : [];
 
   return {
-    text: panel([...body, ...foot], style, { title: change.path, badge, tone: change.kind === "edit" ? "accent" : "good" }),
+    text: panel([...body, ...foot], style, { title: `${change.kind === "edit" ? "diff" : "new file"} · ${change.path}`, badge, tone: change.kind === "edit" ? "accent" : "good" }),
     hidden: block.hidden,
-    full: panel(block.full.split("\n"), style, { title: change.path, badge, tone: change.kind === "edit" ? "accent" : "good" }),
+    full: panel(block.full.split("\n"), style, { title: `${change.kind === "edit" ? "diff" : "new file"} · ${change.path}`, badge, tone: change.kind === "edit" ? "accent" : "good" }),
   };
 }
 

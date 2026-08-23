@@ -25,7 +25,7 @@ describe("the models the desktop app offers", () => {
 
   it("prices what the catalog knows and says nothing where it does not", () => {
     const options = buildModelOptions("anthropic", { asOf: "2026-08-10" });
-    const sonnet = options.find((option) => option.model === "claude-sonnet-5");
+    const sonnet = options.find((option) => option.provider === "anthropic" && option.model === "claude-sonnet-5");
     expect(sonnet?.price).toContain("per Mtok");
     // A model with no published rate still appears — marked unpriced rather than guessed at.
     expect(options.every((option) => option.price === undefined || option.price.includes("per Mtok"))).toBe(true);

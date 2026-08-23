@@ -87,12 +87,18 @@ describe("what the transcript shows, under a real pty", () => {
     // buffer even though that is exactly what the terminal draws.
     p.writeLine("write the greeting file");
     await p.waitFor(/answer = /, { timeoutMs: 30_000 });
+    await p.waitFor(/summary/, { timeoutMs: 30_000 });
     const output = plain(p.output());
     expect(output).toContain("hello.ts");
+    expect(output).toContain("tool activity");
+    expect(output).toContain("new file");
+    expect(output).toContain("summary");
     expect(output).toContain('greeting = "hi";');
     expect(output).toContain("answer = 42;");
     // Numbered, because the next thing anyone says about written code is a line number.
     expect(output).toMatch(/1\s+export const greeting/);
+    expect(output.indexOf("tool activity")).toBeLessThan(output.indexOf("new file"));
+    expect(output.indexOf("new file")).toBeLessThan(output.lastIndexOf("summary"));
   }, 60_000);
 
   it("folds a long write and expands it again on request, in the same scrolling transcript", async () => {

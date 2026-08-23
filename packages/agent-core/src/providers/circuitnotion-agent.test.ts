@@ -4,6 +4,11 @@ import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 const usage = { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30, prompt_tokens_details: { cached_tokens: 5 }, completion_tokens_details: { reasoning_tokens: 2 } };
 
 describe("CircuitNotion agent turn provider", () => {
+  it("exposes the live route limits to the session budget", () => {
+    const provider = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "circuit-2-turbo" }, async () => ({ id: "unused", model: "unused", usage, choices: [] }));
+    expect(provider.capabilities).toEqual({ contextWindow: 1_000_000, maxOutputTokens: 384_000, supportsEffort: false });
+  });
+
   it("sends capability-scoped tools and parses tool calls", async () => {
     let body: Record<string, unknown> | undefined;
     const provider = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async (request) => {

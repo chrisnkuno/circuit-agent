@@ -29,6 +29,12 @@ describe("model cost estimation", () => {
     expect(() => priceActualModelUsage(1, 1, { ...prices, inputRwfPerMillionTokens: 0 })).toThrow("positive");
   });
 
+  it("reserves the long-context tier for the whole request once its threshold is crossed", () => {
+    const tiered = { ...prices, largeContext: { aboveInputTokens: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 } };
+    expect(priceActualModelUsage(272_000, 1_000, tiered)).toBe(Math.ceil((272_000 * 2_000 + 1_000 * 8_000) / 1_000_000));
+    expect(priceActualModelUsage(272_001, 1_000, tiered)).toBe(Math.ceil((272_001 * 2_000 * 2 + 1_000 * 8_000 * 1.5) / 1_000_000));
+  });
+
   it("clamps output before a provider call so the approved amount cannot be exceeded", () => {
     const generous = affordableOutputTokens(["small prompt"], 2_000, 100, prices);
     expect(generous).toBe(2_000);

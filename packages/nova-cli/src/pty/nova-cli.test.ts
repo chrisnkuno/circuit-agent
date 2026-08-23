@@ -272,12 +272,10 @@ describe("nova CLI under a real pty", () => {
       // makes the transcript read as two speakers rather than as an undifferentiated log.
       expect(turn).toMatch(/what port does the app use/);
       expect(turn).toMatch(/╭─ .*you/);
-      expect(turn).toMatch(/✦.*Nova/);
+      expect(turn).toMatch(/──.*Nova/);
       // The assistant's own marker must come after the user's, not before — same order a reader
       // would expect a chat transcript to read in.
-      // Searched by pattern rather than by bare glyph: the input bar's own top border carries a
-      // `✦` too, so `indexOf("✦")` would find the chrome instead of the assistant's marker.
-      expect(turn.search(/╭─ .*you/)).toBeLessThan(turn.search(/✦[^\n]*Nova/));
+      expect(turn.search(/╭─ .*you/)).toBeLessThan(turn.search(/──.*Nova/));
     }, 30_000);
 
     it("draws the input bar's three rows onto the reserved footer, not into the transcript", async () => {

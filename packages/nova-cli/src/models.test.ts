@@ -90,8 +90,8 @@ describe("matching a model by partial name", () => {
   const catalog = buildModelCatalog(configured, "2026-08-10");
 
   it("resolves a name that identifies exactly one model, inferring the provider", () => {
-    const found = matchModelQuery(catalog, "claude-haiku-4-5");
-    expect(found).toMatchObject({ kind: "match", choice: { provider: "anthropic", model: "claude-haiku-4-5" } });
+    const found = matchModelQuery(catalog, "claude-opus-4-7");
+    expect(found).toMatchObject({ kind: "match", choice: { provider: "anthropic", model: "claude-opus-4-7" } });
   });
 
   it("prefers an exact id over the longer models it is a prefix of", () => {
@@ -108,7 +108,7 @@ describe("matching a model by partial name", () => {
   });
 
   it("is case-insensitive, because model ids are typed from memory", () => {
-    expect(matchModelQuery(catalog, "CLAUDE-HAIKU-4-5")).toMatchObject({ kind: "match" });
+    expect(matchModelQuery(catalog, "CLAUDE-OPUS-4-7")).toMatchObject({ kind: "match" });
   });
 
   it("reports a tie instead of guessing, and names the candidates", () => {

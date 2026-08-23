@@ -11,20 +11,20 @@
       "sourceUrl": "https://openrouter.ai/cohere/north-mini-code:free"
     },
     {
-      "model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "model": "thinkingmachines/inkling:free",
       "provider": "OpenRouter",
-      "role": "fast agentic generalist",
+      "role": "agentic challenger",
       "context": 262144,
-      "reason": "Agentic and SWE-Bench-oriented, with tool calling, structured outputs, and stronger observed availability than Ultra.",
-      "sourceUrl": "https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free"
+      "reason": "Current free multimodal model with tool calling and a 262K context window; selected for direct Nova journey testing.",
+      "sourceUrl": "https://openrouter.ai/thinkingmachines/inkling:free"
     },
     {
-      "model": "z-ai/glm-5.2:free",
+      "model": "nvidia/nemotron-3.5-lightning:free",
       "provider": "OpenRouter",
-      "role": "long-horizon challenger",
-      "context": 256000,
-      "reason": "Released for project-level software engineering, tool use, and multi-step automation.",
-      "sourceUrl": "https://openrouter.ai/z-ai/glm-5.2:free"
+      "role": "fast agentic generalist",
+      "context": 1000000,
+      "reason": "Current zero-cost Lightning route with tool choice, tool calling, and a 1M context window.",
+      "sourceUrl": "https://openrouter.ai/nvidia/nemotron-3.5-lightning:free"
     }
   ],
   "excluded": [
@@ -36,6 +36,14 @@
     {
       "name": "openrouter/free",
       "reason": "Useful as failover, but random model selection makes model-level reliability scores irreproducible."
+    },
+    {
+      "name": "z-ai/glm-5.2:free",
+      "reason": "The latest retained run completed 0/6 journeys with a 45.5% provider failure rate."
+    },
+    {
+      "name": "nvidia/nemotron-3-super-120b-a12b:free",
+      "reason": "The latest retained run completed only 3/6 journeys; Lightning replaces it in the fast pool."
     }
   ]
 }

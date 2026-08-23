@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL } from "./circuitnotion-http";
 import type { AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "../agent-runtime";
 import { collectChatStream, toWireMessages, turnFromChatResponse, type ChatResponse, type ChatStreamChunk } from "./openai-compatible";
+import { capabilitiesFor, type ModelCapabilities } from "./model-capabilities";
 
 export type { ChatResponse };
 
@@ -21,10 +22,13 @@ const PROMPT_CACHE_KEY = "nova-agent-tools-v1";
 /** OpenAI-compatible multi-turn tool adapter for CircuitNotion's Chat Completions API. */
 export class CircuitNotionAgentTurnProvider implements AgentTurnProvider {
   private readonly call: ChatCall;
+  /** Live catalog limits for the selected route, used to size context and output budgets. */
+  readonly capabilities: ModelCapabilities;
 
   constructor(private readonly options: CircuitNotionAgentOptions, call?: ChatCall) {
     if (!options.apiKey.trim()) throw new Error("CIRCUITNOTION_API_KEY is required");
     if (!options.model.trim()) throw new Error("CIRCUITNOTION_MODEL is required");
+    this.capabilities = capabilitiesFor(options.model);
     if (call) this.call = call;
     else {
       const client = new OpenAI({ apiKey: options.apiKey, baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL, defaultHeaders: buildCircuitNotionHeaders(options.relaySecret) });

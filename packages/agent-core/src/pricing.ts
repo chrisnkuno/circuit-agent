@@ -53,6 +53,8 @@ export type PriceRecord = {
    * denominators of the same call.
    */
   rates: Readonly<Record<string, number>>;
+  /** A provider may multiply the whole token request after an input-context threshold. */
+  largeContext?: TokenPrices["largeContext"];
   /** Where the number came from, so a disputed charge has somewhere to be checked against. */
   source: string;
   /** ISO date this rate began applying. */
@@ -87,6 +89,11 @@ export function validatePriceRecord(record: PriceRecord): PriceRecord {
   if (meters.length === 0) throw new Error(`Price for ${record.provider}/${record.model} has no rates`);
   for (const [meter, rate] of meters) {
     if (!Number.isFinite(rate) || rate < 0) throw new Error(`Rate "${meter}" for ${record.provider}/${record.model} must be a non-negative number`);
+  }
+  if (record.largeContext) {
+    const { aboveInputTokens, inputMultiplier, outputMultiplier } = record.largeContext;
+    if (!Number.isSafeInteger(aboveInputTokens) || aboveInputTokens < 0) throw new Error(`Large-context threshold for ${record.provider}/${record.model} must be a non-negative integer`);
+    if (!(inputMultiplier > 0) || !(outputMultiplier > 0)) throw new Error(`Large-context multipliers for ${record.provider}/${record.model} must be positive`);
   }
   return record;
 }
@@ -171,7 +178,7 @@ export function tokenPricesFor(record: PriceRecord): TokenPrices {
   // `tokenPrices` takes per-million rates; scale when a record quotes a different denominator so a
   // provider that publishes per-thousand is still recorded in its own units.
   const scale = 1_000_000 / record.per;
-  return tokenPrices(record.currency, input * scale, output * scale, cachedInput === undefined ? undefined : cachedInput * scale);
+  return tokenPrices(record.currency, input * scale, output * scale, cachedInput === undefined ? undefined : cachedInput * scale, record.largeContext);
 }
 
 /** Convenience for the common path: look up a model and get prices the ledger can use. */

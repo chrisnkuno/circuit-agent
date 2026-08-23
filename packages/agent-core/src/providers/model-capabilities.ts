@@ -56,14 +56,19 @@ export const CONSERVATIVE_CAPABILITIES: ModelCapabilities = { contextWindow: 200
  * OpenAI-compatible gateways serve even though Anthropic's own ids carry no date) resolves to its
  * family rather than falling through to the conservative default.
  */
-const KNOWN_CAPABILITIES: ReadonlyArray<{ prefix: string; match: "prefix" | "exact"; capabilities: ModelCapabilities }> = [
-  /**
-   * CircuitNotion documents `circuit-2-turbo` as its recommended speed-optimized everyday alias
-   * and its API default, but does not publish a numeric context or output ceiling. Keep an explicit
-   * conservative policy (checked 2026-08-23) so the alias cannot accidentally inherit the much
-   * larger limits of whichever provider model it may route to on a given deployment.
-   */
-  { prefix: "circuit-2-turbo", match: "exact", capabilities: { contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false } },
+type CapabilityEntry = { prefix: string; match: "prefix" | "exact"; capabilities: ModelCapabilities };
+
+function exactCapabilities(models: readonly string[], contextWindow: number, maxOutputTokens: number, supportsEffort = false): CapabilityEntry[] {
+  return models.map((prefix) => ({ prefix, match: "exact", capabilities: { contextWindow, maxOutputTokens, supportsEffort } }));
+}
+
+const KNOWN_CAPABILITIES: ReadonlyArray<CapabilityEntry> = [
+  // CircuitNotion live catalog, GET /v1/models, recorded 2026-08-23. These are explicit model
+  // contracts, not guesses about whichever upstream a route happens to select.
+  ...exactCapabilities(["auto", "circuit-1", "circuit-1-mini", "circuit-2", "circuit-2-turbo", "circuit-3", "deepseek-v4-flash", "deepseek-v4-pro"], 1_000_000, 384_000),
+  ...exactCapabilities(["kimi", "kimi-k3"], 1_048_576, 1_048_576),
+  ...exactCapabilities(["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2", "kimi-k2.5"], 262_144, 32_768),
+
   { prefix: "claude-fable-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   { prefix: "claude-mythos-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   { prefix: "claude-opus-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
@@ -71,8 +76,10 @@ const KNOWN_CAPABILITIES: ReadonlyArray<{ prefix: string; match: "prefix" | "exa
   { prefix: "claude-opus-4-7", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   { prefix: "claude-opus-4-6", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   { prefix: "claude-sonnet-5", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
-  { prefix: "claude-sonnet-4-6", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
-  { prefix: "claude-haiku-4-5", match: "prefix", capabilities: { contextWindow: 200_000, maxOutputTokens: 16_000, supportsEffort: false } },
+  { prefix: "claude-sonnet-4-6", match: "prefix", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 64_000, supportsEffort: true } },
+  { prefix: "claude-sonnet-4-5", match: "prefix", capabilities: { contextWindow: 200_000, maxOutputTokens: 64_000, supportsEffort: true } },
+  { prefix: "claude-haiku-4-5", match: "prefix", capabilities: { contextWindow: 200_000, maxOutputTokens: 64_000, supportsEffort: false } },
+  { prefix: "claude", match: "exact", capabilities: { contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsEffort: true } },
   /**
    * OpenAI figures: developers.openai.com model pages, fetched 2026-08-22.
    *
@@ -83,10 +90,12 @@ const KNOWN_CAPABILITIES: ReadonlyArray<{ prefix: string; match: "prefix" | "exa
    * no evidence, which is exactly the optimism this table exists to avoid: they fall through to the
    * conservative default until someone verifies their real numbers.
    */
-  { prefix: "gpt-5.6-sol", match: "exact", capabilities: { contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsEffort: true } },
-  { prefix: "gpt-5.6-terra", match: "exact", capabilities: { contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsEffort: true } },
-  { prefix: "gpt-5.6-luna", match: "exact", capabilities: { contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsEffort: true } },
-  { prefix: "gpt-5.4", match: "exact", capabilities: { contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsEffort: true } },
+  ...exactCapabilities(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], 1_050_000, 128_000, true),
+  ...exactCapabilities(["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"], 1_050_000, 128_000),
+  ...exactCapabilities(["gpt-5.4-mini", "gpt-5.4-nano", "gpt-5", "gpt-5-mini", "gpt-5-nano"], 400_000, 128_000),
+  ...exactCapabilities(["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"], 1_047_576, 32_768),
+  ...exactCapabilities(["gpt-4o", "gpt-4o-mini"], 128_000, 16_384),
+  ...exactCapabilities(["o4-mini", "o3", "o3-mini", "o3-pro"], 200_000, 100_000),
 ];
 
 /**

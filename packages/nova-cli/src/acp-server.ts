@@ -132,10 +132,11 @@ export async function runAcpServer(options: AcpServerOptions): Promise<number> {
  * Deliberately the inexact form: the ACP path has no approved currency budget to enforce, so this
  * is only the runaway ceiling, and a catalog of 1/1 would make that ceiling meaningless.
  */
-function priceCatalogFor(prices: { inputPerMillion: number; outputPerMillion: number } | undefined) {
+function priceCatalogFor(prices: { inputPerMillion: number; outputPerMillion: number; largeContext?: { aboveInputTokens: number; inputMultiplier: number; outputMultiplier: number } } | undefined) {
   if (!prices) return { inputRwfPerMillionTokens: 1, outputRwfPerMillionTokens: 1 };
   return {
     inputRwfPerMillionTokens: Math.max(1, Math.round(prices.inputPerMillion / 1_000_000)),
     outputRwfPerMillionTokens: Math.max(1, Math.round(prices.outputPerMillion / 1_000_000)),
+    ...(prices.largeContext ? { largeContext: prices.largeContext } : {}),
   };
 }

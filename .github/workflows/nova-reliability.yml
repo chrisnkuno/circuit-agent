@@ -51,7 +51,9 @@ jobs:
       name: github-pages
     env:
       EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
-      NOVA_RELIABILITY_SPACING_MS: 120000
+      # Run journeys back-to-back. Provider retries already protect transient
+      # failures, and the previous two-minute gap added 30 minutes to this pool.
+      NOVA_RELIABILITY_SPACING_MS: 0
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -93,12 +95,12 @@ jobs:
           NOVA_RELIABILITY_MODEL='cohere/north-mini-code:free' NOVA_RELIABILITY_REPORT='reports/north-mini-code.json' bun run reliability:scheduled
           north_exit=$?
           if [[ $north_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'cohere/north-mini-code:free' "$north_exit"; fi
-          NOVA_RELIABILITY_MODEL='nvidia/nemotron-3-super-120b-a12b:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3-super.json' bun run reliability:scheduled
-          nemotron_exit=$?
-          if [[ $nemotron_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'nvidia/nemotron-3-super-120b-a12b:free' "$nemotron_exit"; fi
-          NOVA_RELIABILITY_MODEL='z-ai/glm-5.2:free' NOVA_RELIABILITY_REPORT='reports/glm-5.2.json' bun run reliability:scheduled
-          glm_exit=$?
-          if [[ $glm_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'z-ai/glm-5.2:free' "$glm_exit"; fi
+          NOVA_RELIABILITY_MODEL='thinkingmachines/inkling:free' NOVA_RELIABILITY_REPORT='reports/inkling.json' bun run reliability:scheduled
+          inkling_exit=$?
+          if [[ $inkling_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'thinkingmachines/inkling:free' "$inkling_exit"; fi
+          NOVA_RELIABILITY_MODEL='nvidia/nemotron-3.5-lightning:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3.5-lightning.json' bun run reliability:scheduled
+          lightning_exit=$?
+          if [[ $lightning_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'nvidia/nemotron-3.5-lightning:free' "$lightning_exit"; fi
           exit 0
       - name: Promote the strongest fully passing free model
         run: bun run reliability:promote
@@ -130,4 +132,8 @@ jobs:
           git config user.email "nova-reliability[bot]@users.noreply.github.com"
           git add README.md reliability/latest.json
           git commit -m "chore: refresh Nova reliability score"
+          # A release or another reliability run may update main while the
+          # benchmark is running. Replay this small evidence commit first so a
+          # non-fast-forward race does not turn a successful run red.
+          git pull --rebase origin main
           git push

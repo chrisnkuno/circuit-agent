@@ -66,6 +66,12 @@ export type ModelPriceCatalog = {
    * overstates by an order of magnitude on a long session.
    */
   cachedInputRwfPerMillionTokens?: number;
+  /** Whole-request surcharge used by models whose long-context tier starts at a fixed input size. */
+  largeContext?: {
+    aboveInputTokens: number;
+    inputMultiplier: number;
+    outputMultiplier: number;
+  };
 };
 
 export type ModelCostEstimate = {
@@ -85,7 +91,17 @@ function assertTokens(value: number, label: string): void {
 }
 
 function costRwf(inputTokens: number, outputTokens: number, prices: ModelPriceCatalog): number {
-  return Math.ceil((inputTokens * prices.inputRwfPerMillionTokens + outputTokens * prices.outputRwfPerMillionTokens) / 1_000_000);
+  const tier = prices.largeContext && inputTokens > prices.largeContext.aboveInputTokens ? prices.largeContext : undefined;
+  return Math.ceil((
+    inputTokens * prices.inputRwfPerMillionTokens * (tier?.inputMultiplier ?? 1)
+    + outputTokens * prices.outputRwfPerMillionTokens * (tier?.outputMultiplier ?? 1)
+  ) / 1_000_000);
+}
+
+function effectiveOutputRate(inputTokens: number, prices: ModelPriceCatalog): number {
+  return prices.outputRwfPerMillionTokens * (
+    prices.largeContext && inputTokens > prices.largeContext.aboveInputTokens ? prices.largeContext.outputMultiplier : 1
+  );
 }
 
 /**
@@ -142,7 +158,7 @@ export function affordableOutputTokensFor(estimate: TokenEstimate, requestedOutp
   assertTokens(approvedRwf, "approvedRwf");
   const availableForOutput = approvedRwf - costRwf(estimate.maximumInputTokens, 0, prices);
   if (availableForOutput <= 0) return 0;
-  const affordable = Math.floor((availableForOutput * 1_000_000) / prices.outputRwfPerMillionTokens);
+  const affordable = Math.floor((availableForOutput * 1_000_000) / effectiveOutputRate(estimate.maximumInputTokens, prices));
   return Math.max(0, Math.min(requestedOutputTokens, affordable));
 }
 
@@ -171,7 +187,8 @@ export function affordableOutputTokens(parts: string[], requestedOutputTokens: n
   const inputCost = estimateModelCost(parts, 0, prices).maximumRwf;
   const availableForOutput = approvedRwf - inputCost;
   if (availableForOutput <= 0) return 0;
-  const affordable = Math.floor((availableForOutput * 1_000_000) / prices.outputRwfPerMillionTokens);
+  const estimate = approximateInputTokens(parts);
+  const affordable = Math.floor((availableForOutput * 1_000_000) / effectiveOutputRate(estimate.maximumInputTokens, prices));
   return Math.max(0, Math.min(requestedOutputTokens, affordable));
 }
 
@@ -193,8 +210,14 @@ export function priceUsageWithCache(
   assertTokens(usage.cachedInputTokens, "cachedInputTokens");
   // Providers report cached tokens as a subset of input tokens, not in addition to them.
   const uncached = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
-  const full = priceActualModelUsage(uncached, usage.outputTokens, prices);
-  return full + Math.round((usage.cachedInputTokens * prices.cachedInputRwfPerMillionTokens) / 1_000_000);
+  const tier = prices.largeContext && usage.inputTokens > prices.largeContext.aboveInputTokens ? prices.largeContext : undefined;
+  const inputMultiplier = tier?.inputMultiplier ?? 1;
+  const outputMultiplier = tier?.outputMultiplier ?? 1;
+  const full = Math.ceil((
+    uncached * prices.inputRwfPerMillionTokens * inputMultiplier
+    + usage.outputTokens * prices.outputRwfPerMillionTokens * outputMultiplier
+  ) / 1_000_000);
+  return full + Math.round((usage.cachedInputTokens * prices.cachedInputRwfPerMillionTokens * inputMultiplier) / 1_000_000);
 }
 
 export function priceActualModelUsage(inputTokens: number, outputTokens: number, prices: ModelPriceCatalog): number {

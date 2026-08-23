@@ -16,7 +16,7 @@ import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
 import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { catalogPrices, describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
-import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money } from "@circuit-nova/nova-core/money";
+import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money, type TokenPrices } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
@@ -540,6 +540,8 @@ const pendingCalls = new Map<string, {
 }>();
 /** Paths successfully written or edited this turn, for the "files modified" footer. */
 let touchedFiles = new Set<string>();
+/** One labelled tool section per turn, so operational logs do not blend into the answer. */
+let toolSectionAnnounced = false;
 
 /** Points the renderer at the colour depth, glyph repertoire and terminal the session actually has. */
 export function configureRendering(
@@ -554,6 +556,15 @@ export function configureRendering(
   renderDepth = depth;
   palette = themePalette;
   markdown = new MarkdownStream(out, depth, contentWidth, live, glyphSet);
+  toolSectionAnnounced = false;
+  activity.awaitingFirstDelta = false;
+  activity.toolCalls = 0;
+  activity.tokens = 0;
+  activity.phase = "thinking";
+  activity.operation = undefined;
+  activity.steps = undefined;
+  touchedFiles = new Set();
+  forgetToolLines();
 }
 
 /** The width/depth/glyph triple every section renderer takes, from the live terminal. */
@@ -730,7 +741,10 @@ export function renderEvent(event: NovaEvent): void {
     // The first delta of a turn is the one moment worth a header: it is where a reader's eye needs
     // to land to tell "the assistant is now speaking" apart from the tool lines and the user's own
     // request above it. Every delta after the first is the same reply continuing, not a new one.
-    if (activity.awaitingFirstDelta) out.write(`\n${style.dim(glyphs.star)} ${style.bold("Nova")}\n`);
+    if (activity.awaitingFirstDelta) {
+      const label = activity.toolCalls > 0 || touchedFiles.size > 0 ? "summary" : "Nova";
+      out.write(`\n${rule(sectionStyle(), { label, tone: "accent" })}\n`);
+    }
     // The model is visibly talking now, so animation yields the row to streamed Markdown.
     // This may be the first answer of the turn or the answer after a tool operation. Tool calls
     // restart the spinner even after earlier prose, so every new visible delta owns the screen and
@@ -766,6 +780,13 @@ export function renderEvent(event: NovaEvent): void {
     return;
   }
   if (runtime.type === "tool_call") {
+    if (!toolSectionAnnounced) {
+      out.write(`\n${rule(sectionStyle(), { label: "tool activity", tone: "neutral" })}\n`);
+      toolSectionAnnounced = true;
+    }
+    // If the model spoke before acting, the next prose is a new answer segment after the tools,
+    // not a continuation of the preamble. Give that final segment its own summary divider.
+    activity.awaitingFirstDelta = true;
     const detail = describeToolCall(runtime.toolName, runtime.arguments);
     // A second call announced while the first is still open makes both part of one concurrent
     // batch — retroactively mark the still-open ones too, so the whole group reads as a lane
@@ -1123,11 +1144,12 @@ async function modelChoicesForSettingsField(
   });
 }
 
-function modelPriceCatalogFor(prices: { inputPerMillion: number; outputPerMillion: number } | undefined, exact: boolean) {
+function modelPriceCatalogFor(prices: Pick<TokenPrices, "inputPerMillion" | "outputPerMillion" | "largeContext"> | undefined, exact: boolean) {
   if (!prices) return { inputRwfPerMillionTokens: 1, outputRwfPerMillionTokens: 1 };
-  return exact
+  const rates = exact
     ? { inputRwfPerMillionTokens: prices.inputPerMillion, outputRwfPerMillionTokens: prices.outputPerMillion }
     : { inputRwfPerMillionTokens: Math.max(1, Math.round(prices.inputPerMillion / 1_000_000)), outputRwfPerMillionTokens: Math.max(1, Math.round(prices.outputPerMillion / 1_000_000)) };
+  return { ...rates, ...(prices.largeContext ? { largeContext: prices.largeContext } : {}) };
 }
 
 /**
@@ -2464,6 +2486,7 @@ async function main(): Promise<number> {
     activity.operation = undefined;
     activity.steps = undefined;
     touchedFiles = new Set();
+    toolSectionAnnounced = false;
     forgetToolLines();
     markdown.reset();
     if (ttyMode) {
@@ -2525,9 +2548,12 @@ async function main(): Promise<number> {
       // A provider that cannot stream reaches here with the whole answer at once. It gets the same
       // markdown treatment the streamed path gives it, so the two are indistinguishable on screen.
       const asMarkdown = (text: string) => renderMarkdown(text, { width: contentWidth(), depth });
-      // A provider that never streamed never printed the "✦ Nova" header renderEvent's first-delta
+      // A provider that never streamed never printed renderEvent's assistant-section divider
       // branch owns — this is the one other place a reply begins, so it owns the header here.
-      if (!streamedAnswer) out.write(`\n${style.dim(glyphs.star)} ${style.bold("Nova")}\n`);
+      if (!streamedAnswer) {
+        const label = activity.toolCalls > 0 || touchedFiles.size > 0 ? "summary" : "Nova";
+        out.write(`\n${rule(sectionStyle(), { label, tone: "accent" })}\n`);
+      }
       if (result.status !== "completed" && spokenText && !streamedAnswer && !result.summary.includes(spokenText)) {
         out.write(`\n${asMarkdown(spokenText)}\n`);
       }

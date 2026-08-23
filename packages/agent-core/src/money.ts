@@ -135,14 +135,21 @@ export type TokenPrices = {
   outputPerMillion: number;
   /** Providers that serve cached input at a discount publish it here. */
   cachedInputPerMillion?: number;
+  /** Whole-request multipliers applied once an input-token threshold is exceeded. */
+  largeContext?: {
+    aboveInputTokens: number;
+    inputMultiplier: number;
+    outputMultiplier: number;
+  };
 };
 
-export function tokenPrices(currency: Currency, input: number, output: number, cachedInput?: number): TokenPrices {
+export function tokenPrices(currency: Currency, input: number, output: number, cachedInput?: number, largeContext?: TokenPrices["largeContext"]): TokenPrices {
   return {
     currency,
     inputPerMillion: Math.round(input * MICROS_PER_UNIT),
     outputPerMillion: Math.round(output * MICROS_PER_UNIT),
     ...(cachedInput !== undefined ? { cachedInputPerMillion: Math.round(cachedInput * MICROS_PER_UNIT) } : {}),
+    ...(largeContext ? { largeContext } : {}),
   };
 }
 
@@ -159,11 +166,16 @@ export type TokenUsage = {
  * way, and treating them as extra would double-count the cheapest part of a long session.
  */
 export function priceUsage(usage: TokenUsage, prices: TokenPrices): Money {
+  const tier = prices.largeContext && usage.inputTokens > prices.largeContext.aboveInputTokens
+    ? prices.largeContext
+    : undefined;
+  const inputMultiplier = tier?.inputMultiplier ?? 1;
+  const outputMultiplier = tier?.outputMultiplier ?? 1;
   const cached = prices.cachedInputPerMillion === undefined ? 0 : Math.min(usage.cachedInputTokens ?? 0, usage.inputTokens);
   const uncached = usage.inputTokens - cached;
   const micros =
-    (uncached * prices.inputPerMillion) / 1_000_000 +
-    (cached * (prices.cachedInputPerMillion ?? 0)) / 1_000_000 +
-    (usage.outputTokens * prices.outputPerMillion) / 1_000_000;
+    (uncached * prices.inputPerMillion * inputMultiplier) / 1_000_000 +
+    (cached * (prices.cachedInputPerMillion ?? 0) * inputMultiplier) / 1_000_000 +
+    (usage.outputTokens * prices.outputPerMillion * outputMultiplier) / 1_000_000;
   return money(micros, prices.currency);
 }

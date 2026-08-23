@@ -54,54 +54,79 @@ function tokens(provider: string, model: string, currency: string, input: number
   };
 }
 
-const CIRCUITNOTION_SOURCE = "CircuitNotion pricing catalog (user-supplied RWF rate card, recorded 2026-08-10)";
-const CIRCUITNOTION_VERIFIED = "2026-08-10";
+const CIRCUITNOTION_SOURCE = "platform.circuitnotion.com live catalog (GET /v1/models, recorded 2026-08-23)";
+const CIRCUITNOTION_VERIFIED = "2026-08-23";
 
-const circuitNotionTokens = (model: string, input: number, output: number, cachedInput: number) =>
+const circuitNotionTokens = (model: string, input: number, output: number, cachedInput?: number) =>
   tokens("circuitnotion", model, "RWF", input, output, cachedInput, CIRCUITNOTION_SOURCE, CIRCUITNOTION_VERIFIED);
+
+const GPT_56_LARGE_CONTEXT = { aboveInputTokens: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 } as const;
+const circuitNotionGpt56 = (model: string, input: number, output: number): PriceRecord => ({
+  ...circuitNotionTokens(model, input, output),
+  largeContext: GPT_56_LARGE_CONTEXT,
+});
 
 /**
  * CircuitNotion's own catalog: not one model family but a menu CircuitNotion prices and bills in
  * RWF, spanning several underlying model generations — the OpenAI-named entries and the DeepSeek
  * entries are exactly as real for `CIRCUITNOTION_MODEL` as the `gpt-5.6-*` house names are. This
- * table is the authoritative source for this build: CircuitNotion does not publish a complete public
- * price page (see the gap register), so these rates come from the operator directly rather than a
- * scraped page — the same trust level as an invoice.
+ * table is the authoritative source for this build. It mirrors the live `/v1/models` catalog, while
+ * keeping every routed model under the `circuitnotion` provider because that is the account that
+ * bills the CLI. The upstream-provider label in the web catalog describes routing, not who invoices
+ * this request. The page does not publish cache-read rates, so none are invented here.
  */
 const CIRCUITNOTION: PriceRecord[] = [
-  // GPT-5.6 — CircuitNotion's own frontier tier, house-named.
-  circuitNotionTokens("gpt-5.6", 8_050, 48_300, 805),
-  circuitNotionTokens("gpt-5.6-sol", 8_050, 48_300, 805),
-  circuitNotionTokens("gpt-5.6-terra", 4_025, 24_150, 402.5),
-  circuitNotionTokens("gpt-5.6-luna", 1_610, 9_660, 161),
+  // CircuitNotion routes.
+  ...["auto", "circuit-1", "circuit-1-mini", "circuit-2-turbo"].map((model) => circuitNotionTokens(model, 304.18, 608.35)),
+  ...["circuit-2", "circuit-3"].map((model) => circuitNotionTokens(model, 945.11, 1_890.23)),
+
+  // GPT-5.6. The live catalog additionally applies 2x input and 1.5x output to requests whose
+  // input exceeds 272,000 tokens; the base rates remain the values displayed in model lists.
+  circuitNotionGpt56("gpt-5.6", 12_166.98, 73_001.88),
+  circuitNotionGpt56("gpt-5.6-sol", 12_166.98, 73_001.88),
+  circuitNotionGpt56("gpt-5.6-terra", 6_083.49, 36_500.94),
+  circuitNotionGpt56("gpt-5.6-luna", 2_433.4, 14_600.38),
 
   // GPT-5.x
-  circuitNotionTokens("gpt-5.5", 8_050, 48_300, 805),
-  circuitNotionTokens("gpt-5.5-pro", 48_300, 289_800, 48_300),
-  circuitNotionTokens("gpt-5.4", 4_025, 24_150, 402.5),
-  circuitNotionTokens("gpt-5.4-mini", 1_207.5, 7_245, 120.75),
-  circuitNotionTokens("gpt-5.4-nano", 322, 2_012.5, 32.20),
-  circuitNotionTokens("gpt-5.4-pro", 48_300, 289_800, 48_300),
-  circuitNotionTokens("gpt-5", 2_012.5, 16_100, 201.25),
-  circuitNotionTokens("gpt-5-mini", 402.5, 3_220, 40.25),
-  circuitNotionTokens("gpt-5-nano", 80.50, 644, 40.25),
+  circuitNotionTokens("gpt-5.5", 12_166.98, 73_001.88),
+  circuitNotionTokens("gpt-5.5-pro", 73_001.88, 438_011.28),
+  circuitNotionTokens("gpt-5.4", 6_083.49, 36_500.94),
+  circuitNotionTokens("gpt-5.4-mini", 1_825.04, 10_950.28),
+  circuitNotionTokens("gpt-5.4-nano", 486.68, 3_041.75),
+  circuitNotionTokens("gpt-5.4-pro", 73_001.88, 438_011.28),
+  circuitNotionTokens("gpt-5", 3_041.75, 24_333.96),
+  circuitNotionTokens("gpt-5-mini", 608.36, 4_866.79),
+  circuitNotionTokens("gpt-5-nano", 121.67, 973.36),
 
   // GPT-4.x
-  circuitNotionTokens("gpt-4.1", 3_220, 12_880, 805),
-  circuitNotionTokens("gpt-4.1-mini", 644, 2_576, 161),
-  circuitNotionTokens("gpt-4.1-nano", 161, 644, 40.25),
-  circuitNotionTokens("gpt-4o", 4_025, 16_100, 2_012.5),
-  circuitNotionTokens("gpt-4o-mini", 241.5, 966, 120.75),
+  circuitNotionTokens("gpt-4.1", 4_345.35, 17_381.4),
+  circuitNotionTokens("gpt-4.1-mini", 869.08, 3_476.28),
+  circuitNotionTokens("gpt-4.1-nano", 217.26, 869.08),
+  circuitNotionTokens("gpt-4o", 5_431.69, 21_726.75),
+  circuitNotionTokens("gpt-4o-mini", 325.9, 1_303.6),
 
   // Reasoning
-  circuitNotionTokens("o4-mini", 1_771, 7_084, 442.75),
-  circuitNotionTokens("o3", 3_220, 12_880, 805),
-  circuitNotionTokens("o3-mini", 1_771, 7_084, 885.5),
-  circuitNotionTokens("o3-pro", 32_200, 128_800, 32_200),
+  circuitNotionTokens("o4-mini", 2_676.73, 10_706.95),
+  circuitNotionTokens("o3", 4_866.79, 19_467.17),
+  circuitNotionTokens("o3-mini", 2_676.73, 10_706.95),
+  circuitNotionTokens("o3-pro", 48_667.92, 194_671.68),
 
   // DeepSeek
-  circuitNotionTokens("deepseek-v4-flash", 225.4, 450.8, 4.51),
-  circuitNotionTokens("deepseek-v4-pro", 700.35, 1_400.7, 5.84),
+  circuitNotionTokens("deepseek-v4-flash", 304.18, 608.35),
+  circuitNotionTokens("deepseek-v4-pro", 945.11, 1_890.23),
+
+  // Moonshot.
+  ...["kimi", "kimi-k3"].map((model) => circuitNotionTokens(model, 6_518.03, 32_590.13)),
+  ...["kimi-k2.7-code", "kimi-k2.6", "kimi-k2"].map((model) => circuitNotionTokens(model, 2_064.04, 8_690.7)),
+  circuitNotionTokens("kimi-k2.7-code-highspeed", 4_128.09, 17_381.4),
+  circuitNotionTokens("kimi-k2.5", 1_303.6, 6_518.03),
+
+  // Anthropic models routed and billed by CircuitNotion.
+  ...["claude", "claude-sonnet-5"].map((model) => circuitNotionTokens(model, 4_345.35, 21_726.75)),
+  ...["claude-fable-5", "claude-mythos-5"].map((model) => circuitNotionTokens(model, 21_726.75, 108_633.75)),
+  ...["claude-opus-5", "claude-opus-4-8", "claude-opus-4-6"].map((model) => circuitNotionTokens(model, 12_166.98, 60_834.9)),
+  circuitNotionTokens("claude-haiku-4-5", 2_172.68, 10_863.38),
+  ...["claude-sonnet-4-6", "claude-sonnet-4-5"].map((model) => circuitNotionTokens(model, 6_518.03, 32_590.13)),
 
   // Embeddings — input tokens only, via POST /v1/embeddings. Default output dimensions noted for
   // reference (small: 1536, large: 3072, ada-002: 1536); dimensionality isn't a priced quantity so
@@ -109,17 +134,17 @@ const CIRCUITNOTION: PriceRecord[] = [
   // console needs it to confirm they are reading the same row.
   {
     provider: "circuitnotion", model: "text-embedding-3-small", modality: "embedding", currency: "RWF",
-    billingUnit: "tokens", per: 1_000_000, rates: { input: 32.20 },
+    billingUnit: "tokens", per: 1_000_000, rates: { input: 43.45 },
     source: `${CIRCUITNOTION_SOURCE} — 1536 default dimensions`, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
   {
     provider: "circuitnotion", model: "text-embedding-3-large", modality: "embedding", currency: "RWF",
-    billingUnit: "tokens", per: 1_000_000, rates: { input: 209.3 },
+    billingUnit: "tokens", per: 1_000_000, rates: { input: 282.45 },
     source: `${CIRCUITNOTION_SOURCE} — 3072 default dimensions`, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
   {
     provider: "circuitnotion", model: "text-embedding-ada-002", modality: "embedding", currency: "RWF",
-    billingUnit: "tokens", per: 1_000_000, rates: { input: 161 },
+    billingUnit: "tokens", per: 1_000_000, rates: { input: 217.27 },
     source: `${CIRCUITNOTION_SOURCE} — 1536 default dimensions`, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
 
@@ -128,27 +153,27 @@ const CIRCUITNOTION: PriceRecord[] = [
   // (1024×1024) size, which is why its `per` is 1 rather than a million.
   {
     provider: "circuitnotion", model: "gpt-image-2", modality: "image", currency: "RWF",
-    billingUnit: "tokens", per: 1_000_000, rates: { output: 48_300 },
+    billingUnit: "tokens", per: 1_000_000, rates: { output: 65_180.25 },
     source: CIRCUITNOTION_SOURCE, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
   {
     provider: "circuitnotion", model: "gpt-image-1.5", modality: "image", currency: "RWF",
-    billingUnit: "tokens", per: 1_000_000, rates: { output: 51_520 },
+    billingUnit: "tokens", per: 1_000_000, rates: { output: 69_525.6 },
     source: CIRCUITNOTION_SOURCE, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
   {
     provider: "circuitnotion", model: "gpt-image-1-mini", modality: "image", currency: "RWF",
-    billingUnit: "tokens", per: 1_000_000, rates: { output: 12_880 },
+    billingUnit: "tokens", per: 1_000_000, rates: { output: 17_381.4 },
     source: CIRCUITNOTION_SOURCE, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
   {
     provider: "circuitnotion", model: "dall-e-3", modality: "image", currency: "RWF",
-    billingUnit: "images", per: 1, rates: { image: 64.40 },
+    billingUnit: "images", per: 1, rates: { image: 86.91 },
     source: `${CIRCUITNOTION_SOURCE} — reference rate at 1024×1024`, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
   {
     provider: "circuitnotion", model: "dall-e-2", modality: "image", currency: "RWF",
-    billingUnit: "images", per: 1, rates: { image: 32.20 },
+    billingUnit: "images", per: 1, rates: { image: 43.45 },
     source: `${CIRCUITNOTION_SOURCE} — reference rate at 1024×1024`, effectiveFrom: CIRCUITNOTION_VERIFIED,
   },
 ];

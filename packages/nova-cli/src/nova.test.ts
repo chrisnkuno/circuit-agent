@@ -309,8 +309,9 @@ describe("renderEvent", () => {
     const { writes, restore } = captureStdout();
     renderEvent({ type: "runtime", event: { type: "tool_call", toolCallId: "c1", toolName: "read_file", effect: "none", arguments: { path: "src/app.ts" } } });
     restore();
-    expect(writes[0]).toContain("read_file");
-    expect(writes[0]).toContain("src/app.ts"); // the argument is the useful half of the line
+    expect(writes.join("")).toContain("tool activity");
+    const call = writes.find((chunk) => chunk.includes("read_file"))!;
+    expect(call).toContain("src/app.ts"); // the argument is the useful half of the line
   });
 
   it("upgrades the announcement in place rather than printing a second line for the result", () => {
