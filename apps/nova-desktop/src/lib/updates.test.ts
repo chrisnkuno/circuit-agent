@@ -5,10 +5,15 @@ import {
   describeStatus,
   installUpdate,
   isBusy,
+  shouldCheckForUpdate,
+  UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_POLL_INTERVAL_MS,
   type DownloadProgress,
   type UpdateStatus,
   type UpdaterPorts,
 } from "./updates";
+
+const HOUR = 60 * 60_000;
 
 /**
  * Becoming a new version, which is the half that used to be missing.
@@ -189,5 +194,42 @@ describe("what the button may do next", () => {
       { kind: "failed", message: "nope", while: "installing" },
     ];
     for (const status of all) expect(describeStatus(status).length).toBeGreaterThan(0);
+  });
+});
+
+describe("automatic update checks", () => {
+  const status = { kind: "idle" } as const;
+
+  it("checks immediately when it has never checked", () => {
+    expect(shouldCheckForUpdate({ now: 1_000, status })).toBe(true);
+  });
+
+  it("waits the full interval between checks", () => {
+    const now = 100 * HOUR;
+    expect(shouldCheckForUpdate({ lastCheckedAt: now - UPDATE_CHECK_INTERVAL_MS + 1, now, status })).toBe(false);
+    expect(shouldCheckForUpdate({ lastCheckedAt: now - UPDATE_CHECK_INTERVAL_MS, now, status })).toBe(true);
+  });
+
+  it("checks on the first poll after a long suspend rather than skipping it", () => {
+    // The reason the timer is short and the comparison is against the clock: a laptop asleep for
+    // three days must not come back and wait another eight hours.
+    const now = 100 * HOUR;
+    expect(shouldCheckForUpdate({ lastCheckedAt: now - 72 * HOUR, now, status })).toBe(true);
+  });
+
+  it("never re-checks over an update the user is looking at", () => {
+    // A banner is on screen and a fresh check cannot improve on it — but it can replace the state
+    // someone is halfway through acting on.
+    const available = { kind: "available", update: {} as never } as const;
+    expect(shouldCheckForUpdate({ lastCheckedAt: 0, now: 999 * HOUR, status: available })).toBe(false);
+  });
+
+  it("never starts a check while an install is in flight", () => {
+    const downloading = { kind: "downloading", version: "9.9.9" } as const;
+    expect(shouldCheckForUpdate({ lastCheckedAt: 0, now: 999 * HOUR, status: downloading })).toBe(false);
+  });
+
+  it("polls far more often than it checks, so an overdue check is noticed quickly", () => {
+    expect(UPDATE_POLL_INTERVAL_MS).toBeLessThan(UPDATE_CHECK_INTERVAL_MS);
   });
 });

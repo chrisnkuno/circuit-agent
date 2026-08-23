@@ -158,6 +158,45 @@ export function describeStatus(status: UpdateStatus): string {
   }
 }
 
+/**
+ * How often the app looks for a new version on its own.
+ *
+ * Eight hours rather than daily. A window that stays open for a working week would otherwise check
+ * five times, and a fix shipped on Monday morning would not reach someone until Tuesday; eight
+ * hours means a release is picked up within a working day without the feed being polled at any
+ * rate a person would notice.
+ */
+export const UPDATE_CHECK_INTERVAL_MS = 8 * 60 * 60_000;
+
+/**
+ * How often that interval is *examined* — which is not the same thing.
+ *
+ * A single eight-hour timer is the obvious implementation and the wrong one: a laptop that sleeps
+ * suspends the timer, so a machine closed each night fires it hours late or not at all, and the
+ * app that most needs the update is the one that checks least. Waking often and comparing real
+ * clock time means a suspended machine performs its overdue check shortly after it wakes.
+ */
+export const UPDATE_POLL_INTERVAL_MS = 15 * 60_000;
+
+/**
+ * Whether it is time to look again.
+ *
+ * Refuses while anything is in flight, and refuses once an update is already found: the banner is
+ * on screen and re-checking cannot improve on it, but it can replace a `available` state that the
+ * user is halfway through acting on. `lastCheckedAt` of `undefined` means "never checked", which
+ * is due immediately — that is the launch check.
+ */
+export function shouldCheckForUpdate(input: {
+  lastCheckedAt?: number;
+  now: number;
+  status: UpdateStatus;
+  intervalMs?: number;
+}): boolean {
+  if (isBusy(input.status) || input.status.kind === "available") return false;
+  if (input.lastCheckedAt === undefined) return true;
+  return input.now - input.lastCheckedAt >= (input.intervalMs ?? UPDATE_CHECK_INTERVAL_MS);
+}
+
 /** Whether the app is mid-update, so the button stays disabled and nothing else starts one. */
 export function isBusy(status: UpdateStatus): boolean {
   return status.kind === "checking" || status.kind === "downloading" || status.kind === "installing" || status.kind === "restarting";

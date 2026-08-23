@@ -72,6 +72,18 @@ export interface BillingGateway {
   getBalance(): Promise<Balance>;
 }
 
+/**
+ * Where a balance stops being comfortable, and where it stops being usable.
+ *
+ * These live here rather than beside the CLI's balance watcher because the terminal is no longer
+ * the only surface that judges a balance: the desktop window draws the same verdict as a gauge and
+ * a sentence. Two copies of "low means 2,000" would drift, and the first anyone would know of it is
+ * a window calling a balance healthy while the terminal calls it low — on the same account, in the
+ * same minute. One number, read by both.
+ */
+export const CRITICAL_BALANCE_RWF = 500;
+export const LOW_BALANCE_RWF = 2_000;
+
 /** Bounds on a single top-up. Below the floor is not worth a checkout; above the ceiling is a typo. */
 export const MINIMUM_TOP_UP_RWF = 500;
 export const MAXIMUM_TOP_UP_RWF = 5_000_000;

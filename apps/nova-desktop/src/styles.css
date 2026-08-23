@@ -2894,3 +2894,179 @@ kbd,
     padding-right: var(--s4);
   }
 }
+
+/* ── Spend: what is left, and how fast it is going ────────────────────────────────────────────
+   Sits above the cost total because it answers the question people actually carry around. The
+   level classes carry all the colour: at a healthy balance the block is as quiet as any other
+   panel, and only a genuine warning is allowed to change that. A panel that is amber every day is
+   a panel nobody reads on the day it matters. */
+.spend-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s3);
+}
+
+.spend-headline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+}
+
+.spend-balance {
+  font-size: var(--t5);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.spend-balance-label,
+.spend-note {
+  font-size: var(--t2);
+  color: var(--ink-muted);
+}
+
+.spend-note {
+  margin: 0;
+}
+
+/* The status dot. Healthy is deliberately the same ink as ordinary text rather than a cheerful
+   green: "fine" should look like the absence of an alarm, not like a second one. */
+.spend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex: none;
+  align-self: center;
+}
+
+.spend-watch .spend-dot { background: var(--ink-muted); }
+.spend-low .spend-dot { background: var(--warn); }
+.spend-critical .spend-dot,
+.spend-empty .spend-dot { background: var(--danger); }
+
+.spend-runway-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+.spend-runway-fill {
+  height: 100%;
+  background: var(--chart-mark);
+  border-radius: 3px;
+  /* Grows and shrinks rather than jumping: a bar about money that snaps between widths reads as a
+     glitch, and this one moves after every turn. */
+  transition: width 240ms ease-out;
+}
+
+.spend-low .spend-runway-fill { background: var(--warn); }
+.spend-critical .spend-runway-fill,
+.spend-empty .spend-runway-fill { background: var(--danger); }
+
+.spend-runway-label {
+  margin: var(--s1) 0 0;
+  font-size: var(--t2);
+  color: var(--ink-muted);
+}
+
+.spend-runway-label strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The two rates, on one line. Tabular figures so a changing rate does not shift the label beside
+   it — the number is meant to be watched, and motion in its neighbours makes it harder to read. */
+.spend-rates {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+
+.spend-rate {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.spend-rate strong {
+  font-size: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+.spend-rate small {
+  font-size: var(--t1);
+  color: var(--ink-muted);
+}
+
+.spend-trend {
+  font-size: var(--t1);
+  color: var(--ink-muted);
+  align-self: center;
+}
+
+.spend-trend-rising { color: var(--warn); }
+.spend-trend-easing { color: var(--ok); }
+
+.spend-spark { margin: 0; }
+
+.spend-advice {
+  margin: 0;
+  font-size: var(--t2);
+  color: var(--ink-muted);
+}
+
+.spend-advice strong { color: var(--ink); }
+.spend-low .spend-advice strong { color: var(--warn); }
+.spend-critical .spend-advice strong,
+.spend-empty .spend-advice strong { color: var(--danger); }
+
+/* The top-up line is information, never a control: nothing in this window can move money, and a
+   button that looked like it might is one that would be pressed in a panic. */
+.spend-topup {
+  margin: 0;
+  font-size: var(--t2);
+  color: var(--ink-muted);
+  background: var(--sunken);
+  border-radius: var(--radius-2, 6px);
+  padding: var(--s2) var(--s3);
+}
+
+/* The check-and-reveal row. Quiet by default — this is a control someone reaches for, not one that
+   asks to be noticed — but always present, in every state of the panel. */
+.spend-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.spend-button {
+  font: inherit;
+  font-size: var(--t1);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-2, 6px);
+  padding: 3px var(--s2);
+  cursor: pointer;
+}
+
+.spend-button:hover:not(:disabled) { background: var(--sunken); }
+.spend-button:disabled { color: var(--ink-faint); cursor: default; }
+
+.spend-button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-muted);
+}
+
+.spend-checked {
+  font-size: var(--t1);
+  color: var(--ink-faint);
+}

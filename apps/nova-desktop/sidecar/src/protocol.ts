@@ -71,6 +71,17 @@ export type NovaSettings = {
   fxRwfPerUsd?: number;
   modelInputPerMillion?: number;
   modelOutputPerMillion?: number;
+  /**
+   * Circuit Pay, so the window can read a balance instead of only a session total.
+   *
+   * Deliberately the same two variables the CLI reads (`NOVA_BILLING_URL` / `NOVA_BILLING_KEY`)
+   * rather than a desktop-only pair: it is one account, and someone who has already configured
+   * paying in the terminal should not have to discover a second place to configure it here.
+   * Both absent is the ordinary case and is not an error — the window simply shows what a session
+   * has spent, as it always did, and says the balance is unavailable rather than showing a zero.
+   */
+  billingUrl?: string;
+  billingKey?: string;
 };
 
 /**
@@ -87,6 +98,7 @@ export type IpcRequest =
   | { id: string; type: "settings.set"; settings: NovaSettings }
   | { id: string; type: "providers.describe" }
   | { id: string; type: "providers.verify"; settings: NovaSettings }
+  | ({ id: string; type: "billing.balance" } & TabScoped)
   /**
    * What each configured provider will actually accept today.
    *

@@ -235,6 +235,32 @@ export function SettingsScreen(props: {
             />
           </div>
 
+          {/* Billing. Both are needed or neither does anything, so they sit together and say so:
+              a URL with no key produces a gateway that fails on first use, which is the one
+              outcome worse than no balance at all. The same two settings the CLI reads — it is one
+              account, and configuring it twice is how the two surfaces end up disagreeing. */}
+          <div className="field">
+            <label htmlFor="billing-url">Billing service URL</label>
+            <input
+              id="billing-url"
+              value={settings.billingUrl ?? ""}
+              placeholder="Enables the balance and runway in the cost panel"
+              onChange={(event) => edit({ billingUrl: event.target.value })}
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="billing-key">Billing service key</label>
+            <input
+              id="billing-key"
+              type="password"
+              autoComplete="off"
+              value={settings.billingKey ?? ""}
+              placeholder="Needed together with the billing URL"
+              onChange={(event) => edit({ billingKey: event.target.value })}
+            />
+          </div>
+
           <div className="field">
             <label htmlFor="relay">Relay secret</label>
             <input

@@ -1,4 +1,6 @@
 import {
+  CRITICAL_BALANCE_RWF,
+  LOW_BALANCE_RWF,
   BillingError,
   MINIMUM_TOP_UP_RWF,
   parseAmountRwf,
@@ -59,7 +61,8 @@ export type BalanceAlert = {
   lines: string[];
 };
 
-export const CRITICAL_BALANCE_RWF = 500;
+/** Re-exported so existing callers keep their import; the number itself now lives in core. */
+export { CRITICAL_BALANCE_RWF } from "@circuit-nova/nova-core/nova-cli/billing";
 
 export type TaskBalanceGate = {
   blocked: boolean;
@@ -124,7 +127,7 @@ export class BalanceWatch {
 
   constructor(options: BalanceWatchOptions = {}) {
     this.options = {
-      lowBalanceRwf: options.lowBalanceRwf ?? 2_000,
+      lowBalanceRwf: options.lowBalanceRwf ?? LOW_BALANCE_RWF,
       rapidWindowMs: options.rapidWindowMs ?? 30 * 60_000,
       minimumRapidDropRwf: options.minimumRapidDropRwf ?? 500,
       rapidDropFraction: options.rapidDropFraction ?? 0.25,
