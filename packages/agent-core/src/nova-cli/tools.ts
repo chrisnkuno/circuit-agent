@@ -836,7 +836,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       return {
         content: result.changed
           ? `Remembered (${scope}/${kind}): ${text}
-Written to ${result.file} — the user can edit or delete it there.`
+Written to ${scope === "project" ? ".nova/memory.md" : result.file} — the user can edit or delete it there.`
           : `Already remembered; ${result.file} is unchanged.`,
         data: { scope, kind, text, file: result.file, changed: result.changed },
       };

@@ -128,7 +128,11 @@ describe("NovaAgent", () => {
 
   it("blocks a skill's own execution the same way it blocks a built-in tool when a pre-tool-use hook denies it", async () => {
     await fs.mkdir(path.join(root, ".nova/hooks/pre-tool-use"), { recursive: true });
-    await fs.writeFile(path.join(root, ".nova/hooks/pre-tool-use/deny.sh"), "#!/bin/sh\necho 'not today' >&2\nexit 1\n", { mode: 0o755 });
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(root, ".nova/hooks/pre-tool-use/deny.cmd"), "@echo off\r\necho not today 1>&2\r\nexit /b 1\r\n");
+    } else {
+      await fs.writeFile(path.join(root, ".nova/hooks/pre-tool-use/deny.sh"), "#!/bin/sh\necho 'not today' >&2\nexit 1\n", { mode: 0o755 });
+    }
     const model = scriptedModel([
       { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "app.ts" } }] },
       { finishReason: "stop", content: "Could not read it." },
