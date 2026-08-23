@@ -531,7 +531,7 @@ async function main(): Promise<void> {
     name: "build",
     root: buildRoot,
     modeFlag: "--auto",
-    pace: "gentle",
+    pace: model === "cohere/north-mini-code:free" ? "gentle" : "strict",
     target: 45_000,
     latencyTargetMs: 8 * 60_000,
     objective:
@@ -564,7 +564,7 @@ async function main(): Promise<void> {
     name: "web-build",
     root: webRoot,
     modeFlag: "--auto",
-    pace: "gentle",
+    pace: model === "cohere/north-mini-code:free" ? "gentle" : "strict",
     target: 38_000,
     latencyTargetMs: 8 * 60_000,
     objective:
@@ -604,7 +604,7 @@ async function main(): Promise<void> {
     name: "debug",
     root: debugRoot,
     modeFlag: "--auto",
-    pace: "gentle",
+    pace: model === "cohere/north-mini-code:free" ? "gentle" : "strict",
     target: 25_000,
     latencyTargetMs: 6 * 60_000,
     objective:
