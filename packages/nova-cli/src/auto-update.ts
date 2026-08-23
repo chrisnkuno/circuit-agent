@@ -21,13 +21,12 @@ import { novaConfigDirectory } from "@circuit-nova/nova-core/nova-cli/memory";
  * safe at an idle prompt and reckless in the middle of a turn, so an install only ever happens at
  * a decision point the caller names, never on a timer.
  *
- * **It never runs where nobody can answer.** Piped output, a headless run, or CI means there is no
- * one to see a notice and nothing good can come of rewriting the binary underneath a script. Those
- * sessions check nothing and install nothing.
+ * **It never runs under automation.** Piped output, a headless run, or CI may depend on an exact
+ * installed version. Those sessions check nothing and install nothing.
  *
- * **Installing is opt-in.** The default is to look and to say so. Replacing software on someone's
- * machine without being asked is a decision that belongs to them, and "it was only a patch" is
- * exactly what everyone says before the release that was not.
+ * **Installing is the interactive default.** A normal terminal session stays current without a
+ * confirmation prompt. The user can persist `check` for notification-only behavior or `off` to
+ * disable all checks; both explicit choices always win over the default.
  */
 
 export type AutoUpdateMode = "off" | "check" | "install";
@@ -69,9 +68,11 @@ function isContinuousIntegration(environment: Record<string, string | undefined>
 export function readAutoUpdateMode(environment: Record<string, string | undefined>): AutoUpdateMode {
   const raw = environment.NOVA_AUTO_UPDATE?.trim().toLowerCase();
   if (raw === "off" || raw === "false" || raw === "0" || raw === "no") return "off";
+  if (raw === "check" || raw === "notify") return "check";
   if (raw === "install" || raw === "auto" || raw === "on" || raw === "true" || raw === "1" || raw === "yes") return "install";
-  // Anything else, including unset: look and say so. See the header for why installing is opt-in.
-  return "check";
+  // Unset is the product default. A malformed explicit value fails safe to notification-only
+  // behavior instead of silently granting installation authority the user may have tried to deny.
+  return raw ? "check" : "install";
 }
 
 /**

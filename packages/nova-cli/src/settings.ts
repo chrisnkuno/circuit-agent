@@ -44,8 +44,8 @@ const CURRENCY_CHOICES: readonly SettingChoice[] = [...new Set(SUPPORTED_COUNTRI
   .map((value) => ({ value, label: value }));
 
 const AUTO_UPDATE_CHOICES: readonly SettingChoice[] = [
-  { value: "check", label: "Check daily and tell me (default)" },
-  { value: "install", label: "Check daily and install automatically" },
+  { value: "install", label: "Check daily and install automatically (default)" },
+  { value: "check", label: "Check daily and tell me only" },
   { value: "off", label: "Never check" },
 ];
 
@@ -102,7 +102,7 @@ export const SETTING_FIELDS = [
   // person is trying to hand over money.
   // Three states rather than a switch: looking and installing are different decisions, and the one
   // people want to make separately is whether Nova may replace itself without being asked.
-  { key: "NOVA_AUTO_UPDATE", label: "Automatic updates — check daily, and optionally install", choices: AUTO_UPDATE_CHOICES },
+  { key: "NOVA_AUTO_UPDATE", label: "Automatic updates — install daily by default", choices: AUTO_UPDATE_CHOICES },
   { key: "NOVA_BILLING_URL", label: "Billing service URL (enables /pay)", url: true },
   { key: "NOVA_BILLING_KEY", label: "Billing service key", secret: true },
   { key: "NOVA_LOW_BALANCE_RWF", label: "Low-balance alert threshold in RWF (default 2000)" },

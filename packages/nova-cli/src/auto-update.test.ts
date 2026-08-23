@@ -98,15 +98,18 @@ describe("what it does with a version it already knows about", () => {
 });
 
 describe("the setting", () => {
-  it("defaults to looking without installing", () => {
-    // Replacing software on someone's machine unasked is their decision to make, not Nova's.
-    expect(readAutoUpdateMode({})).toBe("check");
-    expect(readAutoUpdateMode({ NOVA_AUTO_UPDATE: "" })).toBe("check");
+  it("defaults interactive sessions to installing without another acceptance prompt", () => {
+    expect(readAutoUpdateMode({})).toBe("install");
+    expect(readAutoUpdateMode({ NOVA_AUTO_UPDATE: "" })).toBe("install");
+  });
+
+  it("keeps malformed explicit settings notification-only", () => {
     expect(readAutoUpdateMode({ NOVA_AUTO_UPDATE: "nonsense" })).toBe("check");
   });
 
   it("reads the spellings people actually type", () => {
     for (const value of ["off", "false", "0", "no", "OFF"]) expect(readAutoUpdateMode({ NOVA_AUTO_UPDATE: value }), value).toBe("off");
+    for (const value of ["check", "notify", "CHECK"]) expect(readAutoUpdateMode({ NOVA_AUTO_UPDATE: value }), value).toBe("check");
     for (const value of ["install", "auto", "on", "true", "1", "yes", "Install"]) expect(readAutoUpdateMode({ NOVA_AUTO_UPDATE: value }), value).toBe("install");
   });
 });
@@ -172,6 +175,17 @@ describe("one round of the whole thing", () => {
     });
     expect(installed).toEqual(["1.4.0"]);
     expect(run.notice.join(" ")).toMatch(/restart/i);
+  });
+
+  it("installs under the unset default without requesting acceptance", async () => {
+    const installed: string[] = [];
+    const run = await runAutoUpdate({
+      context: context({ mode: readAutoUpdateMode({}) }),
+      fetchLatest: async () => "1.4.0",
+      install: async (version) => { installed.push(version); return true; },
+    });
+    expect(run.decision).toEqual({ action: "install", version: "1.4.0" });
+    expect(installed).toEqual(["1.4.0"]);
   });
 
   it("stops retrying a version that failed to install", async () => {

@@ -226,16 +226,16 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   {
     id: "updating",
     title: "Keeping Nova current",
-    summary: "What Nova does about new versions, and what it will not do without asking.",
+    summary: "Automatic updates by default, with explicit check-only and off controls.",
     body: [
       "Nova looks for a new version once a day, at the moment a session starts and never in the middle of one. The check is bounded at three seconds and its failure is silent: an unreachable registry costs one attempt a day, not a slow prompt.",
-      "By default it tells you and stops there. /update installs the newest version through whichever package manager put Nova on this machine; /update auto lets it install by itself, and /update off stops it looking at all.",
-      "Automatic installs never happen where nobody could answer for them — a piped or headless run, or any CI environment. Replacing an executable underneath a script is not an update, it is a surprise. A version that fails to install is remembered and not retried, because an update mechanism that fails loudly every launch is one people uninstall.",
+      "By default Nova installs a newer release automatically through whichever package manager installed it; it does not wait for another acceptance prompt. /update check changes that to notification-only behavior, and /update off stops it looking at all.",
+      "Automatic installs never happen in a piped or headless run, or in CI, because automation may depend on an exact installed version. A version that fails to install is remembered and not retried, because an update mechanism that fails loudly every launch is one people uninstall.",
       "An install replaces the program on disk; the session you are in keeps running the version it started with until you restart it.",
     ],
     examples: [
       { input: "/update", effect: "install the newest version now" },
-      { input: "/update auto", effect: "let Nova install updates by itself" },
+      { input: "/update check", effect: "tell you about updates without installing" },
       { input: "/update off", effect: "stop looking for updates" },
     ],
     covers: ["/update"],

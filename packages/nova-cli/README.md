@@ -80,7 +80,7 @@ Optional web search uses Exa. Add `EXA_API_KEY` through `nova settings` or your 
 
 ## Updating Nova
 
-Nova can update its global installation through npm, pnpm, Yarn, or Bun. It checks the public registry, pins the exact version it found, and asks before invoking the package manager:
+Nova updates its global installation automatically by default in an interactive terminal. Once a day at startup it checks the public registry, pins the exact version it found, and installs it through npm, pnpm, Yarn, or Bun without another acceptance prompt. The running session remains on its starting version until restart. Piped/headless runs and CI never check or install. Use `/update check` for notification-only behavior or `/update off` to disable checks:
 
 ```bash
 nova update
@@ -91,7 +91,7 @@ nova update --package-manager pnpm
 nova --version
 ```
 
-Use `--yes` for an explicitly unattended update. Without it, Nova refuses to mutate an installation when no interactive terminal is attached. Set `NOVA_UPDATE_PACKAGE_MANAGER` to choose a persistent package-manager override.
+Manual `nova update` still asks before installing; use `--yes` for an explicitly unattended manual update. Set `NOVA_UPDATE_PACKAGE_MANAGER` to choose a persistent package-manager override.
 
 ## How it behaves
 
