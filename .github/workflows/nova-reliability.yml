@@ -38,6 +38,7 @@ jobs:
       - run: bun run build:packages
       - run: bun run reliability:audit
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: nova-audit-${{ matrix.os }}
           path: reliability/audits/*.json
@@ -66,7 +67,14 @@ jobs:
       - name: Measure Exa research quality and alpha discovery
         run: |
           if [[ -n "$EXA_API_KEY" ]]; then
+            set +e
             bun run reliability:exa
+            exa_exit=$?
+            set -e
+            if [[ $exa_exit -ne 0 ]]; then
+              bun run scripts/reliability-record-error.ts exa-research scheduled "$exa_exit"
+              echo "::error::Exa research evaluation failed; sanitized evidence was retained"
+            fi
           else
             echo "::warning::EXA_API_KEY is absent; Exa quality remains unmeasured"
           fi
@@ -83,8 +91,14 @@ jobs:
           if [[ -z "$OPENAI_API_KEY" ]]; then echo "OPENROUTER_API_KEY repository secret is required"; exit 1; fi
           set +e
           NOVA_RELIABILITY_MODEL='cohere/north-mini-code:free' NOVA_RELIABILITY_REPORT='reports/north-mini-code.json' bun run reliability:scheduled
+          north_exit=$?
+          if [[ $north_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'cohere/north-mini-code:free' "$north_exit"; fi
           NOVA_RELIABILITY_MODEL='nvidia/nemotron-3-super-120b-a12b:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3-super.json' bun run reliability:scheduled
+          nemotron_exit=$?
+          if [[ $nemotron_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'nvidia/nemotron-3-super-120b-a12b:free' "$nemotron_exit"; fi
           NOVA_RELIABILITY_MODEL='z-ai/glm-5.2:free' NOVA_RELIABILITY_REPORT='reports/glm-5.2.json' bun run reliability:scheduled
+          glm_exit=$?
+          if [[ $glm_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'z-ai/glm-5.2:free' "$glm_exit"; fi
           exit 0
       - name: Promote the strongest fully passing free model
         run: bun run reliability:promote
@@ -99,6 +113,7 @@ jobs:
             reliability/reports/*.json
             reliability/audits/*.json
             reliability/exa/latest.json
+            reliability/errors.json
             reliability/site/runs/**
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

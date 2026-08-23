@@ -12,7 +12,8 @@ import {
   wrapToWidth,
 } from "./fixed-layout";
 
-const lines = (count: number, prefix = "line") => Array.from({ length: count }, (_, index) => `${prefix} ${index}`);
+const lines = (count: number, prefix = "line") =>
+  Array.from({ length: count }, (_, index) => `${prefix} ${index}`);
 
 describe("the transcript Nova keeps for itself", () => {
   it("shows the newest output, and keeps showing it as more arrives", () => {
@@ -44,7 +45,9 @@ describe("the transcript Nova keeps for itself", () => {
   });
 
   it("fills the body so the frame never collapses on short content", () => {
-    const state = appendLines(newFixedLayout({ columns: 40, rows: 20 }), ["only line"]);
+    const state = appendLines(newFixedLayout({ columns: 40, rows: 20 }), [
+      "only line",
+    ]);
     const frame = renderFrame(state);
     expect(frame.body).toHaveLength(bodyHeight(20, 3));
     expect(frame.body[0]).toBe("only line");
@@ -106,7 +109,7 @@ describe("when history outgrows the buffer", () => {
     state = appendLines(state, lines(10, "extra"));
     expect(renderFrame(state).body[0]).toBe(before);
     expect(state.buffer).toHaveLength(100);
-  });
+  }, 15_000); // Windows runners occasionally pause busy workers beyond Vitest's 5s default.
 
   it("says how much history it dropped, and says nothing when it dropped none", () => {
     let state = newFixedLayout({ columns: 40, rows: 12, maxBufferLines: 50 });
@@ -119,18 +122,21 @@ describe("when history outgrows the buffer", () => {
 });
 
 describe("searching the transcript Nova now owns", () => {
-  const withContent = () => appendLines(newFixedLayout({ columns: 40, rows: 12 }), [
-    ...lines(40),
-    "TypeError: cannot read property",
-    ...lines(40, "after"),
-    "TypeError: again",
-    ...lines(40, "tail"),
-  ]);
+  const withContent = () =>
+    appendLines(newFixedLayout({ columns: 40, rows: 12 }), [
+      ...lines(40),
+      "TypeError: cannot read property",
+      ...lines(40, "after"),
+      "TypeError: again",
+      ...lines(40, "tail"),
+    ]);
 
   it("finds every match and puts the first one on screen with its context", () => {
     const state = search(withContent(), "typeerror");
     expect(state.search?.matches).toHaveLength(2);
-    expect(renderFrame(state).body.join("\n")).toContain("TypeError: cannot read property");
+    expect(renderFrame(state).body.join("\n")).toContain(
+      "TypeError: cannot read property",
+    );
     expect(renderFrame(state).position).toContain("1/2");
   });
 
@@ -148,7 +154,10 @@ describe("searching the transcript Nova now owns", () => {
 
   it("treats the query as text, not as a pattern", () => {
     // Someone searching a transcript for "call(" is not writing a regular expression.
-    const state = appendLines(newFixedLayout({ columns: 60, rows: 12 }), ["call(arg)", "no parens here"]);
+    const state = appendLines(newFixedLayout({ columns: 60, rows: 12 }), [
+      "call(arg)",
+      "no parens here",
+    ]);
     expect(search(state, "call(").search?.matches).toHaveLength(1);
   });
 
@@ -160,7 +169,9 @@ describe("searching the transcript Nova now owns", () => {
   });
 
   it("ignores styling when matching, so a coloured error is still findable", () => {
-    const state = appendLines(newFixedLayout({ columns: 60, rows: 12 }), [`\u001b[31mTypeError\u001b[0m: boom`]);
+    const state = appendLines(newFixedLayout({ columns: 60, rows: 12 }), [
+      `\u001b[31mTypeError\u001b[0m: boom`,
+    ]);
     expect(search(state, "TypeError: boom").search?.matches).toHaveLength(1);
   });
 });
@@ -168,7 +179,10 @@ describe("searching the transcript Nova now owns", () => {
 describe("handing the transcript to something better at text", () => {
   it("exports logical lines, not the ones wrapped for this window", () => {
     // A pager wraps to its own width; re-wrapping already-wrapped text gives a ragged margin.
-    const state = appendLines(newFixedLayout({ columns: 20, rows: 10 }), ["x".repeat(100), "second"]);
+    const state = appendLines(newFixedLayout({ columns: 20, rows: 10 }), [
+      "x".repeat(100),
+      "second",
+    ]);
     expect(transcriptText(state)).toBe(`${"x".repeat(100)}\nsecond`);
   });
 
@@ -176,12 +190,17 @@ describe("handing the transcript to something better at text", () => {
     let state = newFixedLayout({ columns: 40, rows: 10, maxBufferLines: 5 });
     state = appendLines(state, lines(20));
     const text = transcriptText(state);
-    expect(text.split("\n")[0]).toMatch(/15 earlier lines are not in this view/);
+    expect(text.split("\n")[0]).toMatch(
+      /15 earlier lines are not in this view/,
+    );
     expect(text).toContain("line 19");
   });
 
   it("says nothing about truncation when nothing was truncated", () => {
-    const state = appendLines(newFixedLayout({ columns: 40, rows: 10 }), ["one", "two"]);
+    const state = appendLines(newFixedLayout({ columns: 40, rows: 10 }), [
+      "one",
+      "two",
+    ]);
     expect(transcriptText(state)).toBe("one\ntwo");
   });
 });

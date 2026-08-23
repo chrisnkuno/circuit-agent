@@ -141,7 +141,8 @@ async function publishRunArtifacts(input: {
   ];
   const published = new Set<string>();
   for (const [source, relative, kind] of copies) {
-    if (await publishFile(source, path.join(output, relative), kind)) published.add(relative);
+    if (await publishFile(source, path.join(output, relative), kind))
+      published.add(relative);
   }
   for (const [name, summary] of Object.entries(input.summaries)) {
     const safe = `# ${name[0].toUpperCase()}${name.slice(1)} run\n\n${summary.trim()}\n`;
@@ -151,6 +152,32 @@ async function publishRunArtifacts(input: {
     await fs.writeFile(path.join(output, "notes", `${name}.md`), safe);
   }
   const byName = new Map(input.observations.map((item) => [item.name, item]));
+  const recordMissing = (name: string, missing: string[]) => {
+    const observation = byName.get(name);
+    if (!observation || missing.length === 0) return;
+    observation.failureReasons = [
+      ...(observation.failureReasons ?? []),
+      `artifact missing: ${missing.join(", ")}`,
+    ];
+  };
+  recordMissing(
+    "build",
+    ["build/slug.mjs", "build/slug.test.mjs"].filter(
+      (item) => !published.has(item),
+    ),
+  );
+  recordMissing(
+    "web-build",
+    ["web/index.html", "web/styles.css", "web/app.js"].filter(
+      (item) => !published.has(item),
+    ),
+  );
+  recordMissing(
+    "debug",
+    ["debug/math.mjs", "debug/math.test.mjs"].filter(
+      (item) => !published.has(item),
+    ),
+  );
   const files = (
     label: string,
     downloads: Array<{ label: string; url: string }>,
@@ -162,7 +189,11 @@ async function publishRunArtifacts(input: {
   });
   const build = byName.get("build");
   const url = (relative: string) => `runs/${input.runId}/${relative}`;
-  if (build && published.has("build/slug.mjs") && published.has("build/slug.test.mjs"))
+  if (
+    build &&
+    published.has("build/slug.mjs") &&
+    published.has("build/slug.test.mjs")
+  )
     build.artifact = files("Slug utility", [
       { label: "slug.mjs", url: url("build/slug.mjs") },
       { label: "slug.test.mjs", url: url("build/slug.test.mjs") },
@@ -178,7 +209,11 @@ async function publishRunArtifacts(input: {
         .map((name) => ({ label: name, url: url(`web/${name}`) })),
     };
   const debug = byName.get("debug");
-  if (debug && published.has("debug/math.mjs") && published.has("debug/math.test.mjs"))
+  if (
+    debug &&
+    published.has("debug/math.mjs") &&
+    published.has("debug/math.test.mjs")
+  )
     debug.artifact = files("Math repair", [
       { label: "math.mjs", url: url("debug/math.mjs") },
       { label: "math.test.mjs", url: url("debug/math.test.mjs") },
@@ -190,9 +225,7 @@ async function publishRunArtifacts(input: {
         kind: "markdown",
         label: `${name} report`,
         url: url(`notes/${name}.md`),
-        downloads: [
-          { label: `${name}.md`, url: url(`notes/${name}.md`) },
-        ],
+        downloads: [{ label: `${name}.md`, url: url(`notes/${name}.md`) }],
       };
   }
 }
@@ -349,7 +382,10 @@ async function runCase(input: {
     ? path.join(input.root, ".nova", "sessions", `${sessionId}.json`)
     : "";
   const saved = sessionFile
-    ? (await fs.readFile(sessionFile, "utf8").then((value) => JSON.parse(value)).catch(() => ({})) as {
+    ? ((await fs
+        .readFile(sessionFile, "utf8")
+        .then((value) => JSON.parse(value))
+        .catch(() => ({}))) as {
         messages?: Array<{ content?: string }>;
         mode?: string;
       })
@@ -367,6 +403,18 @@ async function runCase(input: {
     (await input.stateCorrect?.().catch(() => false)) ?? true;
   const completed =
     result.code === 0 && end?.status === "completed" && verified;
+  const failureReasons = [
+    ...(result.code !== 0 ? [`process exited ${result.code}`] : []),
+    ...(!end ? ["turn result missing"] : []),
+    ...(!sessionId ? ["session record missing"] : []),
+    ...(!verified ? ["verification failed"] : []),
+    ...(failedToolCalls > 0 ? [`${failedToolCalls} tool call(s) failed`] : []),
+    ...(qualityChecks.some((passed) => !passed)
+      ? ["output quality check failed"]
+      : []),
+    ...(!stateCorrect ? ["persisted state check failed"] : []),
+    ...(!scopeKept ? ["scope boundary changed"] : []),
+  ];
   return {
     sessionId,
     summary,
@@ -391,6 +439,7 @@ async function runCase(input: {
       costReported: Object.hasOwn(end ?? {}, "cost") && end?.cost !== null,
       misleadingSuccess: end?.status === "completed" && !verified,
       permissionEscalation: readOnly && before !== after,
+      failureReasons,
       events: stream
         .filter((record) =>
           ["model_turn", "tool_call", "tool_result", "runtime_stop"].includes(
@@ -631,6 +680,17 @@ async function main(): Promise<void> {
     unavailableToolCalls: 0,
     toolCalls: resumedRecords.filter((record) => record.type === "tool_call")
       .length,
+    failureReasons: [
+      ...(resumed.code !== 0 ? [`process exited ${resumed.code}`] : []),
+      ...(!resumedEnd ? ["turn result missing"] : []),
+      ...(!resumeSummary.includes("RELIABILITY_NEEDLE_7421")
+        ? ["verification failed"]
+        : []),
+      ...(resumedSession?.sessionId !== search.sessionId ||
+      resumedSession?.mode !== "plan"
+        ? ["resumed state check failed"]
+        : []),
+    ],
   });
   summaries.resume = resumeSummary;
 
@@ -640,11 +700,14 @@ async function main(): Promise<void> {
     debugRoot,
     summaries,
     observations,
-    runId: reportName === "latest.json"
-      ? "latest"
-      : path.basename(reportName, ".json").replace(/[^A-Za-z0-9._-]/g, "-"),
+    runId:
+      reportName === "latest.json"
+        ? "latest"
+        : path.basename(reportName, ".json").replace(/[^A-Za-z0-9._-]/g, "-"),
   }).catch((error) => {
-    process.stderr.write(`Artifact publication withheld: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `Artifact publication withheld: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
   });
 
   const audits = await loadAudits();
@@ -672,8 +735,10 @@ async function main(): Promise<void> {
       `Latest run: ${report.generatedAt.slice(0, 10)} on \`${model}\`. ${report.toolFailureRate}% tool failure rate · ${report.providerFailureRate}% provider failure rate · ${report.outputQualityRate}% output-quality checks · ${report.actualTokens.toLocaleString()} tokens · ${report.auditPlatforms.length}/3 operating systems. Daily benchmark: code build, responsive web build, debug, scoped search, Defender review, cross-process resume, UI, memory, security, approvals, cost accounting, Exa research, and portability. [Machine-readable evidence](reliability/latest.json).`,
       "<!-- nova-reliability:end -->",
     ].join("\n");
-    const markerBlock = /<!-- nova-reliability:start -->[\s\S]*?<!-- nova-reliability:end -->/;
-    if (!markerBlock.test(readme)) throw new Error("README reliability markers are missing");
+    const markerBlock =
+      /<!-- nova-reliability:start -->[\s\S]*?<!-- nova-reliability:end -->/;
+    if (!markerBlock.test(readme))
+      throw new Error("README reliability markers are missing");
     const next = readme.replace(markerBlock, block);
     await fs.writeFile(readmeFile, next);
   }

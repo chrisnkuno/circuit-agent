@@ -197,8 +197,7 @@ function renderControls(report) {
 function render(data) {
   const reports = data.reports || [];
   const best = reports[0];
-  const latest =
-    reports.find((report) => report.model === "circuit-2-turbo") || best;
+  const latest = data.current || best;
   if (latest) {
     $("score").textContent = latest.score;
     $("score-ring").style.setProperty("--score", `${latest.score}%`);
@@ -229,6 +228,7 @@ function render(data) {
     ],
     ["TOTAL TOKENS", latest ? fmt(latest.actualTokens) : "—"],
     ["PREDICTION COVERAGE", latest ? `${latest.predictionCoverage}%` : "—"],
+    ["LOGGED RUN ERRORS", fmt((data.errors || []).length)],
   ];
   $("metrics").innerHTML = metrics
     .map(

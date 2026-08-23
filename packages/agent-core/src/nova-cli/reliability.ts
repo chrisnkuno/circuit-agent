@@ -29,6 +29,8 @@ export type ReliabilityCase = {
   };
   misleadingSuccess?: boolean;
   permissionEscalation?: boolean;
+  /** Public, sanitized classifications for later repair; never raw provider/tool output. */
+  failureReasons?: string[];
   /** Sanitized public timeline; arguments and tool output are deliberately excluded. */
   events?: Array<{
     at?: unknown;

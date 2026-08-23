@@ -26,6 +26,7 @@ describe("the public reliability observatory", () => {
       "OS COVERAGE",
       "TOTAL TOKENS",
       "PREDICTION COVERAGE",
+      "LOGGED RUN ERRORS",
     ]) {
       expect(script).toContain(label);
     }
@@ -39,6 +40,11 @@ describe("the public reliability observatory", () => {
     ]) {
       expect(script).toContain(`"${control}"`);
     }
+  });
+
+  it("renders the dynamically rescored or promoted current report", () => {
+    expect(script).toContain("const latest = data.current || best");
+    expect(script).not.toContain('report.model === "circuit-2-turbo"');
   });
 
   it("keeps controls and metrics reachable on narrow screens", () => {
