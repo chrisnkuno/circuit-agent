@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BILLING_NOT_CONFIGURED,
+  BalanceWatch,
+  assessTaskBalance,
   formatRwf,
   parsePayCommand,
   renderBalance,
@@ -34,6 +36,73 @@ describe("/pay grammar", () => {
   it("is not a /pay command", () => {
     expect(parsePayCommand("/payments")).toBeNull();
     expect(parsePayCommand("pay 5000")).toBeNull();
+  });
+});
+
+describe("proactive balance watch", () => {
+  it("warns about a low confirmed balance with calm, actionable controls", () => {
+    const watch = new BalanceWatch();
+    const alert = watch.observe(
+      { balanceRwf: 1_200, asOf: 1 },
+      { sessionSpendRwf: 1_500, sessionTurns: 3, now: 1 },
+    );
+
+    expect(alert?.kind).toBe("low");
+    expect(alert?.lines.join(" ")).toContain("1,200 RWF");
+    expect(alert?.lines.join(" ")).toMatch(/about 2 more turns/i);
+    expect(alert?.lines.join(" ")).toMatch(/will not top up automatically/i);
+    expect(alert?.lines.join(" ")).toContain("/slow");
+  });
+
+  it("calls out a fast decrease using two gateway-confirmed readings", () => {
+    const watch = new BalanceWatch();
+    watch.observe({ balanceRwf: 8_000, asOf: 1 }, { now: 1, silent: true });
+    const alert = watch.observe({ balanceRwf: 5_500, asOf: 2 }, { now: 5 * 60_000 });
+
+    expect(alert?.kind).toBe("rapid");
+    expect(alert?.lines.join(" ")).toMatch(/down 2,500 RWF \(31%\)/i);
+    expect(alert?.lines.join(" ")).toMatch(/about 5 min/i);
+    expect(alert?.lines.join(" ")).toContain("/cost");
+  });
+
+  it("does not manufacture urgency from small changes or repeat every turn", () => {
+    const watch = new BalanceWatch({ lowBalanceRwf: 2_000 });
+    expect(watch.observe({ balanceRwf: 8_000, asOf: 1 }, { now: 1 })).toBeUndefined();
+    expect(watch.observe({ balanceRwf: 7_800, asOf: 2 }, { now: 60_000 })).toBeUndefined();
+
+    expect(watch.observe({ balanceRwf: 1_900, asOf: 3 }, { now: 32 * 60_000 })?.kind).toBe("low");
+    expect(watch.observe({ balanceRwf: 1_800, asOf: 4 }, { now: 33 * 60_000 })).toBeUndefined();
+  });
+
+  it("treats an empty balance as a stronger state and resets after a top-up", () => {
+    const watch = new BalanceWatch();
+    expect(watch.observe({ balanceRwf: 0, asOf: 1 }, { now: 1 })?.kind).toBe("empty");
+    expect(watch.observe({ balanceRwf: 10_000, asOf: 2 }, { now: 2 })).toBeUndefined();
+    expect(watch.observe({ balanceRwf: 1_500, asOf: 3 }, { now: 40 * 60_000 })?.kind).toBe("low");
+  });
+
+  it("uses a distinct critical warning below 500 RWF", () => {
+    const watch = new BalanceWatch();
+    const alert = watch.observe({ balanceRwf: 499, asOf: 1 }, { now: 1 });
+    expect(alert?.kind).toBe("critical");
+    expect(alert?.lines.join(" ")).toMatch(/below the 500 RWF critical level/i);
+    expect(alert?.lines.join(" ")).toMatch(/check a task's estimate before sending/i);
+  });
+
+  it("blocks only when even the conservative task estimate exceeds the balance", () => {
+    const blocked = assessTaskBalance({ balanceRwf: 400, asOf: 1 }, { lowRwf: 650, highRwf: 1_200 });
+    expect(blocked?.blocked).toBe(true);
+    expect(blocked?.lines.join(" ")).toMatch(/nothing was sent to the model/i);
+
+    const warning = assessTaskBalance({ balanceRwf: 900, asOf: 1 }, { lowRwf: 300, highRwf: 1_200 });
+    expect(warning?.blocked).toBe(false);
+    expect(assessTaskBalance({ balanceRwf: 2_000, asOf: 1 }, { lowRwf: 300, highRwf: 1_200 })).toBeUndefined();
+  });
+
+  it("ignores an older gateway snapshot", () => {
+    const watch = new BalanceWatch();
+    watch.observe({ balanceRwf: 10_000, asOf: 20 }, { now: 1, silent: true });
+    expect(watch.observe({ balanceRwf: 1_000, asOf: 10 }, { now: 2 })).toBeUndefined();
   });
 });
 
@@ -91,6 +160,7 @@ describe("what a money screen says", () => {
   it("warns when the balance will not cover another session like this one", () => {
     expect(renderBalance({ balanceRwf: 200, asOf: 0 }, { sessionSpendRwf: 1_500 }).join("\n")).toMatch(/less than this session/i);
     expect(renderBalance({ balanceRwf: 0, asOf: 0 }).join("\n")).toMatch(/top up/i);
+    expect(renderBalance({ balanceRwf: 499, asOf: 0 }).join("\n")).toMatch(/critical balance/i);
     expect(renderBalance({ balanceRwf: 9_000, asOf: 0 }, { sessionSpendRwf: 1_500 }).join("\n")).not.toMatch(/less than this session/i);
   });
 

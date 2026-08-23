@@ -187,11 +187,15 @@ export type CircuitPayOptions = {
 };
 
 /** Reads the gateway's own configuration out of the environment, or explains exactly what is missing. */
-export function billingFromEnvironment(environment: Record<string, string | undefined>, fetchImpl?: typeof globalThis.fetch): BillingGateway | null {
+export function billingFromEnvironment(
+  environment: Record<string, string | undefined>,
+  fetchImpl?: typeof globalThis.fetch,
+  options: { timeoutMs?: number } = {},
+): BillingGateway | null {
   const baseUrl = environment.NOVA_BILLING_URL?.trim();
   const apiKey = environment.NOVA_BILLING_KEY?.trim();
   if (!baseUrl || !apiKey) return null;
-  return new CircuitPayGateway({ baseUrl, apiKey, fetch: fetchImpl });
+  return new CircuitPayGateway({ baseUrl, apiKey, fetch: fetchImpl, ...options });
 }
 
 /**

@@ -32,6 +32,13 @@ describe("Nova settings", () => {
     expect(maskSetting("sk-123456789")).toBe("sk-…789");
   });
 
+  it("accepts only a whole non-negative low-balance threshold", () => {
+    expect(validateSetting("NOVA_LOW_BALANCE_RWF", "5000")).toBe("5000");
+    expect(validateSetting("NOVA_LOW_BALANCE_RWF", "0")).toBe("0");
+    expect(() => validateSetting("NOVA_LOW_BALANCE_RWF", "-1")).toThrow("non-negative whole number");
+    expect(() => validateSetting("NOVA_LOW_BALANCE_RWF", "20.5")).toThrow("non-negative whole number");
+  });
+
   it("takes a location as a country code and normalises it", () => {
     expect(validateSetting("NOVA_COUNTRY", "rw")).toBe("RW");
     expect(validateSetting("NOVA_COUNTRY", " eg ")).toBe("EG");

@@ -213,7 +213,8 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       "/pay creates a payment and gives you a link and a short code. You pay on Circuit Pay's own page — Nova never sees your card, your PIN or your mobile-money confirmation, and never asks for them.",
       "Nothing is charged until you answer the confirmation, and the amount you approve is the amount that appears on the checkout. Amounts are whole RWF: Nova refuses a decimal rather than rounding money you typed.",
       "While it waits, Ctrl+C returns you to the prompt without cancelling the payment. If it is still unconfirmed when you stop waiting, Nova says so and keeps the reference rather than calling it failed — a payment that has not been confirmed is not a payment that has failed, and paying twice is the mistake worth designing against. /pay status <reference> picks it up later.",
-      "/pay on its own shows the balance, and warns when it is less than this session has already used. Paying needs NOVA_BILLING_URL and NOVA_BILLING_KEY set in /settings; without both, /pay says so instead of half-working.",
+      "/pay on its own shows the balance. When CircuitNotion billing is configured, Nova also checks after a turn and calmly warns if the confirmed balance is low, below the critical 500 RWF level, or has fallen unusually fast. Before a demanding task, Nova compares its token-based estimate with the confirmed balance and stops before contacting the model when even the conservative estimate cannot fit. The notice shows the evidence and your choices; Nova never tops up automatically. Set NOVA_LOW_BALANCE_RWF in /settings to change the default 2,000 RWF floor.",
+      "Paying needs NOVA_BILLING_URL and NOVA_BILLING_KEY set in /settings; without both, /pay says so instead of half-working.",
     ],
     examples: [
       { input: "/pay 5000", effect: "top up 5,000 RWF" },

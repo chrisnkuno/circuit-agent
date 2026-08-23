@@ -16,7 +16,7 @@ import type { NovaMode, PermissionDecision } from "@circuit-nova/nova-core/nova-
 import { assessTaskSafety, type SafetyAssessment } from "@circuit-nova/nova-core/nova-cli/safety";
 import { listSessions, loadSession, type SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { catalogPrices, describeProviders, PRICE_ENVIRONMENT_HINT, PROVIDER_IDS, resolveProvider, type ProviderId } from "@circuit-nova/nova-core/providers/agent-matrix";
-import { convertTo, fromUnits, formatMoney, isCurrency, type Currency, type FxRate, type Money, type TokenPrices } from "@circuit-nova/nova-core/money";
+import { convertTo, fromUnits, formatMoney, isCurrency, priceUsage, type Currency, type FxRate, type Money, type TokenPrices } from "@circuit-nova/nova-core/money";
 import { createExaClient } from "@circuit-nova/nova-core/providers/exa";
 import { downloadProject, DockerWorkspace, E2BWorkspace, LocalWorkspace, uploadProject, type NovaWorkspace } from "@circuit-nova/nova-core/nova-cli/backends";
 import type { AgentRuntimeResult } from "@circuit-nova/nova-core/agent-runtime";
@@ -76,8 +76,8 @@ import {
 } from "@circuit-nova/nova-core";
 import { runJobWorkerForever, workerId } from "./job-worker";
 import { parseAttachCommand, parseDetachCommand, parseJobsCommand } from "./jobs-command";
-import { BILLING_NOT_CONFIGURED, parsePayCommand, renderBalance, renderCheckout, renderPaymentOutcome, renderTopUpQuote } from "./pay";
-import { BillingError, billingFromEnvironment, newIdempotencyKey, waitForPayment } from "@circuit-nova/nova-core/nova-cli/billing";
+import { BILLING_NOT_CONFIGURED, BalanceWatch, assessTaskBalance, parsePayCommand, renderBalance, renderCheckout, renderPaymentOutcome, renderTopUpQuote } from "./pay";
+import { BillingError, billingFromEnvironment, newIdempotencyKey, waitForPayment, type Balance } from "@circuit-nova/nova-core/nova-cli/billing";
 import { IMPLICIT_SKILL_PROVIDER_ID } from "@circuit-nova/nova-core";
 import { renderTools } from "./tools-command";
 import { removeRecording, startRecording, transcribeAudio } from "./voice";
@@ -1743,6 +1743,44 @@ async function main(): Promise<number> {
     ...(approvedBudget ? { budget: approvedBudget } : {}),
   });
 
+  // Balance alerts are deliberately separate from the session cap. The cap is a hard local guard;
+  // this watches account credit reported by the billing gateway and never pretends one is the
+  // other. An invalid override falls back to the calm default instead of disabling warnings.
+  const configuredLowBalance = Number(environment.NOVA_LOW_BALANCE_RWF);
+  const balanceWatch = new BalanceWatch({
+    lowBalanceRwf: Number.isFinite(configuredLowBalance) && configuredLowBalance >= 0 ? configuredLowBalance : 2_000,
+  });
+  let lastConfirmedBalance: { balance: Balance; readAt: number } | undefined;
+  const sessionSpendRwf = (): number | undefined => {
+    const total = ledger.displayTotal;
+    const rwf = total ? convertTo(total, "RWF", rates) : undefined;
+    return rwf ? Math.round(rwf.micros / 1_000_000) : undefined;
+  };
+  const readConfirmedBalance = async (force = false) => {
+    if (!force && lastConfirmedBalance && Date.now() - lastConfirmedBalance.readAt < 30_000) return lastConfirmedBalance.balance;
+    // A proactive notice must not hold the prompt hostage to an unhealthy billing endpoint. The
+    // explicit `/pay` command keeps the longer timeout because the user is waiting on that service.
+    const gateway = billingFromEnvironment(environment, undefined, { timeoutMs: 3_000 });
+    if (!gateway) return undefined;
+    // Monitoring must never turn a healthy model turn into a billing failure. A transient gateway
+    // problem stays quiet; `/pay` remains the explicit diagnostic path when the user asks for it.
+    const balance = await gateway.getBalance().catch(() => undefined);
+    if (!balance) return undefined;
+    lastConfirmedBalance = { balance, readAt: Date.now() };
+    return balance;
+  };
+  const checkBalance = async (silent = false): Promise<void> => {
+    if (spec.id !== "circuitnotion") return;
+    const balance = await readConfirmedBalance(true);
+    if (!balance) return;
+    const alert = balanceWatch.observe(balance, {
+      sessionSpendRwf: sessionSpendRwf(),
+      sessionTurns: ledger.history.length,
+      silent,
+    });
+    if (alert) for (const line of alert.lines) out.write(`  ${style.yellow(line)}\n`);
+  };
+
   /**
    * Tells the current tab's ledger what the session being resumed has already spent.
    *
@@ -2461,6 +2499,34 @@ async function main(): Promise<number> {
     try {
       const prediction = await agent.estimate(request);
       out.write(style.dim(`  ${ledger.formatPrediction(prediction)}\n`));
+      if (spec.id === "circuitnotion" && prices) {
+        const balance = await readConfirmedBalance();
+        if (balance) {
+          const alert = balanceWatch.observe(balance, {
+            sessionSpendRwf: sessionSpendRwf(),
+            sessionTurns: ledger.history.length,
+          });
+          if (alert) for (const line of alert.lines) out.write(`  ${style.yellow(line)}\n`);
+        }
+        const low = convertTo(priceUsage({ inputTokens: prediction.inputTokensLow, outputTokens: prediction.outputTokensLow }, prices), "RWF", rates);
+        const high = convertTo(priceUsage({ inputTokens: prediction.inputTokensHigh, outputTokens: prediction.outputTokensHigh }, prices), "RWF", rates);
+        const gate = balance && low && high ? assessTaskBalance(balance, {
+          lowRwf: Math.ceil(low.micros / 1_000_000),
+          highRwf: Math.ceil(high.micros / 1_000_000),
+        }) : undefined;
+        if (gate) {
+          for (const line of gate.lines) out.write(`  ${gate.blocked ? style.red(line) : style.yellow(line)}\n`);
+          if (gate.blocked) return false;
+          if (interactive) {
+            statusBar.clear();
+            const answer = (await readline.question(`  ${style.yellow("?")} Continue with this balance? ${style.dim("[y/N]: ")}`)).trim().toLowerCase();
+            if (answer !== "y" && answer !== "yes") {
+              out.write(style.dim("  skipped — nothing was sent to the model\n"));
+              return false;
+            }
+          }
+        }
+      }
       // The pace asks about a turn that looks expensive *before* it starts, which is the only
       // moment the answer is still cheap. Skipped without a terminal: there is nobody to ask, and a
       // pace is a preference, not a guard that should turn into a refusal in automation.
@@ -2592,6 +2658,7 @@ async function main(): Promise<number> {
       })}\n`);
       const warning = ledger.budgetWarning();
       if (warning) out.write(`  ${style.yellow(warning)}\n`);
+      await checkBalance();
       /**
        * The cache failure, said out loud, once.
        *
@@ -4349,15 +4416,13 @@ async function main(): Promise<number> {
         for (const line of BILLING_NOT_CONFIGURED) out.write(`  ${line}\n`);
         continue;
       }
-      const sessionSpendRwf = (() => {
-        const total = ledger.displayTotal;
-        const rwf = total ? convertTo(total, "RWF", rates) : undefined;
-        return rwf ? Math.round(rwf.micros / 1_000_000) : undefined;
-      })();
+      const currentSessionSpendRwf = sessionSpendRwf();
       try {
         if (payCommand.kind === "balance") {
           const balance = await gateway.getBalance();
-          for (const line of renderBalance(balance, { sessionSpendRwf })) out.write(`  ${line}\n`);
+          lastConfirmedBalance = { balance, readAt: Date.now() };
+          balanceWatch.observe(balance, { sessionSpendRwf: currentSessionSpendRwf, sessionTurns: ledger.history.length, silent: true });
+          for (const line of renderBalance(balance, { sessionSpendRwf: currentSessionSpendRwf })) out.write(`  ${line}\n`);
           continue;
         }
         if (payCommand.kind === "status") {
@@ -4365,11 +4430,15 @@ async function main(): Promise<number> {
           // The balance is only ever read back, never worked out from the amount — a figure Nova
           // computed that disagrees with the provider's ledger is the disagreement users notice.
           const balance = payment.status === "paid" ? await gateway.getBalance().catch(() => undefined) : undefined;
+          if (balance) lastConfirmedBalance = { balance, readAt: Date.now() };
+          if (balance) balanceWatch.observe(balance, { sessionSpendRwf: currentSessionSpendRwf, sessionTurns: ledger.history.length, silent: true });
           for (const line of renderPaymentOutcome(payment, { timedOut: false, balance })) out.write(`  ${line}\n`);
           continue;
         }
 
         const before = await gateway.getBalance().catch(() => undefined);
+        if (before) lastConfirmedBalance = { balance: before, readAt: Date.now() };
+        if (before) balanceWatch.observe(before, { sessionSpendRwf: currentSessionSpendRwf, sessionTurns: ledger.history.length, silent: true });
         out.write(`${box(renderTopUpQuote(payCommand.amountRwf, before), { depth: renderDepth, title: "payment", glyphs })}\n`);
         // Money never moves without a person saying so in this session. A piped or scripted run has
         // nobody to ask, so it stops rather than treating the command itself as consent.
@@ -4404,6 +4473,8 @@ async function main(): Promise<number> {
           bindSigint();
         }
         const after = outcome.payment.status === "paid" ? await gateway.getBalance().catch(() => undefined) : undefined;
+        if (after) lastConfirmedBalance = { balance: after, readAt: Date.now() };
+        if (after) balanceWatch.observe(after, { sessionSpendRwf: currentSessionSpendRwf, sessionTurns: ledger.history.length, silent: true });
         for (const line of renderPaymentOutcome(outcome.payment, { timedOut: outcome.timedOut, balance: after })) {
           out.write(`  ${outcome.payment.status === "paid" ? style.green(line) : line}\n`);
         }
