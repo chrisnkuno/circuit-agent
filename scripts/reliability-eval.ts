@@ -22,6 +22,9 @@ const spacingMs = Math.min(
   Math.max(0, Number(process.env.NOVA_RELIABILITY_SPACING_MS ?? 0) || 0),
 );
 let lastJourneyStartedAt = 0;
+const progress = (message: string): void => {
+  process.stderr.write(`[reliability] ${new Date().toISOString()} ${message}\n`);
+};
 const auditDirectory = path.resolve(
   process.env.NOVA_RELIABILITY_AUDIT_DIR?.trim() ||
     path.join(repo, "reliability", "audits"),
@@ -328,6 +331,7 @@ async function runCase(input: {
   sessionId: string;
   summary: string;
 }> {
+  progress(`${model} · ${input.name} · starting`);
   const before = await treeDigest(input.root);
   const [predictedTokensLow, predictedTokensHigh] = await estimate(
     input.root,
@@ -360,6 +364,9 @@ async function runCase(input: {
     !String(end?.summary ?? "").trim() &&
     !stream.some((record) => record.type === "tool_call")
   ) {
+    progress(
+      `${model} · ${input.name} · retrying after an empty provider failure`,
+    );
     if (spacingMs === 0)
       await new Promise((resolve) => setTimeout(resolve, 15_000));
     await awaitJourneySlot();
@@ -415,6 +422,9 @@ async function runCase(input: {
     ...(!stateCorrect ? ["persisted state check failed"] : []),
     ...(!scopeKept ? ["scope boundary changed"] : []),
   ];
+  progress(
+    `${model} · ${input.name} · ${completed ? "passed" : "failed"} · ${Number(end?.elapsedMs ?? 0)} ms · ${stream.filter((record) => record.type === "tool_call").length} tool calls`,
+  );
   return {
     sessionId,
     summary,
@@ -458,6 +468,7 @@ async function runCase(input: {
 }
 
 async function main(): Promise<void> {
+  progress(`${model} · evaluation started · spacing ${spacingMs} ms`);
   await fs.access(cli);
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "nova-reliability-"));
   const buildRoot = path.join(base, "build");
@@ -625,6 +636,7 @@ async function main(): Promise<void> {
   summaries.defender = defender.summary;
 
   await awaitJourneySlot();
+  progress(`${model} · resume · starting`);
   const resumed = await runProcess(
     [
       "node",
@@ -693,6 +705,9 @@ async function main(): Promise<void> {
     ],
   });
   summaries.resume = resumeSummary;
+  progress(
+    `${model} · resume · ${resumeSummary.includes("RELIABILITY_NEEDLE_7421") ? "passed" : "failed"} · ${Number(resumedEnd?.elapsedMs ?? 0)} ms`,
+  );
 
   await publishRunArtifacts({
     buildRoot,
@@ -742,6 +757,9 @@ async function main(): Promise<void> {
     const next = readme.replace(markerBlock, block);
     await fs.writeFile(readmeFile, next);
   }
+  progress(
+    `${model} · evaluation finished · ${report.passed}/${report.cases} journeys · score ${report.score}`,
+  );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (report.score < 70 || report.passed < report.cases) process.exitCode = 1;
 }

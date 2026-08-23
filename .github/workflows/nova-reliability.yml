@@ -92,14 +92,20 @@ jobs:
         run: |
           if [[ -z "$OPENAI_API_KEY" ]]; then echo "OPENROUTER_API_KEY repository secret is required"; exit 1; fi
           set +e
-          NOVA_RELIABILITY_MODEL='cohere/north-mini-code:free' NOVA_RELIABILITY_REPORT='reports/north-mini-code.json' bun run reliability:scheduled
+          echo "::group::North Mini Code reliability journeys"
+          NOVA_RELIABILITY_MODEL='cohere/north-mini-code:free' NOVA_RELIABILITY_REPORT='reports/north-mini-code.json' timeout 12m bun run reliability:scheduled
           north_exit=$?
+          echo "::endgroup::"
           if [[ $north_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'cohere/north-mini-code:free' "$north_exit"; fi
-          NOVA_RELIABILITY_MODEL='thinkingmachines/inkling:free' NOVA_RELIABILITY_REPORT='reports/inkling.json' bun run reliability:scheduled
+          echo "::group::Thinking Machines Inkling reliability journeys"
+          NOVA_RELIABILITY_MODEL='thinkingmachines/inkling:free' NOVA_RELIABILITY_REPORT='reports/inkling.json' timeout 12m bun run reliability:scheduled
           inkling_exit=$?
+          echo "::endgroup::"
           if [[ $inkling_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'thinkingmachines/inkling:free' "$inkling_exit"; fi
-          NOVA_RELIABILITY_MODEL='nvidia/nemotron-3.5-lightning:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3.5-lightning.json' bun run reliability:scheduled
+          echo "::group::Nemotron 3.5 Lightning reliability journeys"
+          NOVA_RELIABILITY_MODEL='nvidia/nemotron-3.5-lightning:free' NOVA_RELIABILITY_REPORT='reports/nemotron-3.5-lightning.json' timeout 12m bun run reliability:scheduled
           lightning_exit=$?
+          echo "::endgroup::"
           if [[ $lightning_exit -ne 0 ]]; then bun run scripts/reliability-record-error.ts free-model 'nvidia/nemotron-3.5-lightning:free' "$lightning_exit"; fi
           exit 0
       - name: Promote the strongest fully passing free model
