@@ -30,6 +30,8 @@ Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar t
 - E2B sandbox toggle, upload, pull
 - Follows the system light/dark setting
 - **Auto-update** — checks GitHub Releases and installs new versions in place
+- CircuitNotion sessions default to **`circuit-2-turbo`**, matching the CLI; the picker still
+  exposes every configured provider and reports when a live model has no known price
 - **Portable Windows build** — `release/windows/` folder with `Nova.exe` + sidecar, no installer required
 - Keyboard throughout: Ctrl+Enter send, Esc stop, Ctrl+M model, Ctrl+D changes, Ctrl+P files,
   Ctrl+Z undo, Ctrl+, settings, F1 guide, Alt+1/2/3/4 mode — listed in the Keyboard panel and in the
@@ -117,6 +119,8 @@ artifact. They deliberately did not before: dev used a shell script and release 
 something else that nobody built, which is how a broken Windows package went unnoticed.
 
 On first launch, enter a CircuitNotion (or other) API key. The base URL defaults to CircuitNotion's API.
+Terminal and desktop share the durable session schema, including its permission mode, so resuming a
+read-only planning thread cannot silently reopen it with build authority.
 
 ## The sidecar binary
 
