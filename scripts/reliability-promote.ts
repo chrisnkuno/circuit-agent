@@ -54,7 +54,8 @@ const block = [
   `Latest run: ${winner.generatedAt.slice(0, 10)} on free model \`${winner.model}\`. ${winner.toolFailureRate}% tool failure rate · ${winner.providerFailureRate}% provider failure rate · ${winner.outputQualityRate}% output-quality checks · ${winner.actualTokens.toLocaleString()} tokens · ${winner.auditPlatforms.length}/3 operating systems. Daily benchmark: code build, responsive web build, debug, scoped search, Defender review, cross-process resume, UI, memory, security, approvals, cost accounting, Exa research, and portability. [Machine-readable evidence](reliability/latest.json).`,
   "<!-- nova-reliability:end -->",
 ].join("\n");
-const next = readme.replace(/<!-- nova-reliability:start -->[\s\S]*?<!-- nova-reliability:end -->/, block);
-if (next === readme) throw new Error("README reliability markers are missing");
+const markerBlock = /<!-- nova-reliability:start -->[\s\S]*?<!-- nova-reliability:end -->/;
+if (!markerBlock.test(readme)) throw new Error("README reliability markers are missing");
+const next = readme.replace(markerBlock, block);
 await fs.writeFile(readmeFile, next);
 process.stdout.write(`Promoted ${winner.model} at ${winner.score}/100.\n`);

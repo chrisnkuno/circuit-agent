@@ -672,12 +672,9 @@ async function main(): Promise<void> {
       `Latest run: ${report.generatedAt.slice(0, 10)} on \`${model}\`. ${report.toolFailureRate}% tool failure rate · ${report.providerFailureRate}% provider failure rate · ${report.outputQualityRate}% output-quality checks · ${report.actualTokens.toLocaleString()} tokens · ${report.auditPlatforms.length}/3 operating systems. Daily benchmark: code build, responsive web build, debug, scoped search, Defender review, cross-process resume, UI, memory, security, approvals, cost accounting, Exa research, and portability. [Machine-readable evidence](reliability/latest.json).`,
       "<!-- nova-reliability:end -->",
     ].join("\n");
-    const next = readme.replace(
-      /<!-- nova-reliability:start -->[\s\S]*?<!-- nova-reliability:end -->/,
-      block,
-    );
-    if (next === readme)
-      throw new Error("README reliability markers are missing");
+    const markerBlock = /<!-- nova-reliability:start -->[\s\S]*?<!-- nova-reliability:end -->/;
+    if (!markerBlock.test(readme)) throw new Error("README reliability markers are missing");
+    const next = readme.replace(markerBlock, block);
     await fs.writeFile(readmeFile, next);
   }
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
