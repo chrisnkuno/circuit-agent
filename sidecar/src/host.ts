@@ -27,6 +27,7 @@ import type { ModelPriceCatalog } from "@circuit-nova/nova-core/model-cost";
 import type { SessionRecord } from "@circuit-nova/nova-core/nova-cli/session";
 import { createE2BProvider } from "@circuit-nova/nova-core/providers/factory";
 import { addMemory, forgetMemory, loadMemories, memoryFile, type MemoryKind, type MemoryScope } from "@circuit-nova/nova-core/nova-cli/memory";
+import { billingFromEnvironment, BillingError } from "@circuit-nova/nova-core/nova-cli/billing";
 import { verifyCredentials } from "./verify.js";
 import { TabRegistry } from "./tabs.js";
 import type { IpcEvent, IpcRequest, ModelsListResult, NovaSettings, ProviderId } from "./protocol.js";
@@ -222,6 +223,8 @@ export class NovaHost {
         return { cancelled: true };
       case "cost.get":
         return this.costSnapshot(request.tabId);
+      case "billing.balance":
+        return await this.balanceSnapshot();
       case "diff.get":
         return { diff: (await this.maybeSlot(request.tabId)?.client.diffStat()) ?? "" };
       case "todos.get":
@@ -706,6 +709,33 @@ export class NovaHost {
   private async undo(tabId?: string) {
     const checkpoint = await this.slot(tabId).client.undo();
     return { undone: !!checkpoint, checkpoint };
+  }
+
+  /**
+   * What the gateway says is left, or why it cannot say.
+   *
+   * Never throws at the caller. An unreachable billing service must not break the cost panel or
+   * the turn that just finished — the window degrades to the session total it always had, and the
+   * reason travels with the answer so it can be shown as a sentence rather than swallowed.
+   *
+   * The balance is read, never derived. Nothing here adds up local turns and calls the result a
+   * balance: another device may be spending the same account, and a locally-computed figure would
+   * disagree with the ledger at exactly the moment someone needed to trust it.
+   */
+  private async balanceSnapshot(): Promise<{ balance?: { balanceRwf: number; asOf: number }; configured: boolean; unavailable?: string }> {
+    const settings = this.settings;
+    if (!settings) return { configured: false };
+    const gateway = billingFromEnvironment(settingsToEnvironment(settings));
+    if (!gateway) return { configured: false };
+    try {
+      const balance = await gateway.getBalance();
+      return { configured: true, balance: { balanceRwf: balance.balanceRwf, asOf: balance.asOf } };
+    } catch (error) {
+      return {
+        configured: true,
+        unavailable: error instanceof BillingError ? error.message : error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private costSnapshot(tabId?: string) {

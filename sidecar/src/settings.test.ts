@@ -86,3 +86,35 @@ describe("the environment the engine is given", () => {
     expect(settingsToEnvironment(base({ provider: "openai", relaySecret: "shh" })).CIRCUITNOTION_RELAY_SECRET).toBeUndefined();
   });
 });
+
+/**
+ * Billing reaches the engine under the same two names the CLI reads.
+ *
+ * The desktop could have invented its own pair of variables and wired them straight to a gateway.
+ * It reads `NOVA_BILLING_URL` / `NOVA_BILLING_KEY` instead, because it is one account: someone who
+ * configured paying in the terminal should not have to discover a second place to configure it,
+ * and `billingFromEnvironment` — which is what actually decides whether a balance can be read —
+ * only ever looks for those two.
+ */
+describe("billing credentials", () => {
+  it("passes both billing variables through under the names the engine reads", () => {
+    const env = settingsToEnvironment(base({ billingUrl: "https://pay.example", billingKey: "pk-1" }));
+    expect(env.NOVA_BILLING_URL).toBe("https://pay.example");
+    expect(env.NOVA_BILLING_KEY).toBe("pk-1");
+  });
+
+  it("leaves them absent rather than empty when unconfigured", () => {
+    // `billingFromEnvironment` returns null on a missing variable and a gateway on an empty one,
+    // so an empty string here is the difference between "no billing configured" and a client that
+    // half-exists and fails on first use.
+    const env = settingsToEnvironment(base());
+    expect("NOVA_BILLING_URL" in env).toBe(false);
+    expect("NOVA_BILLING_KEY" in env).toBe(false);
+  });
+
+  it("treats whitespace as unconfigured", () => {
+    const env = settingsToEnvironment(base({ billingUrl: "   ", billingKey: "  " }));
+    expect("NOVA_BILLING_URL" in env).toBe(false);
+    expect("NOVA_BILLING_KEY" in env).toBe(false);
+  });
+});

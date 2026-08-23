@@ -49,6 +49,10 @@ export function settingsToEnvironment(settings: NovaSettings): Record<string, st
   if (settings.e2bApiKey?.trim()) env.E2B_API_KEY = settings.e2bApiKey.trim();
   if (settings.modelInputPerMillion != null) env.MODEL_INPUT_PER_MILLION = String(settings.modelInputPerMillion);
   if (settings.modelOutputPerMillion != null) env.MODEL_OUTPUT_PER_MILLION = String(settings.modelOutputPerMillion);
+  // The same variable names the CLI reads, so one account needs configuring once. Absent unless
+  // filled in, which is what lets `billingFromEnvironment` return null instead of half-working.
+  if (settings.billingUrl?.trim()) env.NOVA_BILLING_URL = settings.billingUrl.trim();
+  if (settings.billingKey?.trim()) env.NOVA_BILLING_KEY = settings.billingKey.trim();
   if (settings.currency?.trim()) env.NOVA_CURRENCY = settings.currency.trim();
   if (settings.fxRwfPerUsd != null) env.NOVA_FX_RWF_PER_USD = String(settings.fxRwfPerUsd);
   return env;

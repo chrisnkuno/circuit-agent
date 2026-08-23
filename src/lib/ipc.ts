@@ -123,6 +123,22 @@ export async function cancelTurn(tabId?: string) {
   return await sidecarRequest({ type: "cancel", ...(tabId ? { tabId } : {}) });
 }
 
+/**
+ * What the billing gateway says is left.
+ *
+ * `configured: false` is the ordinary answer, not an error: most installs never set a billing URL,
+ * and the window shows session spend alone in that case. `unavailable` carries the reason a
+ * configured gateway could not be reached, so the panel can say so in words instead of showing a
+ * confident zero — which is the one rendering of "we do not know" that nobody forgives.
+ */
+export async function getBalance(tabId?: string) {
+  return await sidecarRequest<{
+    configured: boolean;
+    balance?: { balanceRwf: number; asOf: number };
+    unavailable?: string;
+  }>({ type: "billing.balance", ...(tabId ? { tabId } : {}) });
+}
+
 export async function getCost(tabId?: string) {
   return await sidecarRequest<{
     report: string;

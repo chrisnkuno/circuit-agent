@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { checkForUpdate, installUpdate, describeStatus, isBusy, tauriUpdater, type UpdateStatus } from "./lib/updates";
+import { checkForUpdate, installUpdate, describeStatus, isBusy, shouldCheckForUpdate, tauriUpdater, UPDATE_POLL_INTERVAL_MS, type UpdateStatus } from "./lib/updates";
 import {
   ensureSidecar,
   loadPersistedSettings,
@@ -61,25 +61,42 @@ export default function App() {
   const eventQueue = useRef<IpcEvent[]>([]);
   const [eventTick, setEventTick] = useState(0);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ kind: "idle" });
+  /** Mirrors `updateStatus` for the polling timer, which is mounted once and must not be re-armed. */
+  const updateStatusRef = useRef<UpdateStatus>(updateStatus);
+  updateStatusRef.current = updateStatus;
 
   const takeEvents = useCallback(() => eventQueue.current.splice(0), []);
 
   /**
-   * The check that happens without being asked, once, at startup.
+   * The check that happens without being asked: at startup, and every eight hours after.
    *
    * Silent about its result: a banner is worth an interruption only when there is something to
    * act on. The "you are up to date" half of the answer lives in Settings, next to the button
    * that asks the question on purpose.
+   *
+   * A window left open for days used to check exactly once, at launch, so the people running Nova
+   * the hardest were the last to receive a fix. It polls on a short timer and compares real clock
+   * time rather than sleeping for eight hours in one call, because a suspended laptop suspends the
+   * timer with it — see `shouldCheckForUpdate`.
    */
+  const lastUpdateCheck = useRef<number | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+
+    const maybeCheck = async () => {
+      // Read through the ref: this closure outlives several renders, and `updateStatus` captured
+      // at mount would still say "idle" long after a banner went up, re-checking over the top of it.
+      if (!shouldCheckForUpdate({ lastCheckedAt: lastUpdateCheck.current, now: Date.now(), status: updateStatusRef.current })) return;
+      lastUpdateCheck.current = Date.now();
       const status = await checkForUpdate(tauriUpdater, __APP_VERSION__);
       // A failed automatic check is not shown. Nobody asked, there is nothing to do about it, and
       // a scary banner on every offline launch teaches people to ignore the one that matters.
       if (!cancelled && status.kind === "available") setUpdateStatus(status);
-    })();
-    return () => { cancelled = true; };
+    };
+
+    void maybeCheck();
+    const timer = setInterval(() => void maybeCheck(), UPDATE_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   /** The deliberate check, from the button in Settings — this one reports whatever it finds. */

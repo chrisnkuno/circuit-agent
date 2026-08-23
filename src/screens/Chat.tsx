@@ -27,12 +27,14 @@ import {
 } from "../lib/suggestions";
 import { DESKTOP_PROVIDERS } from "../lib/models";
 import { shouldFollow } from "../lib/transcript";
+import type { BalanceReading } from "../lib/spend";
 import { SHORTCUTS, isTypingTarget, matchShortcut } from "../lib/shortcuts";
 import {
   activateTab as activateSidecarTab,
   cancelTurn,
   closeTab as closeSidecarTab,
   ensureSidecar,
+  getBalance,
   getCost,
   getTodos,
   listSessions,
@@ -118,6 +120,15 @@ export function ChatScreen(props: {
   const [pathDraft, setPathDraft] = useState("");
   const [upload, setUpload] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  /** One balance for the window: it is one account, however many tabs are open. */
+  const [balanceState, setBalanceState] = useState<{
+    configured: boolean;
+    balance?: BalanceReading;
+    unavailable?: string;
+  }>({ configured: false });
+  const [checkingBalance, setCheckingBalance] = useState(false);
+  /** Revealed by default: the number is the point. Hiding is for a shared screen, and is a choice. */
+  const [balanceRevealed, setBalanceRevealed] = useState(true);
   /** Projects opened before, most recent first, so past work is reachable without re-finding it. */
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
   const [pinned, setPinned] = useState(false);
@@ -518,6 +529,7 @@ export function ChatScreen(props: {
     try {
       const result = await sendTurn(objective, sidecarTabId(sendTabId));
       const cost = await getCost(sidecarTabId(sendTabId));
+      void refreshBalance();
       const todoState = await getTodos(sidecarTabId(sendTabId));
       setTabsState((state) => updateTab(state, sendTabId, {
         sessionId: result.sessionId,
@@ -540,6 +552,46 @@ export function ChatScreen(props: {
   }
 
   const setSandbox = (next: boolean) => patchTab({ sandbox: next });
+
+  /**
+   * The balance, refreshed after every turn and when the window opens.
+   *
+   * Held once for the window rather than per tab: it is one account, and four tabs each showing
+   * their own idea of the same balance is four chances to disagree. Refreshed *after* a turn
+   * because that is the moment it changed and the moment someone looks.
+   */
+  async function refreshBalance() {
+    try {
+      const result = await getBalance();
+      setBalanceState({
+        configured: result.configured,
+        balance: result.balance,
+        unavailable: result.unavailable,
+      });
+    } catch {
+      // Never surfaced as an error banner. A billing service that is down must not make the app
+      // look broken, and the panel already says the balance is unavailable in words.
+    }
+  }
+
+  useEffect(() => { void refreshBalance(); }, []);
+
+  /**
+   * The balance check someone asked for.
+   *
+   * Separate from `refreshBalance` only in that it shows it is working. A button that reports
+   * nothing while it runs is one people press three times, and each press is a request to a
+   * billing service.
+   */
+  async function handleCheckBalance() {
+    if (checkingBalance) return;
+    setCheckingBalance(true);
+    try {
+      await refreshBalance();
+    } finally {
+      setCheckingBalance(false);
+    }
+  }
 
   async function handleUndo() {
     try {
@@ -1066,7 +1118,20 @@ export function ChatScreen(props: {
               )}
             </div>
           </div>
-          <CostPanel report={costReport} displayTotal={displayTotal} budgetFraction={budgetFraction} warning={warning} turns={costTurns} />
+          <CostPanel
+            report={costReport}
+            displayTotal={displayTotal}
+            budgetFraction={budgetFraction}
+            warning={warning}
+            turns={costTurns}
+            balance={balanceState.balance}
+            balanceUnavailable={balanceState.unavailable}
+            billingConfigured={balanceState.configured}
+            onCheckBalance={() => void handleCheckBalance()}
+            checkingBalance={checkingBalance}
+            balanceRevealed={balanceRevealed}
+            onToggleBalance={() => setBalanceRevealed((shown) => !shown)}
+          />
 
           {/* Shortcuts that exist but are undocumented are shortcuts nobody finds. Collapsed, so
               they teach without taking room from the panels people actually watch. */}

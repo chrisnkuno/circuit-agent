@@ -46,6 +46,13 @@ export type NovaSettings = {
   fxRwfPerUsd?: number;
   modelInputPerMillion?: number;
   modelOutputPerMillion?: number;
+  /**
+   * Circuit Pay, so the cost panel can show a balance and a runway rather than a session total
+   * alone. Mirrors the sidecar's `NovaSettings`, and reaches the engine as the same
+   * `NOVA_BILLING_URL` / `NOVA_BILLING_KEY` the CLI reads — one account, configured once.
+   */
+  billingUrl?: string;
+  billingKey?: string;
 };
 
 /**
