@@ -15,6 +15,10 @@ export type OpenAIAgentOptions = { apiKey: string; model: string; baseURL?: stri
 
 type ChatCall = (body: Record<string, unknown>, signal: AbortSignal) => Promise<ChatResponse | AsyncIterable<ChatStreamChunk>>;
 
+function usesInklingToolContract(model: string): boolean {
+  return model === "thinkingmachines/inkling:free" || model === "thinkingmachines/inkling-small:free";
+}
+
 export class OpenAIAgentTurnProvider implements AgentTurnProvider {
   private readonly call: ChatCall;
   /** What this model can hold and produce, so the session sizes its budgets from the model. */
@@ -33,13 +37,18 @@ export class OpenAIAgentTurnProvider implements AgentTurnProvider {
 
   async complete(request: AgentModelRequest): Promise<AgentModelTurn> {
     if (!request.safetyIdentifier.trim()) throw new Error("safetyIdentifier is required");
+    const inkling = usesInklingToolContract(this.options.model);
     const response = await this.call({
       model: this.options.model,
       messages: toWireMessages(request.messages),
       tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })),
-      tool_choice: "auto",
-      parallel_tool_calls: true,
-      max_completion_tokens: request.maxOutputTokens,
+      // Inkling's OpenRouter endpoint advertises tools, but not tool_choice or parallel tool
+      // calls, and it accepts max_tokens rather than max_completion_tokens. Sending the broader
+      // OpenAI contract makes the request fail before Inkling can call a single tool.
+      ...(inkling ? {} : { tool_choice: "auto", parallel_tool_calls: true }),
+      ...(inkling
+        ? { max_tokens: request.maxOutputTokens }
+        : { max_completion_tokens: request.maxOutputTokens }),
       safety_identifier: request.safetyIdentifier,
       // The documented routing hint for prompt caching, and the replacement for the deprecated
       // `user` field. Stable for the whole session, which is what makes it useful: cached prefixes

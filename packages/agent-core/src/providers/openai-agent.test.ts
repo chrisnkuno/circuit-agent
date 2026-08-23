@@ -42,6 +42,23 @@ describe("OpenAI agent adapter", () => {
     expect(turn).toMatchObject({ finishReason: "stop", content: "Done.", model: "gpt-5.6-terra" });
   });
 
+  it("uses Inkling's narrower OpenRouter tool contract", async () => {
+    let body: Record<string, unknown> | undefined;
+    const provider = new OpenAIAgentTurnProvider(
+      { apiKey: "sk-test", model: "thinkingmachines/inkling:free", baseURL: "https://openrouter.ai/api/v1" },
+      async (value) => {
+        body = value;
+        return respond();
+      },
+    );
+
+    await provider.complete(request);
+    expect(body).toMatchObject({ model: "thinkingmachines/inkling:free", max_tokens: 4_096 });
+    expect(body).not.toHaveProperty("tool_choice");
+    expect(body).not.toHaveProperty("parallel_tool_calls");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
   it("reads usage including cached input, so a cached session is priced correctly", async () => {
     const provider = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async () => respond());
     const turn = await provider.complete(request);
