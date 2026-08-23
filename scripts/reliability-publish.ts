@@ -28,6 +28,22 @@ const errors = await fs
   .readFile(path.join(reliability, "errors.json"), "utf8")
   .then((value) => JSON.parse(value))
   .catch(() => []);
+const score = Math.max(
+  0,
+  Math.min(100, Math.round(Number(current.score) || 0)),
+);
+const badgeColor =
+  score >= 90
+    ? "brightgreen"
+    : score >= 75
+      ? "green"
+      : score >= 60
+        ? "yellow"
+        : "critical";
+await fs.writeFile(
+  path.join(reliability, "site", "badge.json"),
+  `${JSON.stringify({ schemaVersion: 1, label: "Nova reliability", message: `${score}/100`, color: badgeColor })}\n`,
+);
 await fs.writeFile(
   path.join(reliability, "site", "data.json"),
   `${JSON.stringify({ generatedAt: new Date().toISOString(), current, reports: valid, catalog, exa, errors }, null, 2)}\n`,

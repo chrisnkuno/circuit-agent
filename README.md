@@ -4,13 +4,43 @@ An early foundation for a task-priced, multi-interface AI agent system.
 
 Users should know a task's expected RWF cost and maximum approved spend before an agent executes it. Convex persists the durable work state; E2B is the intended isolated execution layer; Circuit Pay is the intended billing adapter.
 
+[![Nova reliability](https://img.shields.io/endpoint?url=https%3A%2F%2Fchrisnkuno.github.io%2Fcircuit-agent%2Fbadge.json)](https://chrisnkuno.github.io/circuit-agent/)
+[![Daily reliability](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-reliability.yml/badge.svg?branch=main)](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-reliability.yml)
+[![Linux macOS Windows](https://img.shields.io/badge/audited-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-7c5cff)](https://chrisnkuno.github.io/circuit-agent/)
+
+**[Watch Nova work](https://chrisnkuno.github.io/circuit-agent/)** · [inspect the evidence](reliability/latest.json) · [follow daily runs](https://github.com/chrisnkuno/circuit-agent/actions/workflows/nova-reliability.yml)
+
 <!-- nova-reliability:start -->
+
 ## Nova scheduled reliability
 
 **91/100 (excellent)** · 6/6 live journeys · 3,153 control tests · 0 failures
 
 Latest run: 2026-08-23 on `circuit-2-turbo`. 0% tool failure rate · 0% provider failure rate · 100% output-quality checks · 160,028 tokens · 3/3 operating systems. Daily benchmark: code build, responsive web build, debug, scoped search, Defender review, cross-process resume, UI, memory, security, approvals, cost accounting, Exa research, and portability. [Machine-readable evidence](reliability/latest.json).
 <!-- nova-reliability:end -->
+
+<details>
+<summary><strong>How Nova earns the score</strong></summary>
+
+```mermaid
+flowchart LR
+  A[Free model task] --> B[Recorded tool trace]
+  B --> C{Independent verification}
+  C -->|pass| D[Quality and cost scoring]
+  C -->|fail| E[Sanitized error ledger]
+  D --> F[Linux / macOS / Windows controls]
+  E --> F
+  F --> G{All release gates pass?}
+  G -->|yes| H[Promote score and deploy Pages]
+  G -->|no| I[Keep last verified score]
+```
+
+The score is recomputed from completion, artifact verification, output quality,
+tool/provider failures, latency, token economy, prediction calibration, scope,
+memory and resume, security, approvals, cost accuracy, UI behavior, portability,
+and Exa research evidence. A model cannot promote itself by merely claiming success.
+
+</details>
 
 The web workspace can automatically infer a coarse country from deployment metadata or browser locale, and users can override both country and display currency. Quotes and spend are converted with a dated daily rate for presentation; the authoritative cap, reservation, settlement, and audit ledger remain integer RWF amounts. Approval prompts show that RWF ledger amount alongside any conversion.
 
@@ -158,4 +188,4 @@ Product backlog for the terminal task list and cross-component connectivity (not
 - [x] **Resend email notifications** — Lifecycle mail is sent on run start and on every terminal outcome (completed / failed / cancelled) to each active member's recorded notification email, which is captured and kept current from the sign-in identity. Every message states what was spent against what was approved, including on failure and cancellation, since silence about cost reads as "this cost nothing". Config-gated on `RESEND_API_KEY`/`RESEND_FROM` and best-effort, so a mail outage can never fail the run that triggered it. Code-complete and unit-tested; **not yet live-verified** — needs a Resend key and a verified sender domain.
 - [x] **Webhook-heavy connectivity** — Inbound: a signed `/e2b/webhook` endpoint receives [E2B sandbox lifecycle events](https://e2b.dev/docs/sandbox/lifecycle-events-webhooks), verified in constant time and de-duplicated on E2B's delivery id (it retries three times, ten seconds apart). Live-verified against the deployment: valid signatures accepted, unsigned/forged/tampered payloads rejected 401, retried deliveries applied once. Internal: run lifecycle is push-driven — a completed step, a granted approval, and an expired retry backoff each wake the dispatcher directly instead of waiting for its cron. Still open: outbound org-configurable webhooks, and pushing sandbox/Telegram/Resend status onto the same bus.
 
-Notes on what is deliberately *not* done in the webhook path: a `sandbox.lifecycle.killed` event does not fail or retry its step. The worker stops its own sandbox before recording the step outcome, so every healthy step also emits a kill while its row still reads "running" — acting on that signal would re-run work that had just succeeded. The event is used to correct what the UI claims (a sandbox that is gone stops being shown as live); deciding a step's fate stays with the worker outcome and lease recovery, which can actually tell success from failure.
+Notes on what is deliberately _not_ done in the webhook path: a `sandbox.lifecycle.killed` event does not fail or retry its step. The worker stops its own sandbox before recording the step outcome, so every healthy step also emits a kill while its row still reads "running" — acting on that signal would re-run work that had just succeeded. The event is used to correct what the UI claims (a sandbox that is gone stops being shown as live); deciding a step's fate stays with the worker outcome and lease recovery, which can actually tell success from failure.

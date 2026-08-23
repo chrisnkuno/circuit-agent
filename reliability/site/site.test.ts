@@ -6,6 +6,11 @@ const root = import.meta.dirname;
 const html = readFileSync(path.join(root, "index.html"), "utf8");
 const script = readFileSync(path.join(root, "app.js"), "utf8");
 const styles = readFileSync(path.join(root, "styles.css"), "utf8");
+const readme = readFileSync(path.join(root, "..", "..", "README.md"), "utf8");
+const publisher = readFileSync(
+  path.join(root, "..", "..", "scripts", "reliability-publish.ts"),
+  "utf8",
+);
 
 describe("the public reliability observatory", () => {
   it("has every DOM target used by the script", () => {
@@ -68,5 +73,12 @@ describe("the public reliability observatory", () => {
     expect(`${html}\n${script}\n${styles}`).not.toMatch(
       /sk-or-v1-|CIRCUITNOTION_API_KEY|OPENROUTER_API_KEY/,
     );
+  });
+
+  it("gives the README a dynamic score badge and GitHub-native evidence graph", () => {
+    expect(readme).toContain("img.shields.io/endpoint");
+    expect(readme).toContain("```mermaid");
+    expect(publisher).toContain('"badge.json"');
+    expect(publisher).toContain("message: `${score}/100`");
   });
 });
