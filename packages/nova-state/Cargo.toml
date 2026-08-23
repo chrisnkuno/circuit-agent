@@ -1,6 +1,6 @@
 [package]
 name = "nova-state"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "Nova's local, rebuildable history and memory index"
