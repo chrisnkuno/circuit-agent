@@ -2,12 +2,13 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import * as pty from "node-pty";
 import { describe, expect, it } from "vitest";
+import { bunExecutable } from "./harness";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
 const DEMO_ENTRY = path.join(REPO_ROOT, "scripts/fixed-layout-demo.ts");
 
 function spawnDemo(options: { cols?: number; rows?: number; quiet?: boolean } = {}) {
-  const proc = pty.spawn("bun", ["run", DEMO_ENTRY, ...(options.quiet ? ["--quiet"] : [])], {
+  const proc = pty.spawn(bunExecutable(), ["run", DEMO_ENTRY, ...(options.quiet ? ["--quiet"] : [])], {
     name: "xterm-color",
     cols: options.cols ?? 80,
     rows: options.rows ?? 20,

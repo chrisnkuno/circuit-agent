@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import * as pty from "node-pty";
@@ -12,6 +13,18 @@ import * as pty from "node-pty";
  */
 
 const NOVA_ENTRY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../nova.ts");
+
+/** node-pty's macOS posix_spawnp binding does not reliably search PATH. */
+export function bunExecutable(environment = process.env): string {
+  const names = process.platform === "win32" ? ["bun.exe", "bun.cmd", "bun"] : ["bun"];
+  for (const directory of (environment.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    for (const name of names) {
+      const candidate = path.join(directory, name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return "bun";
+}
 
 export type SpawnNovaOptions = {
   args?: string[];
@@ -46,7 +59,7 @@ function escapeRegExp(value: string): string {
 }
 
 export function spawnNova(options: SpawnNovaOptions): NovaProcess {
-  const proc = pty.spawn("bun", ["run", NOVA_ENTRY, ...(options.args ?? [])], {
+  const proc = pty.spawn(bunExecutable(), ["run", NOVA_ENTRY, ...(options.args ?? [])], {
     name: "xterm-color",
     cols: options.cols ?? 100,
     rows: options.rows ?? 30,
