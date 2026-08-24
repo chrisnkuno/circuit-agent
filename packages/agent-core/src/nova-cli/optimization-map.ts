@@ -675,7 +675,7 @@ export const OPTIMIZATION_TARGETS: readonly OptimizationTarget[] = [
     what: "Time from process start to an interactive prompt",
     metric: "milliseconds",
     budget: { max: 200 },
-    evidence: "packages/nova-cli/src/nova.ts, scripts/cli-bundle.ts",
+    evidence: "packages/nova-cli/src/nova.ts, tooling/build/cli-bundle.ts",
     remediation:
       "Two mechanisms, and both are load-bearing. The bundler must keep `splitting: true` with `.mjs` chunk naming, or Bun hoists every dynamically imported subtree into the entry file and the provider SDKs execute on `nova --help` (entry 3.90 MB vs 0.94 MB; 0.17s vs 0.12s measured). And the launcher (dist/nova.mjs) must stay a separate tiny file that calls module.enableCompileCache() before *dynamically* importing the main bundle — a static import is hoisted above the call and silently disables it. Measure with: `bun run build:cli` then time `node dist/nova.mjs --help`.",
   },

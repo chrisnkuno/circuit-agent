@@ -18,7 +18,7 @@
  * ledger is worse than no number at all, and it is the disagreement users notice first.
  *
  * The gateway is an interface with a Circuit Pay adapter behind it because Circuit Pay's real
- * contract is not verified yet (see docs/gap-register.md). Everything above this line — the
+ * contract is not verified yet (see docs/planning/gap-register.md). Everything above this line — the
  * command, the confirmation, the polling, the rendering — is written against the interface, so
  * verifying that contract is an adapter change and not a feature rewrite.
  */

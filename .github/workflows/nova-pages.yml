@@ -9,7 +9,7 @@ on:
       - "reliability/latest.json"
       - "reliability/catalog.json"
       - "reliability/site/**"
-      - "scripts/reliability-publish.ts"
+      - "tooling/reliability/reliability-publish.ts"
 
 permissions:
   contents: read
@@ -32,7 +32,7 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Build sanitized public evidence
-        run: bun run scripts/reliability-publish.ts
+        run: bun run tooling/reliability/reliability-publish.ts
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

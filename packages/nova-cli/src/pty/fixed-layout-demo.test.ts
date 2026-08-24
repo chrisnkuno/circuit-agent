@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { bunExecutable } from "./harness";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../");
-const DEMO_ENTRY = path.join(REPO_ROOT, "scripts/fixed-layout-demo.ts");
+const DEMO_ENTRY = path.join(REPO_ROOT, "tooling/dev/fixed-layout-demo.ts");
 
 function spawnDemo(options: { cols?: number; rows?: number; quiet?: boolean } = {}) {
   const proc = pty.spawn(bunExecutable(), ["run", DEMO_ENTRY, ...(options.quiet ? ["--quiet"] : [])], {

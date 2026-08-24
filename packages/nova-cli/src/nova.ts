@@ -3736,7 +3736,7 @@ async function main(): Promise<number> {
        *
        * A `false` return is not an error — it means the printed guide below is the right answer for
        * this terminal, which is true for a pipe, a window too small to hold a page, and a build
-       * where the framework was pruned. See `terminal_design_system.md` §10.
+       * where the framework was pruned. See `docs/reference/terminal-design-system.md` §10.
        */
       const openGuideScreen = async (startAt?: string): Promise<boolean> => {
         const outcome = await withFullScreen(screenCapabilities(), terminalControls(), async () => {

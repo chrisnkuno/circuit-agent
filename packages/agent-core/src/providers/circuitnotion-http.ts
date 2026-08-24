@@ -25,7 +25,7 @@ export function circuitNotionBaseUrl(value?: string): string {
 
 /**
  * Shared default headers for every CircuitNotion call. `relaySecret` is only present when
- * CIRCUITNOTION_BASE_URL points at the CircuitNotion relay Worker (cloudflare/circuitnotion-relay)
+ * CIRCUITNOTION_BASE_URL points at the CircuitNotion relay Worker (services/circuitnotion-relay)
  * instead of CircuitNotion directly — the Worker rejects any request without this exact header,
  * so it never becomes a general-purpose open proxy for CircuitNotion's API.
  */

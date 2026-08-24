@@ -10,8 +10,8 @@ on:
       - "packages/nova-state/defender-knowledge/**"
       - "packages/agent-core/src/nova-cli/defender-brain*"
       - "packages/agent-core/src/nova-cli/defender-feed*"
-      - "scripts/refresh-defender-brain.ts"
-      - "scripts/defender-refresh-policy.ts"
+      - "tooling/defender/refresh-defender-brain.ts"
+      - "tooling/defender/defender-refresh-policy.ts"
 
 permissions:
   contents: read
@@ -44,7 +44,7 @@ jobs:
         continue-on-error: true
         env:
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
-        run: bun run scripts/refresh-defender-brain.ts --force
+        run: bun run tooling/defender/refresh-defender-brain.ts --force
       - name: Upload quarantined review queue
         if: always()
         uses: actions/upload-artifact@v4

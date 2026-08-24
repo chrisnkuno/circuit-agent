@@ -7,8 +7,8 @@ on:
     paths:
       - .github/workflows/native-state-release.yml
       - packages/nova-state/**
-      - scripts/package-native-state.ts
-      - scripts/publish-native-state.ts
+      - tooling/release/package-native-state.ts
+      - tooling/release/publish-native-state.ts
   workflow_dispatch:
     inputs:
       version:
@@ -92,7 +92,7 @@ jobs:
         run: |
           binary="packages/nova-state/target/${{ matrix.target }}/release/nova-state"
           if [[ "$RUNNER_OS" == "Windows" ]]; then binary="${binary}.exe"; fi
-          bun run scripts/package-native-state.ts --target "${{ matrix.target }}" --version "${{ inputs.version || '0.1.0' }}" --binary "$binary" --out-dir release-packages
+          bun run tooling/release/package-native-state.ts --target "${{ matrix.target }}" --version "${{ inputs.version || '0.1.0' }}" --binary "$binary" --out-dir release-packages
           npm pack --dry-run "./release-packages/${{ matrix.package }}"
       - uses: actions/upload-artifact@v4
         with:
@@ -113,9 +113,9 @@ jobs:
         with:
           path: release-packages
       - name: Verify synchronized package set
-        run: bun run scripts/publish-native-state.ts --packages-dir release-packages --version "${{ inputs.version || '0.1.0' }}"
+        run: bun run tooling/release/publish-native-state.ts --packages-dir release-packages --version "${{ inputs.version || '0.1.0' }}"
       - name: Publish native packages
         if: inputs.publish == true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: bun run scripts/publish-native-state.ts --packages-dir release-packages --version "${{ inputs.version || '0.1.0' }}" --publish --provenance
+        run: bun run tooling/release/publish-native-state.ts --packages-dir release-packages --version "${{ inputs.version || '0.1.0' }}" --publish --provenance

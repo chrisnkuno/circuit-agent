@@ -15,6 +15,16 @@
 # auth) will fail until real Convex env vars are set here. Deploy Convex once
 # from your machine: `bunx convex deploy`, then copy the URLs it prints.
 
+# MONOREPO NOTE — this file lives at the workspace root, but the site is `apps/web`.
+#
+# `bun run build` here delegates to that workspace, so the command is correct as written; what
+# Netlify cannot infer is where the build *output* lands. Set the package directory to `apps/web`
+# in Site settings -> Build & deploy -> Package directory, or @netlify/plugin-nextjs will look for
+# `.next` at the root and find nothing.
+#
+# The install still has to happen at the root: `apps/web` depends on `@circuit-nova/nova-core` as
+# a workspace, which only resolves from the workspace root's lockfile.
+
 [build]
   command = "bun run build"
 

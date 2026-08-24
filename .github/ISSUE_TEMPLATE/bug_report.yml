@@ -1,0 +1,60 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security problems here — use the private reporting link on the
+        previous screen.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - nova CLI (packages/nova-cli)
+        - Agent core (packages/agent-core)
+        - Native state / Defensive Brain (packages/nova-state)
+        - Hosted control plane (apps/web)
+        - CircuitNotion relay (services/)
+        - Tooling, CI or release
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what happened, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `nova` in a repository with ...
+        2. Ask it to ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The package version, or the commit if you are running from source.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Linux, macOS, Windows]
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or logs
+      description: Redact API keys and any RWF ledger identifiers before pasting.
+      render: text

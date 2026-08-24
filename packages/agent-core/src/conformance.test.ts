@@ -107,7 +107,7 @@ describe("what this package refuses to let rot", () => {
     for (const module of sources) {
       expect(count(module.text, /@ts-(ignore|expect-error|nocheck)/), module.relative).toBe(0);
       // A TODO in shipped code is a decision someone deferred and nobody scheduled. The register
-      // for known-and-not-done work is docs/optimization-map.md, where it has an owner and a number.
+      // for known-and-not-done work is docs/reference/optimization-map.md, where it has an owner and a number.
       expect(count(module.text, /\b(TODO|FIXME|XXX|HACK)\b/), module.relative).toBe(0);
     }
   });

@@ -8,7 +8,7 @@ const script = readFileSync(path.join(root, "app.js"), "utf8");
 const styles = readFileSync(path.join(root, "styles.css"), "utf8");
 const readme = readFileSync(path.join(root, "..", "..", "README.md"), "utf8");
 const publisher = readFileSync(
-  path.join(root, "..", "..", "scripts", "reliability-publish.ts"),
+  path.join(root, "..", "..", "tooling", "reliability", "reliability-publish.ts"),
   "utf8",
 );
 

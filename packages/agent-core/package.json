@@ -53,7 +53,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bun run ../../scripts/build-packages.ts",
-    "prepublishOnly": "bun run ../../scripts/build-packages.ts"
+    "build": "bun run ../../tooling/build/build-packages.ts",
+    "prepublishOnly": "bun run ../../tooling/build/build-packages.ts"
   }
 }

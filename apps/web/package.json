@@ -1,0 +1,36 @@
+{
+  "name": "@circuit-nova/web",
+  "version": "0.2.0",
+  "private": true,
+  "description": "The hosted control plane: the Next.js site, its Convex backend, and the durable dispatcher that runs budgeted, approval-gated agent work.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "wander:once": "bun run scripts/run-wander-once.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@circuit-nova/nova-core": "workspace:*",
+    "@convex-dev/better-auth": "^0.12.5",
+    "better-auth": "~1.6.15",
+    "convex": "^1.31.2",
+    "e2b": "^2.39.0",
+    "lucide-react": "^1.29.0",
+    "next": "^16.0.0",
+    "openai": "^6.49.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-resizable-panels": "^4.12.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

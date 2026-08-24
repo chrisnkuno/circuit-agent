@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest something the system should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [docs/planning/product-backlog.md](https://github.com/chrisnkuno/circuit-agent/blob/main/docs/planning/product-backlog.md)
+        and [docs/planning/gap-register.md](https://github.com/chrisnkuno/circuit-agent/blob/main/docs/planning/gap-register.md)
+        first — it may already be tracked, possibly with the evidence for why it is not done yet.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that this makes hard or impossible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part would change
+      options:
+        - nova CLI
+        - Agent core (affects every surface)
+        - Native state / Defensive Brain
+        - Hosted control plane
+        - Tooling or CI
+        - Not sure
+    validations:
+      required: true

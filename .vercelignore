@@ -1,8 +1,12 @@
-# The hosted control plane is one product in this monorepo. Do not upload other products or local
-# build state to Vercel; the web app still receives root app/components/lib and shared package source.
+# The hosted control plane (apps/web) is one product in this monorepo. Vercel needs that app and
+# the shared package source it imports, and nothing else — not the other products, not local build
+# state, and above all not the secrets.
+#
+# Set the project's Root Directory to `apps/web` in the Vercel dashboard; this file only decides
+# what gets uploaded, not which app gets built.
+
 .git/
 .github/
-.next/
 .nova/
 .vercel/
 .convex/
@@ -10,16 +14,18 @@ node_modules/
 **/node_modules/
 **/dist/
 **/target/
+**/.next/
 coverage/
 playwright-report/
 test-results/
 tmp/
 bench/
-apps/
-cloudflare/
+docs/
+reliability/
+services/
+tooling/
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.tsbuildinfo
-dev-server.log
-dev-server.err.log
+*.log

@@ -1,0 +1,44 @@
+version: 2
+updates:
+  # One entry per manifest bun installs from. `services/` is outside the workspace and carries its
+  # own lockfile, so it needs its own entry or it is never updated at all.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      types:
+        patterns: ["@types/*"]
+      testing:
+        patterns: ["vitest", "@vitest/*", "@playwright/*", "@termuijs/testing"]
+      dev:
+        dependency-type: development
+
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      next:
+        patterns: ["next", "@next/*", "react", "react-dom", "@types/react", "@types/react-dom"]
+      convex:
+        patterns: ["convex", "@convex-dev/*", "better-auth", "@convex-dev/better-auth"]
+
+  - package-ecosystem: npm
+    directory: /services/circuitnotion-relay
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: cargo
+    directory: /packages/nova-state
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

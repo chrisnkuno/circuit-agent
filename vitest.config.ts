@@ -37,6 +37,8 @@ export default defineConfig({
       ...configDefaults.exclude,
       ".claude/worktrees/**",
       "reliability/site/runs/**",
+      // Playwright drives a real browser against a running server; `bun run test:e2e` owns it.
+      "apps/web/tests/e2e/**",
     ],
     /**
      * Terminal tests get the machine to themselves.
@@ -75,6 +77,7 @@ export default defineConfig({
             ...configDefaults.exclude,
             ".claude/worktrees/**",
             "reliability/site/runs/**",
+            "apps/web/tests/e2e/**",
             PTY_TESTS,
           ],
         },

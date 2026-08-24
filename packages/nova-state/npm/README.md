@@ -3,7 +3,7 @@
 Each release compiles `nova-state` for one target and stages an intentionally tiny npm package:
 
 ```sh
-bun run scripts/package-native-state.ts \
+bun run tooling/release/package-native-state.ts \
   --target x86_64-unknown-linux-gnu \
   --version 0.1.0
 ```

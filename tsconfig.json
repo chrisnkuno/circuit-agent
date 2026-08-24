@@ -1,50 +1,25 @@
 {
+  "//": "The workspace root: the shared packages, the tooling that builds and releases them, and the reliability site. Each app owns its own tsconfig (see apps/web/tsconfig.json) — `bun run typecheck` at the root runs both.",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "es2022"
-    ],
-    "allowJs": false,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
+    "lib": ["dom", "dom.iterable", "es2022"],
     "jsx": "react-jsx",
-    "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
     "paths": {
-      "@/*": [
-        "./*"
-      ],
-      "@circuit-nova/nova-core": [
-        "./packages/agent-core/src/index.ts"
-      ],
-      "@circuit-nova/nova-core/*": [
-        "./packages/agent-core/src/*"
-      ]
+      "@circuit-nova/nova-core": ["./packages/agent-core/src/index.ts"],
+      "@circuit-nova/nova-core/*": ["./packages/agent-core/src/*"]
     }
   },
   "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "tooling/**/*.ts",
+    "reliability/**/*.ts",
+    "vitest.config.ts"
   ],
   "exclude": [
     "node_modules",
-    "convex",
-    "cloudflare",
-    "apps"
+    "**/node_modules",
+    "**/dist",
+    "packages/nova-state/target"
   ]
 }

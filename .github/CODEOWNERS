@@ -1,0 +1,16 @@
+# Every change gets a review by default. Later lines win, so the catch-all comes first and the
+# places where a mistake ships to users — rather than only to main — are named after it.
+*                           @chrisnkuno
+
+# The shared runtime: a change here reaches the CLI, the hosted worker and the separate desktop
+# repository at once.
+/packages/agent-core/       @chrisnkuno
+
+# Signing, publishing and anything that runs with secrets in scope.
+/.github/workflows/         @chrisnkuno
+/tooling/release/           @chrisnkuno
+/tooling/defender/          @chrisnkuno
+
+# Money and authorization.
+/apps/web/convex/           @chrisnkuno
+/apps/web/lib/              @chrisnkuno

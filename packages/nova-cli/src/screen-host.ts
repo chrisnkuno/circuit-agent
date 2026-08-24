@@ -16,7 +16,7 @@
  * *reinstalled* afterwards rather than merely re-enabled: the listeners they registered are torn
  * down by the framework on the way in and never restored on the way out.
  *
- * See `terminal_design_system.md` §10.
+ * See `docs/reference/terminal-design-system.md` §10.
  */
 
 export type ScreenCapabilities = {

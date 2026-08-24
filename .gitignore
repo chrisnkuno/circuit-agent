@@ -1,26 +1,35 @@
+# Dependencies
 node_modules/
+
+# Build output
 .next/
-.env
-.env.local
-.env.*.local
-!.env.example
-*.tsbuildinfo
-.convex/
-.wrangler/
-coverage/
 dist/
+out/
+*.tsbuildinfo
+packages/nova-state/target/
+apps/web/.next/
+
+# Test and coverage output
+coverage/
 playwright-report/
 test-results/
-.vercel
-.env*
-packages/nova-state/target/
 
-# Nova CLI local state (sessions, checkpoint index)
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Deployment and provider caches
+.convex/
+.vercel/
+.wrangler/
+
+# Nova CLI local state (sessions, checkpoint index, security brain)
 .nova/
 
-# Scratch output from local agent runs
-tmp/
+# Generated reliability site data, rebuilt by `bun run reliability:publish`
 reliability/site/data.json
 
-dev-server.log
-dev-server.err.log
+# Scratch output from local agent runs and dev servers
+tmp/
+*.log

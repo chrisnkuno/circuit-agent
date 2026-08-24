@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/chrisnkuno/circuit-agent/security/advisories/new
+    about: Report privately. Please do not open a public issue for a security problem.
+  - name: Nova Desktop (the Tauri app)
+    url: https://github.com/chrisnkuno/nova-desktop/issues
+    about: The desktop window and its installer are maintained in their own repository.
+  - name: Contributing guide
+    url: https://github.com/chrisnkuno/circuit-agent/blob/main/CONTRIBUTING.md
+    about: Setup, the test standard, and the path from a clone to a pull request.

@@ -1,0 +1,278 @@
+"use node";
+
+import { v } from "convex/values";
+import { internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { planDispatch, qualifiedStepId, toDispatchPlan } from "../lib/dispatcher";
+import type { AgentRunPlan } from "../lib/agent-orchestration";
+import type { TaskBudget } from "../lib/agent-budget";
+import { CodingAgentWorker, estimateCodingPlanReservation, MAX_REPAIR_ATTEMPTS } from "../lib/coding-worker";
+import { createCodingModelProvider, createE2BProvider, createModelPriceCatalog } from "@circuit-nova/nova-core/providers/factory";
+import type { CodingModelProvider, CodingPlanRequest } from "@circuit-nova/nova-core/providers/model";
+import type { InteractiveCodingSandboxProvider } from "@circuit-nova/nova-core/providers/contracts";
+import type { ModelPriceCatalog } from "@circuit-nova/nova-core/model-cost";
+import { createConvexArtifactStore } from "./lib/artifactStore";
+import { createWorkerControl } from "./lib/workerControl";
+import { classifyWorkerFailure, maxAttemptsForFailure, retryDelayForFailure, summarizeWorkerError } from "../lib/worker-runtime";
+import { findWorkspacePreset } from "@circuit-nova/nova-core/sandbox-templates";
+import { isWanderObjective, resolveExecutionSession } from "@circuit-nova/nova-core/wander";
+import { buildStepRequest } from "../lib/coding-step-request";
+
+// Shared with lease recovery (crons.ts) so a step gets one attempt budget in total, whether an
+// attempt died loudly with a transient error or silently by letting its lease lapse.
+const MAX_STEP_ATTEMPTS = 3;
+
+type StepRunParams = {
+  runId: Id<"agentRuns">;
+  stepId: Id<"agentSteps">;
+  workerId: string;
+  reservationRwf: number;
+  request: CodingPlanRequest;
+  reuseSandboxId?: string;
+  model: CodingModelProvider;
+  sandbox: InteractiveCodingSandboxProvider;
+  prices: ModelPriceCatalog;
+  providerName: string;
+  /** Attempts already consumed by this step, including the current one (set at claim time). */
+  attempts: number;
+  claimLeaseMs: number;
+  sandboxRuntimeSeconds: number;
+  /** Wall-clock ceiling the worker keeps itself inside, below Convex's 10-minute action limit. */
+  stepDeadlineMs: number;
+};
+
+async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<void> {
+  const worker = new CodingAgentWorker({
+    model: params.model,
+    sandbox: params.sandbox,
+    artifacts: createConvexArtifactStore(ctx, params.workerId),
+    control: createWorkerControl(ctx, { runId: params.runId, workerId: params.workerId, leaseMs: params.claimLeaseMs }),
+    prices: params.prices,
+  });
+
+  let result;
+  try {
+    result = await worker.execute({
+      ...params.request,
+      reuseSandboxId: params.reuseSandboxId,
+      runId: params.runId,
+      sandboxRuntimeSeconds: params.sandboxRuntimeSeconds,
+      stepDeadlineMs: params.stepDeadlineMs,
+      modelReservationRwf: params.reservationRwf,
+    });
+  } catch (error) {
+    // A thrown error is an infrastructure failure — the worker never reached a verdict on the
+    // work itself. If it looks transient, hand the step back for another attempt instead of
+    // failing the run over a provider hiccup. (A worker that *does* reach a verdict returns
+    // status "failed" below; that is a real answer about the work and is never retried.)
+    if (classifyWorkerFailure(error) === "transient" && params.attempts < maxAttemptsForFailure(error, MAX_STEP_ATTEMPTS)) {
+      const released = await ctx.runMutation(internal.agentRuns.releaseStepForRetry, {
+        runId: params.runId,
+        stepId: params.stepId,
+        workerId: params.workerId,
+        reason: summarizeWorkerError(error),
+        retryAfterMs: retryDelayForFailure(error, params.attempts),
+      });
+      if (released.released) return;
+    }
+    await ctx.runMutation(internal.agentRuns.recordStepOutcome, {
+      runId: params.runId,
+      stepId: params.stepId,
+      workerId: params.workerId,
+      actualRwf: 0n,
+      provider: params.providerName,
+      meter: "worker_error",
+      quantity: 0,
+      usageIdempotencyKey: `error_${params.stepId}_${params.workerId}`,
+      outcome: "failed",
+      summary: summarizeWorkerError(error),
+      artifactReferences: [],
+    });
+    return;
+  }
+
+  // A cancelled run already transitioned the step's status via requestCancellation;
+  // the lease is no longer "running", so there is nothing further to settle here.
+  if (result.status === "cancelled") return;
+
+  await ctx.runMutation(internal.agentRuns.recordStepOutcome, {
+    runId: params.runId,
+    stepId: params.stepId,
+    workerId: params.workerId,
+    actualRwf: BigInt(result.actualModelRwf),
+    provider: params.providerName,
+    meter: "model_tokens",
+    quantity: result.modelUsage.totalTokens,
+    usageIdempotencyKey: `usage_${params.stepId}_${params.workerId}`,
+    outcome: result.status === "completed" ? "completed" : "failed",
+    summary: result.summary,
+    artifactReferences: result.artifactReferences.map((artifact) => artifact.reference),
+  });
+}
+
+/**
+ * Executes one already-claimed step, in its own action.
+ *
+ * Scheduled transactionally by `agentRuns.claimStep` the moment a claim commits, rather than
+ * awaited inline by the dispatch tick. That separation is what makes the executor concurrent:
+ * scheduled actions run in parallel, so N claimed steps genuinely run at once instead of
+ * queueing behind each other in a single tick. It also bounds blast radius — one step that
+ * hangs against a slow provider stalls only itself, not every other tenant's work — and keeps
+ * any single action far away from Convex's 10-minute action limit, which four sequential steps
+ * at a 90s model timeout plus sandbox time could otherwise approach.
+ *
+ * The step is already claimed and its lease is already ticking, so this action must always
+ * reach a terminal record for it: complete, fail, or release it for retry.
+ */
+export const executeClaimedStep = internalAction({
+  args: {
+    runId: v.id("agentRuns"),
+    stepId: v.id("agentSteps"),
+    workerId: v.string(),
+    reservationRwf: v.number(),
+    attempts: v.number(),
+    reuseSandboxId: v.optional(v.string()),
+    workspacePresetId: v.optional(v.string()),
+    taskId: v.id("tasks"),
+    taskTitle: v.string(),
+    runObjective: v.string(),
+    researchBrief: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const env = process.env as Record<string, string | undefined>;
+    const prices = createModelPriceCatalog(env);
+    const model = createCodingModelProvider(env);
+    const sandbox = createE2BProvider(env, findWorkspacePreset(args.workspacePresetId).templateAlias);
+    if (!prices || !model || !sandbox) {
+      // Providers were readable when the step was claimed, so this only happens if configuration
+      // changed underneath the claim. Hand the step back rather than burning its attempt budget.
+      await ctx.runMutation(internal.agentRuns.releaseStepForRetry, {
+        runId: args.runId,
+        stepId: args.stepId,
+        workerId: args.workerId,
+        reason: "Execution providers are not configured on this deployment.",
+        retryAfterMs: 60_000,
+      });
+      return null;
+    }
+    // Backup ensure: if prefetch raced the claim, finish the literature briefing once here.
+    let researchBrief = args.researchBrief ?? null;
+    if (isWanderObjective(args.runObjective) && !researchBrief?.trim()) {
+      try {
+        researchBrief = await ctx.runAction(internal.wanderEvidenceActions.prefetchForRun, { runId: args.runId });
+      } catch {
+        researchBrief = null;
+      }
+    }
+    const session = resolveExecutionSession(args.runObjective);
+    await runCodingStep(ctx, {
+      runId: args.runId,
+      stepId: args.stepId,
+      workerId: args.workerId,
+      reservationRwf: args.reservationRwf,
+      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId, args.workspacePresetId, researchBrief),
+      reuseSandboxId: args.reuseSandboxId,
+      attempts: args.attempts,
+      model,
+      sandbox,
+      prices,
+      providerName: env.CODING_MODEL_PROVIDER ?? "unknown",
+      claimLeaseMs: session.claimLeaseMs,
+      sandboxRuntimeSeconds: session.sandboxRuntimeSeconds,
+      stepDeadlineMs: session.stepDeadlineMs,
+    });
+    return null;
+  },
+});
+
+/**
+ * Auditable dispatch tick: combines validated run graphs, fair global scheduling,
+ * provider readiness, approval gates, and per-run budgets into an explicit decision
+ * before claiming any step. Claiming is all it does — execution is handed to a
+ * per-step scheduled action (see executeClaimedStep), so the tick itself stays a short,
+ * predictable control loop no matter how slow the work it releases turns out to be.
+ * Only "coding" role steps currently execute; other roles remain queued as
+ * needs_configuration until their workers exist.
+ */
+export const dispatchTick = internalAction({
+  args: {},
+  returns: v.object({ decided: v.number(), dispatched: v.number() }),
+  handler: async (ctx) => {
+    const env = process.env as Record<string, string | undefined>;
+    const prices = createModelPriceCatalog(env);
+    const model = createCodingModelProvider(env);
+    const sandbox = createE2BProvider(env);
+    const codingExecutionReady = Boolean(prices && model && sandbox);
+    const providerName = env.CODING_MODEL_PROVIDER ?? "unknown";
+
+    const snapshot = await ctx.runQuery(internal.agentRuns.getDispatchSnapshot, {});
+
+    const plans: AgentRunPlan[] = snapshot.map(({ run, steps }) => toDispatchPlan({
+      runId: run._id,
+      title: run.objective,
+      maxParallelism: run.maxParallelism,
+      capabilityIds: run.capabilityIds,
+      steps: steps.map((step) => ({
+        stepKey: step.stepKey,
+        title: step.title,
+        role: step.role,
+        dependsOn: step.dependsOn,
+        status: step.status,
+        requiresApproval: step.requiresApproval,
+        sandboxTemplate: step.sandboxTemplate,
+        capabilityIds: step.capabilityIds,
+      })),
+    }));
+
+    const budgetsByRun: Record<string, TaskBudget | undefined> = {};
+    const estimatedRwfByStep: Record<string, number | undefined> = {};
+    const requestByStepId = new Map<string, CodingPlanRequest>();
+
+    for (const { run, task, steps } of snapshot) {
+      if (!task) continue;
+      budgetsByRun[run._id] = { maxRwf: Number(task.maxRwf), spentRwf: Number(task.spentRwf), reservedRwf: Number(task.reservedRwf) };
+      if (!prices) continue;
+      // Hold Wander dispatch until the literature scout finishes so prompt reservation matches the dossier.
+      if (isWanderObjective(run.objective) && !run.researchBrief?.trim()) continue;
+      for (const step of steps) {
+        if (step.role !== "coding") continue;
+        const request = buildStepRequest(task.title, run.objective, task._id, step._id, run.workspacePresetId, run.researchBrief);
+        requestByStepId.set(qualifiedStepId(run._id, step.stepKey), request);
+        // Reserve for one repair as well as the first attempt. Reserving only the first would
+        // make the repair loop unaffordable by construction: it stops as soon as the remaining
+        // reservation cannot cover another call. A conservative *maximum* is reserved and only
+        // actual usage is ever settled, so this raises the hold, not the price of a run.
+        estimatedRwfByStep[qualifiedStepId(run._id, step.stepKey)] = estimateCodingPlanReservation(request, prices).maximumRwf * 2;
+      }
+    }
+
+    const decisions = planDispatch({ plans, globalParallelism: 4, codingExecutionReady, budgetsByRun, estimatedRwfByStep });
+    const stepById = new Map(snapshot.flatMap(({ run, steps }) => steps.map((step) => [qualifiedStepId(run._id, step.stepKey), step] as const)));
+
+    const objectiveByRunId = new Map(snapshot.map(({ run }) => [run._id as string, run.objective] as const));
+    let dispatched = 0;
+    for (const decision of decisions) {
+      if (decision.action !== "dispatch" || !decision.step) continue;
+      const stepDoc = stepById.get(decision.step.id);
+      if (!stepDoc) continue;
+      const workerId = `dispatcher_${crypto.randomUUID()}`;
+      const objective = objectiveByRunId.get(decision.runId) ?? "";
+      const claim = await ctx.runMutation(internal.agentRuns.claimStep, {
+        runId: decision.runId as Id<"agentRuns">,
+        stepId: stepDoc._id,
+        workerId,
+        estimatedRwf: BigInt(decision.reservationRwf),
+        leaseMs: resolveExecutionSession(objective).claimLeaseMs,
+      });
+      // A successful claim already scheduled its own execution inside the same transaction,
+      // so there is nothing to await here — the tick moves straight on to the next decision.
+      if (claim.status !== "claimed") continue;
+      dispatched += 1;
+    }
+
+    return { decided: decisions.length, dispatched };
+  },
+});
