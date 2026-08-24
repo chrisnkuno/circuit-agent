@@ -45,6 +45,7 @@ import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } fro
 import { classifyNetworkError } from "./network";
 import { NOVA_CLI_VERSION, compareVersions, fetchLatestVersion, runSelfUpdate } from "./update";
 import { readAutoUpdateMode, runAutoUpdate } from "./auto-update";
+import { updateDefenderFeed } from "./defender-feed-update";
 import { renderReliabilityStatus } from "./reliability-status";
 import { CACHE_CHURN_HINT } from "@circuit-nova/nova-core/nova-cli/cost";
 import { MODEL_FIELD_PROVIDER, SETTING_FIELDS, loadSettings, mergedEnvironment, runSettingsMenu, saveSettings, settingsFile, type NovaSettings, type SettingChoice, type SettingKey, type SettingsPrompts } from "./settings";
@@ -3284,6 +3285,10 @@ async function main(): Promise<number> {
    * already looked today — is decided before the network is touched at all.
    */
   const startupBalance = spec.id === "circuitnotion" ? readConfirmedBalance(true) : Promise.resolve(undefined);
+  // Knowledge replication is independent of package updates and model calls. It is deliberately
+  // detached: an offline feed must add zero startup latency, and the last verified/bundled corpus
+  // remains usable while this attempt completes in the background.
+  void updateDefenderFeed(environment).catch(() => undefined);
   const startupUpdatePromise = runAutoUpdate({
     context: {
       mode: readAutoUpdateMode(environment),

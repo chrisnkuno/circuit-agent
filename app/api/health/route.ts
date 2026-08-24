@@ -27,5 +27,11 @@ export function GET() {
     githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
     exaApiKey: process.env.EXA_API_KEY,
   });
-  return NextResponse.json({ ok: true, application: "up", readiness });
+  const defenderFeed = {
+    ready: Boolean(process.env.DEFENDER_BRAIN_SEQUENCE?.trim() && process.env.DEFENDER_BRAIN_KEY_ID?.trim() && process.env.DEFENDER_BRAIN_SIGNING_KEY?.trim()),
+    sequenceConfigured: Boolean(process.env.DEFENDER_BRAIN_SEQUENCE?.trim()),
+    keyIdConfigured: Boolean(process.env.DEFENDER_BRAIN_KEY_ID?.trim()),
+    signingKeyConfigured: Boolean(process.env.DEFENDER_BRAIN_SIGNING_KEY?.trim()),
+  };
+  return NextResponse.json({ ok: true, application: "up", readiness, defenderFeed });
 }

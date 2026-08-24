@@ -1,0 +1,58 @@
+name: Defender Brain pipeline
+
+on:
+  schedule:
+    - cron: "31 4 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "packages/nova-state/defender-knowledge/**"
+      - "packages/agent-core/src/nova-cli/defender-brain*"
+      - "packages/agent-core/src/nova-cli/defender-feed*"
+      - "scripts/refresh-defender-brain.ts"
+      - "scripts/defender-refresh-policy.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - run: bunx vitest run packages/agent-core/src/nova-cli/defender-feed.test.ts packages/agent-core/src/nova-cli/defender-brain.test.ts lib/defender-feed-server.test.ts
+      - run: cargo test --manifest-path packages/nova-state/Cargo.toml brain
+
+  research-candidates:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Research untrusted candidates
+        id: research
+        continue-on-error: true
+        env:
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+        run: bun run scripts/refresh-defender-brain.ts --force
+      - name: Upload quarantined review queue
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: defender-brain-candidates-${{ github.run_id }}
+          path: .nova/security-brain/candidates/*.jsonl
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve partial-refresh failure status
+        if: steps.research.outcome == 'failure'
+        run: exit 1

@@ -22,6 +22,7 @@
     "test:state": "cargo test --manifest-path packages/nova-state/Cargo.toml",
     "bench:state": "cargo run --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 500 --messages 40 --queries 200",
     "bench:defender": "cargo run --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-defender-brain-bench -- --records 10000 --queries 2000",
+    "bench:defender-feed": "bun run scripts/bench-defender-feed.ts",
     "bench": "bun run scripts/bench.ts",
     "reliability:audit": "bun run scripts/reliability-audit.ts",
     "reliability:exa": "bun run scripts/exa-reliability.ts",
@@ -29,6 +30,7 @@
     "reliability:scheduled": "bun run scripts/reliability-eval.ts",
     "reliability:promote": "bun run scripts/reliability-promote.ts",
     "defender:refresh": "bun --env-file=.env.local run scripts/refresh-defender-brain.ts",
+    "defender:feed-key": "bun run scripts/generate-defender-feed-key.ts",
     "reliability:publish": "bun run scripts/reliability-publish.ts",
     "optimize:map": "bun run scripts/optimization-report.ts"
   },

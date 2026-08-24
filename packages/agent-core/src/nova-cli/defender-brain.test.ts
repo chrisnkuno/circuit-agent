@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
+import os from "node:os";
+import { promises as fs } from "node:fs";
 import { DefenderBrain, defenderKnowledgeCandidates } from "./defender-brain";
 import type { DefenderBrainHit, DefenderBrainReport } from "./state-client";
 
@@ -40,5 +42,25 @@ describe("DefenderBrain", () => {
     const result = await brain.search("identity");
     expect(result.hits).toEqual([]);
     expect(result.reason).toContain("unavailable");
+  });
+
+  it("falls back to the bundled corpus when native validation rejects a signed replica", async () => {
+    const rejected = await fs.mkdtemp(path.join(os.tmpdir(), "nova-rejected-replica-"));
+    const rebuilt: string[] = [];
+    const client = {
+      async rebuildDefenderBrain(source: string): Promise<DefenderBrainReport> {
+        rebuilt.push(source);
+        if (source === rejected) throw new Error("replica rejected");
+        return { records: 1, rejected: 0, sourceFiles: 1, changed: true };
+      },
+      async searchDefenderBrain() { return [hit]; },
+      async close() {},
+    };
+    try {
+      const brain = new DefenderBrain(path.resolve(".nova/test-brain"), async () => client, [corpus], async () => rejected);
+      const result = await brain.search("PQC");
+      expect(result.hits).toEqual([hit]);
+      expect(rebuilt).toEqual([rejected, corpus]);
+    } finally { await fs.rm(rejected, { recursive: true, force: true }); }
   });
 });

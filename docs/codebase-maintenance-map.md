@@ -12,6 +12,11 @@ Circuit Nova is a monorepo containing four products, not one application:
 3. the hosted Next.js + Convex control-plane product;
 4. the CircuitNotion Cloudflare relay service.
 
+The centralized Defensive Brain feed belongs to the hosted control-plane product. Its reviewed
+corpus and verification contract remain shared engine assets; its HTTP routes, signing authority,
+scheduled Exa candidate pipeline, and deployment secrets must not move into the CLI or provider
+relay. See `docs/defender-brain-pipeline.md`.
+
 They should share execution contracts and provider adapters, but not entrypoints, presentation code,
 or release lifecycles. The desired dependency direction is one-way:
 
@@ -49,6 +54,7 @@ release scripts.
 | 7/10 | `packages/agent-core/src/providers` | CircuitNotion, OpenAI, Anthropic, E2B, Docker, Exa | Provider and sandbox adapters share a package with Nova session policy; optional SDK loading and retry policy are hard to own independently | Extract `packages/providers` and `packages/workspaces`, each with conformance suites |
 | 6/10 | `scripts`, `reliability`, root release config | Builds, packaging, scheduled evidence | Product builds and generated reliability-site publication are mixed in one flat script directory | Group as `tooling/{build,release,reliability}` and expose root scripts only as stable aliases |
 | 6/10 | `packages/nova-state` | Read-only native history index plus separately stored Defensive Brain | Native runtime boundary is good, but two read models now share one protocol/release package and must not share schemas or authority | Keep one sidecar for distribution efficiency; compartmentalize `history` and `brain` modules, databases, benchmarks, and canonical sources |
+| 5/10 | Defensive Brain distribution | Hosted signed feed, scheduled research queue, and global CLI replicas | The boundary and configuration health are explicit, but the first production signing key must still be pinned before activation | Keep publishing in control-plane, review in git, verification in shared core, scheduling in each front end, and retrieval in native state |
 | 4/10 | `cloudflare/circuitnotion-relay` | Independently deployed model relay | Correctly isolated, but `cloudflare/` describes a vendor rather than the service role | Move to `services/circuitnotion-relay`; keep its own tests and deployment config |
 | 3/10 | `reliability/site` | Published evidence viewer | Generated run fixtures and maintained site source occupy the same tree | Keep source in `tooling/reliability/site`; generate run artifacts into an ignored output directory |
 

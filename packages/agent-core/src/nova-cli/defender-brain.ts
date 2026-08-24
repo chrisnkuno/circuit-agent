@@ -6,6 +6,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tryConnectNovaState, type DefenderBrainHit, type NovaStateClient } from "./state-client";
+import { activeDefenderCorpusDirectory } from "./defender-feed";
 
 type BrainClient = Pick<NovaStateClient, "rebuildDefenderBrain" | "searchDefenderBrain" | "close">;
 
@@ -39,18 +40,28 @@ export class DefenderBrain {
     private readonly dataRoot: string,
     private readonly connect: () => Promise<BrainClient | null> = () => tryConnectNovaState(),
     private readonly candidates = defenderKnowledgeCandidates(),
+    private readonly activeCorpus: () => Promise<string | undefined> = () => activeDefenderCorpusDirectory(process.env),
   ) {}
 
   private ensureReady(): Promise<boolean> {
     this.initialized ??= (async () => {
       try {
-        this.sourceRoot = await existingDirectory(this.candidates);
-        if (!this.sourceRoot) throw new Error("reviewed defensive knowledge corpus is not installed");
+        const replica = await this.activeCorpus();
+        const sources = [replica, ...this.candidates].filter((value): value is string => Boolean(value));
         this.client = await this.connect();
         if (!this.client) throw new Error("native Nova State package is unavailable on this platform");
-        const report = await this.client.rebuildDefenderBrain(this.sourceRoot, this.dataRoot);
-        if (report.records === 0) throw new Error("defensive knowledge corpus contains no accepted records");
-        return true;
+        let lastError: unknown;
+        for (const source of sources) {
+          try {
+            const available = await existingDirectory([source]);
+            if (!available) continue;
+            const report = await this.client.rebuildDefenderBrain(available, this.dataRoot);
+            if (report.records === 0) throw new Error("defensive knowledge corpus contains no accepted records");
+            this.sourceRoot = available;
+            return true;
+          } catch (error) { lastError = error; }
+        }
+        throw lastError ?? new Error("reviewed defensive knowledge corpus is not installed");
       } catch (error) {
         this.disabledReason = error instanceof Error ? error.message : String(error);
         await this.client?.close().catch(() => undefined);
