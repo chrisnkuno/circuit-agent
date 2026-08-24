@@ -4,6 +4,7 @@ import {
   BalanceWatch,
   assessTaskBalance,
   formatRwf,
+  parseManualBalanceCommand,
   parsePayCommand,
   renderBalance,
   renderCheckout,
@@ -36,6 +37,21 @@ describe("/pay grammar", () => {
   it("is not a /pay command", () => {
     expect(parsePayCommand("/payments")).toBeNull();
     expect(parsePayCommand("pay 5000")).toBeNull();
+  });
+});
+
+describe("/balance grammar", () => {
+  it("sets, shows and clears a user-supplied local balance", () => {
+    expect(parseManualBalanceCommand("/balance")).toEqual({ kind: "show" });
+    expect(parseManualBalanceCommand("/balance 12,500 RWF")).toEqual({ kind: "set", amountRwf: 12_500 });
+    expect(parseManualBalanceCommand("/balance clear")).toEqual({ kind: "clear" });
+    expect(parseManualBalanceCommand("/balances 5000")).toBeNull();
+  });
+
+  it("rejects ambiguous or unsafe amounts", () => {
+    expect(parseManualBalanceCommand("/balance 20.5")?.kind).toBe("invalid");
+    expect(parseManualBalanceCommand("/balance -1")?.kind).toBe("invalid");
+    expect(parseManualBalanceCommand(`/balance ${"9".repeat(40)}`)?.kind).toBe("invalid");
   });
 });
 

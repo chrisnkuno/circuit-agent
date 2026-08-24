@@ -7,6 +7,7 @@ import {
   CountdownTimer,
   formatCountdown,
   formatStatusLine,
+  formatHeaderSegments,
   formatTokens,
   MarkdownStream,
   novaSpinnerFrame,
@@ -99,6 +100,32 @@ describe("status line", () => {
   it("emits colour only when colour was asked for", () => {
     expect(formatStatusLine(fields, 80, "none")).not.toMatch(ESCAPE);
     expect(formatStatusLine(fields, 80, "truecolor")).toMatch(ESCAPE);
+  });
+
+  it("keeps the confirmed balance ahead of less important running detail", () => {
+    const wide = plain(formatStatusLine({ ...fields, balance: "1,240 RWF left" }, 100, "none"));
+    expect(wide).toContain("1,240 RWF left");
+    const narrow = plain(formatStatusLine({ ...fields, balance: "1,240 RWF left" }, 48, "none"));
+    expect(narrow).toContain("1,240 RWF left");
+    expect(narrow).not.toContain("$0.0120");
+  });
+});
+
+describe("persistent header segments", () => {
+  const segments = [
+    { full: "balance 1,240 RWF left", compact: "1.2k RWF" },
+    { full: "build" },
+    { full: "$0.0120" },
+  ];
+
+  it("keeps every fact when it fits and drops from the least important end", () => {
+    expect(formatHeaderSegments(segments, 80)).toBe("balance 1,240 RWF left · build · $0.0120");
+    expect(formatHeaderSegments(segments, 30)).toBe("balance 1,240 RWF left · build");
+  });
+
+  it("uses the compact balance before surrendering the header, without overflowing", () => {
+    expect(formatHeaderSegments(segments, 10)).toBe("1.2k RWF");
+    expect(formatHeaderSegments(segments, 4)).toBe("");
   });
 });
 
@@ -910,6 +937,13 @@ describe("renderPromptBox", () => {
     expect(visibleWidth(plain(top))).toBe(30);
   });
 
+  it("keeps a compact balance and gives up the workspace when that is the only honest fit", () => {
+    const { top } = renderPromptBox({ ...fields, workspace: "a-very-long-workspace-name", width: 30, status: "499 RWF" });
+    expect(plain(top)).toContain("499 RWF");
+    expect(plain(top)).not.toContain("a-very-long-workspace-name");
+    expect(visibleWidth(plain(top))).toBe(30);
+  });
+
   it("draws with ASCII glyphs on a terminal that cannot render the box characters", () => {
     const { top, prefix, bottom } = renderPromptBox({ ...fields, glyphs: ASCII_GLYPHS, status: "$0.12" });
     for (const line of [top, bottom]) expect(visibleWidth(plain(line))).toBe(80);
@@ -956,9 +990,9 @@ describe("promptStatusRoom", () => {
     expect(visibleWidth(plain(top))).toBe(80);
   });
 
-  it("shrinks as the title grows and never goes negative", () => {
-    expect(promptStatusRoom("build", "a", 80)).toBeGreaterThan(promptStatusRoom("build", "a".repeat(30), 80));
-    expect(promptStatusRoom("build", "x".repeat(500), 40)).toBe(0);
+  it("reserves for the compact title so a long workspace cannot erase the balance", () => {
+    expect(promptStatusRoom("build", "a", 80)).toBe(promptStatusRoom("build", "a".repeat(300), 80));
+    expect(promptStatusRoom("build", "x".repeat(500), 20)).toBeGreaterThanOrEqual(0);
   });
 });
 

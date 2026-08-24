@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL } from "./circuitnotion-http";
+import { buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
 import type { AgentModelRequest, AgentModelTurn, AgentTurnProvider } from "../agent-runtime";
 import { collectChatStream, toWireMessages, turnFromChatResponse, type ChatResponse, type ChatStreamChunk } from "./openai-compatible";
 import { capabilitiesFor, type ModelCapabilities } from "./model-capabilities";
@@ -31,7 +31,7 @@ export class CircuitNotionAgentTurnProvider implements AgentTurnProvider {
     this.capabilities = capabilitiesFor(options.model);
     if (call) this.call = call;
     else {
-      const client = new OpenAI({ apiKey: options.apiKey, baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL, defaultHeaders: buildCircuitNotionHeaders(options.relaySecret) });
+      const client = new OpenAI({ apiKey: options.apiKey, baseURL: circuitNotionBaseUrl(options.baseURL), defaultHeaders: buildCircuitNotionHeaders(options.relaySecret) });
       this.call = async (body, signal) => await client.chat.completions.create(body as never, { signal }) as unknown as ChatResponse | AsyncIterable<ChatStreamChunk>;
     }
   }

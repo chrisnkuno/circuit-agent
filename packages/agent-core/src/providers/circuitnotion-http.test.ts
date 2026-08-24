@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CIRCUITNOTION_DEFAULT_BASE_URL, buildCircuitNotionHeaders } from "./circuitnotion-http";
+import { CIRCUITNOTION_DEFAULT_BASE_URL, buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
 
 /**
  * The headers every CircuitNotion call carries.
@@ -24,5 +24,11 @@ describe("CircuitNotion request headers", () => {
   it("defaults to a versioned HTTPS base URL", () => {
     expect(CIRCUITNOTION_DEFAULT_BASE_URL.startsWith("https://")).toBe(true);
     expect(CIRCUITNOTION_DEFAULT_BASE_URL.endsWith("/v1")).toBe(true);
+  });
+
+  it("adds the version route to the public origin without rewriting a custom relay path", () => {
+    expect(circuitNotionBaseUrl("https://api.circuitnotion.com")).toBe("https://api.circuitnotion.com/v1");
+    expect(circuitNotionBaseUrl("https://api.circuitnotion.com/")).toBe("https://api.circuitnotion.com/v1");
+    expect(circuitNotionBaseUrl("https://relay.example.com/openai")).toBe("https://relay.example.com/openai");
   });
 });

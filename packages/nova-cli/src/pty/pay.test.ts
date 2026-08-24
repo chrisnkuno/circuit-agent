@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -111,5 +111,25 @@ describe("paying from the prompt", () => {
     await p.waitFor(/NOVA_BILLING_URL/, { since, timeoutMs: 30_000 });
     expect(p.output().slice(since)).toContain("NOVA_BILLING_KEY");
     expect(billing.creations()).toHaveLength(0);
+  });
+
+  it("sets and persists a local balance without calling the balance endpoint", async () => {
+    const p = boot({
+      NOVA_BILLING_URL: "",
+      NOVA_BILLING_KEY: "",
+      NOVA_FX_RWF_PER_USD: "1300",
+    });
+    await p.waitFor(PROMPT, { timeoutMs: 60_000 });
+    let since = p.output().length;
+    p.writeLine("/balance 5000");
+    await p.waitFor(/Local balance set to 5,000 RWF/, { since, timeoutMs: 30_000 });
+    expect(JSON.parse(await readFile(path.join(configDir, "settings.json"), "utf8"))).toMatchObject({
+      NOVA_ACCOUNT_BALANCE_RWF: "5000",
+    });
+
+    since = p.output().length;
+    p.writeLine("/pay");
+    await p.waitFor(/Locally estimated balance: 5,000 RWF/, { since, timeoutMs: 30_000 });
+    expect(p.output().slice(since)).toContain("bypasses the balance endpoint");
   });
 });

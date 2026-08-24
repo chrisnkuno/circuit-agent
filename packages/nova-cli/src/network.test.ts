@@ -13,6 +13,15 @@ describe("network error classification", () => {
     expect(classifyNetworkError("a string thrown by a tool")).toBeNull();
   });
 
+  it("turns a provider 404 into a base-route and model diagnosis", () => {
+    const error = Object.assign(new Error("404 Not Found"), { status: 404, name: "NotFoundError" });
+    const diagnosis = classifyNetworkError(error, { host: "api.circuitnotion.com", purpose: "the model API (CircuitNotion)" });
+    expect(diagnosis?.kind).toBe("not_found");
+    expect(diagnosis?.message).toContain("API route or selected model");
+    expect(diagnosis?.hint).toContain("/v1");
+    expect(diagnosis?.hint).toContain("/models");
+  });
+
   it("names the host and purpose for a DNS failure", () => {
     const diagnosis = classifyNetworkError(
       transportError("getaddrinfo ENOTFOUND api.circuitnotion.com", "ENOTFOUND"),

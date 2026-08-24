@@ -282,6 +282,8 @@ export type StatusFields = {
   /** Tokens spent so far this turn, summed across the model's iterations. */
   tokens: number;
   cost: string;
+  /** Confirmed account credit, kept visible ahead of per-turn detail while work is running. */
+  balance?: string;
   phase?: ActivityPhase;
   /** Exact tool name while an operation is active; omitted during model reasoning. */
   operation?: string;
@@ -302,6 +304,26 @@ export type StatusFields = {
    */
   badge?: string;
 };
+
+export type HeaderSegment = { full: string; compact?: string };
+
+/**
+ * Fits persistent header facts without clipping ANSI styling or wrapping the terminal row.
+ * Segments are ordered most-to-least important; the first survives as long as either spelling fits.
+ */
+export function formatHeaderSegments(segments: readonly HeaderSegment[], width: number, separator = " · "): string {
+  const limit = Math.max(0, Math.floor(width));
+  if (limit === 0 || segments.length === 0) return "";
+  let kept = [...segments];
+  while (kept.length > 0) {
+    const rendered = kept.map((segment) => segment.full).join(separator);
+    if (visibleWidth(rendered) <= limit) return rendered;
+    kept = kept.slice(0, -1);
+  }
+  const first = segments[0];
+  const compact = first.compact ?? first.full;
+  return visibleWidth(compact) <= limit ? compact : "";
+}
 
 function formatElapsed(ms: number): string {
   const seconds = ms / 1000;
@@ -570,6 +592,7 @@ export function formatStatusLine(fields: StatusFields, width: number, depth: Col
     fields.badge ?? "",
     fields.steps && fields.steps.total > 0 ? stepProgress(fields.steps.done, fields.steps.total, { label: fields.steps.label ?? "steps", depth: "none" }) : "",
     fields.mode,
+    fields.balance ?? "",
   ].filter((segment) => segment !== "");
 
   let kept = [...optional].reverse(); // most important first, as they read left to right
@@ -958,7 +981,11 @@ function promptTitle(mode: string, workspace: string, glyphs: GlyphSet): string 
  * pushes the closing corner off the screen exactly when the session is busiest.
  */
 export function promptStatusRoom(mode: string, workspace: string, width: number, glyphs: GlyphSet = UNICODE_GLYPHS): number {
-  return Math.max(0, Math.max(12, width) - visibleWidth(promptTitle(mode, workspace, glyphs)) - PROMPT_CHROME_COLUMNS - 3);
+  // The live account/status reading outranks the workspace on a constrained header. Reserve
+  // against the compact title (`✦ build`), which `renderPromptBox` already falls back to, so a
+  // balance does not disappear merely because the current directory has a long name.
+  const compactTitle = `${glyphs.star} ${mode}`;
+  return Math.max(0, Math.max(12, width) - visibleWidth(compactTitle) - PROMPT_CHROME_COLUMNS - 3);
 }
 
 /**

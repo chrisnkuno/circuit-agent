@@ -30,6 +30,30 @@ export type PayCommand =
   | { kind: "status"; reference: string }
   | { kind: "invalid"; reason: string };
 
+export type ManualBalanceCommand =
+  | { kind: "show" }
+  | { kind: "set"; amountRwf: number }
+  | { kind: "clear" }
+  | { kind: "invalid"; reason: string };
+
+/** `/balance` controls the local estimate used when the account balance endpoint is unavailable. */
+export function parseManualBalanceCommand(input: string): ManualBalanceCommand | null {
+  const match = /^\/balance(?:\s+([\s\S]*))?$/.exec(input.trim());
+  if (!match) return null;
+  const argument = (match[1] ?? "").trim();
+  if (!argument) return { kind: "show" };
+  if (/^(?:clear|auto|gateway)$/i.test(argument)) return { kind: "clear" };
+  const cleaned = argument.replace(/\s*(?:rwf|frw)$/i, "").replace(/[,_\s]/g, "");
+  if (!/^\d+$/.test(cleaned)) {
+    return { kind: "invalid", reason: "Use a whole RWF amount, for example /balance 5000, or /balance clear." };
+  }
+  const amountRwf = Number(cleaned);
+  if (!Number.isSafeInteger(amountRwf)) {
+    return { kind: "invalid", reason: "That balance is too large to track safely." };
+  }
+  return { kind: "set", amountRwf };
+}
+
 /** Not a `/pay` command at all — `/payments`, say — so the dispatcher keeps looking. */
 export function parsePayCommand(input: string): PayCommand | null {
   const match = /^\/pay(?:\s+([\s\S]*))?$/.exec(input.trim());
@@ -76,7 +100,11 @@ export type TaskBalanceGate = {
 export function assessTaskBalance(
   balance: Balance,
   estimate: { lowRwf: number; highRwf: number },
+  options: { source?: "confirmed" | "manual" } = {},
 ): TaskBalanceGate | undefined {
+  const describedBalance = options.source === "manual"
+    ? `locally estimated ${formatRwf(balance.balanceRwf)} balance`
+    : `confirmed ${formatRwf(balance.balanceRwf)} balance`;
   if (estimate.lowRwf > balance.balanceRwf) {
     return {
       blocked: true,
@@ -90,7 +118,7 @@ export function assessTaskBalance(
     return {
       blocked: false,
       lines: [
-        `This task may need up to ${formatRwf(estimate.highRwf)}, above the confirmed ${formatRwf(balance.balanceRwf)} balance.`,
+        `This task may need up to ${formatRwf(estimate.highRwf)}, above the ${describedBalance}.`,
         "You can keep control by using /slow, splitting the task, or topping up with /pay.",
       ],
     };

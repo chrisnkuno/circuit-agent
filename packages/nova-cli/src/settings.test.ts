@@ -39,6 +39,13 @@ describe("Nova settings", () => {
     expect(() => validateSetting("NOVA_LOW_BALANCE_RWF", "20.5")).toThrow("non-negative whole number");
   });
 
+  it("accepts only a safe whole non-negative account balance", () => {
+    expect(validateSetting("NOVA_ACCOUNT_BALANCE_RWF", "12500")).toBe("12500");
+    expect(validateSetting("NOVA_ACCOUNT_BALANCE_RWF", "0")).toBe("0");
+    expect(() => validateSetting("NOVA_ACCOUNT_BALANCE_RWF", "-1")).toThrow("Account balance");
+    expect(() => validateSetting("NOVA_ACCOUNT_BALANCE_RWF", "20.5")).toThrow("Account balance");
+  });
+
   it("takes a location as a country code and normalises it", () => {
     expect(validateSetting("NOVA_COUNTRY", "rw")).toBe("RW");
     expect(validateSetting("NOVA_COUNTRY", " eg ")).toBe("EG");

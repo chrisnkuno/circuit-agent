@@ -8,6 +8,21 @@
 
 export const CIRCUITNOTION_DEFAULT_BASE_URL = "https://api.circuitnotion.com/v1";
 
+/** Repairs a public API origin setting that omitted the required `/v1` route prefix. */
+export function circuitNotionBaseUrl(value?: string): string {
+  const candidate = value?.trim() || CIRCUITNOTION_DEFAULT_BASE_URL;
+  try {
+    const url = new URL(candidate);
+    if (url.hostname.toLowerCase() === "api.circuitnotion.com" && (url.pathname === "" || url.pathname === "/")) {
+      url.pathname = "/v1";
+      return url.href.replace(/\/$/, "");
+    }
+  } catch {
+    // Settings validation owns malformed URLs; custom relay routes must remain untouched here.
+  }
+  return candidate.replace(/\/$/, "");
+}
+
 /**
  * Shared default headers for every CircuitNotion call. `relaySecret` is only present when
  * CIRCUITNOTION_BASE_URL points at the CircuitNotion relay Worker (cloudflare/circuitnotion-relay)

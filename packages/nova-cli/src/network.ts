@@ -14,7 +14,7 @@ import { hostOf } from "./endpoints";
  * with the network.
  */
 
-export type NetworkErrorKind = "timeout" | "dns" | "refused" | "reset" | "unreachable" | "tls" | "aborted";
+export type NetworkErrorKind = "timeout" | "dns" | "refused" | "reset" | "unreachable" | "tls" | "aborted" | "not_found";
 
 export type NetworkDiagnosis = {
   kind: NetworkErrorKind;
@@ -44,6 +44,7 @@ const CODES: Record<NetworkErrorKind, readonly string[]> = {
     "CERT_UNTRUSTED", "ERR_TLS_CERT_ALTNAME_INVALID", "ERR_TLS_BAD_CERTIFICATE", "ERR_SSL_",
   ],
   aborted: ["UND_ERR_ABORTED", "ABORT_ERR"],
+  not_found: [],
 };
 
 const KIND_HINTS: Partial<Record<NetworkErrorKind, string>> = {
@@ -77,6 +78,13 @@ function nameOf(error: unknown): string | undefined {
   if (error === null || typeof error !== "object") return undefined;
   const name = (error as Error).name;
   return typeof name === "string" ? name : undefined;
+}
+
+function statusOf(error: unknown): number | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const status = (error as { status?: unknown; statusCode?: unknown }).status
+    ?? (error as { statusCode?: unknown }).statusCode;
+  return typeof status === "number" ? status : undefined;
 }
 
 function messageOf(error: unknown): string {
@@ -129,6 +137,12 @@ function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): Network
         kind,
         message: `${purpose} was aborted before completing — it timed out or was cancelled.`,
       };
+    case "not_found":
+      return {
+        kind,
+        message: `${purpose} returned 404 Not Found — the host is reachable, but the API route or selected model does not exist.`,
+        hint: "For CircuitNotion use a base URL ending in /v1, then choose a live model with `/model` or refresh `/models`. Run `nova --doctor` to verify the endpoint.",
+      };
   }
 }
 
@@ -144,6 +158,13 @@ export function classifyNetworkError(error: unknown, options: ClassifyOptions = 
   const name = nameOf(raw) ?? nameOf(error);
   const code = codeOf(raw) ?? codeOf(error);
   const message = messageOf(raw);
+
+  // OpenAI-compatible SDKs attach the HTTP status to the outer API error. A 404 is not a broken
+  // network: it is almost always an omitted `/v1` base path or a model id no longer in the live
+  // catalog, and both have concrete fixes the raw "404 not found" fails to name.
+  if (statusOf(error) === 404 || statusOf(raw) === 404 || /^404\b|\b404 not found\b/i.test(messageOf(error))) {
+    return diagnosisFor("not_found", options);
+  }
 
   // AbortSignal.timeout and user cancellation both surface as an abort; without more signal it is
   // safest to call it a timeout — a cancelled call is still "did not complete", never "internet".

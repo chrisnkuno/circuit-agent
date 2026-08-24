@@ -1,11 +1,11 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { buildCodingPlannerPrompt, CodingPlanSchema } from "../coding-prompt";
-import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL } from "./circuitnotion-http";
+import { buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
 import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
 import { PROTOCOL_MAX_OUTPUT_TOKENS } from "./model-capabilities";
 
-export { CIRCUITNOTION_DEFAULT_BASE_URL, buildCircuitNotionHeaders } from "./circuitnotion-http";
+export { CIRCUITNOTION_DEFAULT_BASE_URL, buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
 
 export type ChatCompletionResponse = {
   id: string;
@@ -197,7 +197,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
     } else {
       const client = new OpenAI({
         apiKey: options.apiKey,
-        baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL,
+        baseURL: circuitNotionBaseUrl(options.baseURL),
         defaultHeaders: buildCircuitNotionHeaders(options.relaySecret),
       });
       this.call = async (body, signal) => (await client.chat.completions.create(body, { signal })) as unknown as AsyncIterable<ChatCompletionChunk>;

@@ -28,7 +28,7 @@ import { INITIAL_TABLE_STATE, renderTable } from "./table";
 import { buildCostTable, buildJobsTable, buildModelTable } from "./tables";
 import { PRICE_CATALOG } from "@circuit-nova/nova-core/providers/price-catalog";
 import { detectColorDepth, renderBanner, renderTagline } from "./banner";
-import { box, CountdownTimer, formatCountdown, formatStatusLine, MarkdownStream, progressBar, PromptBox, PROMPT_PREFIX_COLUMNS, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
+import { box, CountdownTimer, formatCountdown, formatHeaderSegments, formatStatusLine, MarkdownStream, progressBar, PromptBox, PROMPT_PREFIX_COLUMNS, promptStatusRoom, renderPromptBox, ReplaceableBlock, sparkline, Spinner, SpringAnimator, StatusBar, table, wrapPlain } from "./tui";
 import { dropupRowBudget, renderDropup, type DropupEntry } from "./dropup";
 import { visibleWidth } from "./markdown";
 import { PinnedScreen } from "./screen";
@@ -76,7 +76,7 @@ import {
 } from "@circuit-nova/nova-core";
 import { runJobWorkerForever, workerId } from "./job-worker";
 import { parseAttachCommand, parseDetachCommand, parseJobsCommand } from "./jobs-command";
-import { BILLING_NOT_CONFIGURED, BalanceWatch, assessTaskBalance, parsePayCommand, renderBalance, renderCheckout, renderPaymentOutcome, renderTopUpQuote } from "./pay";
+import { BILLING_NOT_CONFIGURED, CRITICAL_BALANCE_RWF, BalanceWatch, assessTaskBalance, formatRwf, parseManualBalanceCommand, parsePayCommand, renderBalance, renderCheckout, renderPaymentOutcome, renderTopUpQuote } from "./pay";
 import { BillingError, billingFromEnvironment, newIdempotencyKey, waitForPayment, type Balance } from "@circuit-nova/nova-core/nova-cli/billing";
 import { IMPLICIT_SKILL_PROVIDER_ID } from "@circuit-nova/nova-core";
 import { renderTools } from "./tools-command";
@@ -1747,27 +1747,94 @@ async function main(): Promise<number> {
   // this watches account credit reported by the billing gateway and never pretends one is the
   // other. An invalid override falls back to the calm default instead of disabling warnings.
   const configuredLowBalance = Number(environment.NOVA_LOW_BALANCE_RWF);
+  const lowBalanceRwf = Number.isFinite(configuredLowBalance) && configuredLowBalance >= 0 ? configuredLowBalance : 2_000;
   const balanceWatch = new BalanceWatch({
-    lowBalanceRwf: Number.isFinite(configuredLowBalance) && configuredLowBalance >= 0 ? configuredLowBalance : 2_000,
+    lowBalanceRwf,
   });
   let lastConfirmedBalance: { balance: Balance; readAt: number } | undefined;
+  let balanceReadState: "checking" | "current" | "manual" | "unavailable" | "not_connected" = "checking";
+  const parseManualBalance = (value: string | undefined): number | undefined => {
+    const amount = Number(value);
+    return Number.isSafeInteger(amount) && amount >= 0 ? amount : undefined;
+  };
+  let manualBalanceRwf = parseManualBalance(environment.NOVA_ACCOUNT_BALANCE_RWF);
+  const useManualBalance = (): Balance | undefined => manualBalanceRwf === undefined
+    ? undefined
+    : { balanceRwf: manualBalanceRwf, asOf: Date.now() };
+  const persistManualBalance = async (amount: number | undefined): Promise<string> => {
+    if (amount === undefined) delete savedSettings.NOVA_ACCOUNT_BALANCE_RWF;
+    else savedSettings.NOVA_ACCOUNT_BALANCE_RWF = String(Math.max(0, Math.trunc(amount)));
+    const file = await saveSettings(savedSettings, processEnvironment);
+    // An exported value remains authoritative on the next launch, but an explicit `/balance`
+    // command should still take effect in this session and say so to its caller.
+    manualBalanceRwf = amount;
+    if (amount === undefined) delete environment.NOVA_ACCOUNT_BALANCE_RWF;
+    else environment.NOVA_ACCOUNT_BALANCE_RWF = String(amount);
+    lastConfirmedBalance = useManualBalance() ? { balance: useManualBalance()!, readAt: Date.now() } : undefined;
+    balanceReadState = amount === undefined ? "checking" : "manual";
+    return file;
+  };
   const sessionSpendRwf = (): number | undefined => {
     const total = ledger.displayTotal;
     const rwf = total ? convertTo(total, "RWF", rates) : undefined;
     return rwf ? Math.round(rwf.micros / 1_000_000) : undefined;
   };
   const readConfirmedBalance = async (force = false) => {
-    if (!force && lastConfirmedBalance && Date.now() - lastConfirmedBalance.readAt < 30_000) return lastConfirmedBalance.balance;
+    const manual = useManualBalance();
+    if (manual) {
+      lastConfirmedBalance = { balance: manual, readAt: Date.now() };
+      balanceReadState = "manual";
+      return manual;
+    }
     // A proactive notice must not hold the prompt hostage to an unhealthy billing endpoint. The
     // explicit `/pay` command keeps the longer timeout because the user is waiting on that service.
     const gateway = billingFromEnvironment(environment, undefined, { timeoutMs: 3_000 });
-    if (!gateway) return undefined;
+    if (!gateway) {
+      lastConfirmedBalance = undefined;
+      balanceReadState = "not_connected";
+      return undefined;
+    }
+    if (!force && lastConfirmedBalance && Date.now() - lastConfirmedBalance.readAt < 30_000) return lastConfirmedBalance.balance;
+    balanceReadState = "checking";
     // Monitoring must never turn a healthy model turn into a billing failure. A transient gateway
     // problem stays quiet; `/pay` remains the explicit diagnostic path when the user asks for it.
     const balance = await gateway.getBalance().catch(() => undefined);
-    if (!balance) return undefined;
+    if (!balance) {
+      balanceReadState = "unavailable";
+      return undefined;
+    }
     lastConfirmedBalance = { balance, readAt: Date.now() };
+    balanceReadState = "current";
     return balance;
+  };
+
+  const compactRwf = (amount: number): string => amount < 1_000
+    ? `${Math.trunc(amount)} RWF`
+    : `${(amount / 1_000).toFixed(amount % 1_000 === 0 ? 0 : 1)}k RWF`;
+  const balanceHeader = (): { full: string; compact: string } => {
+    if (spec.id !== "circuitnotion") return { full: "balance managed by provider", compact: "balance external" };
+    if (!lastConfirmedBalance) {
+      const label = balanceReadState === "checking" ? "balance checking"
+        : balanceReadState === "not_connected" ? "balance not connected"
+          : "balance unavailable";
+      return { full: label, compact: "balance —" };
+    }
+    const amount = lastConfirmedBalance.balance.balanceRwf;
+    const paintBalance = amount < CRITICAL_BALANCE_RWF ? style.red : amount <= lowBalanceRwf ? style.yellow : style.green;
+    if (balanceReadState === "manual") {
+      return {
+        full: `${style.dim("balance")} ${paintBalance(`${formatRwf(amount)} locally estimated`)}`,
+        compact: paintBalance(`~${compactRwf(amount)}`),
+      };
+    }
+    if (balanceReadState === "unavailable") {
+      return {
+        full: `${style.dim("balance")} ${paintBalance(`${formatRwf(amount)} last confirmed`)}`,
+        compact: paintBalance(`~${compactRwf(amount)}`),
+      };
+    }
+    const text = `${formatRwf(amount)} left`;
+    return { full: `${style.dim("balance")} ${paintBalance(text)}`, compact: paintBalance(compactRwf(amount)) };
   };
   const checkBalance = async (silent = false): Promise<void> => {
     if (spec.id !== "circuitnotion") return;
@@ -2024,7 +2091,15 @@ async function main(): Promise<number> {
     const cost = ledger.displayTotal ? formatMoney(ledger.displayTotal) : "cost unknown";
     const badge = pace === "off" ? "" : ` ${style.yellow(paceBadge(pace, glyphs))}`;
     const remembered = memories.length > 0 ? ` ${style.dim(`${glyphs.middot} ${memories.length} remembered`)}` : "";
-    return `${strip}${style.cyan(mode)}${badge} ${style.dim(`${glyphs.middot} ${cost}`)}${remembered}`;
+    const balance = balanceHeader();
+    const room = screen ? statusRoomFor(screen.current.columns) : process.stdout.columns ?? 80;
+    return formatHeaderSegments([
+      balance,
+      ...(strip ? [{ full: strip.trim() }] : []),
+      { full: `${style.cyan(mode)}${badge}`, compact: style.cyan(mode) },
+      { full: style.dim(cost) },
+      ...(remembered ? [{ full: remembered.trimStart() }] : []),
+    ], room, ` ${glyphs.middot} `);
   };
 
   /**
@@ -2513,7 +2588,7 @@ async function main(): Promise<number> {
         const gate = balance && low && high ? assessTaskBalance(balance, {
           lowRwf: Math.ceil(low.micros / 1_000_000),
           highRwf: Math.ceil(high.micros / 1_000_000),
-        }) : undefined;
+        }, { source: balanceReadState === "manual" ? "manual" : "confirmed" }) : undefined;
         if (gate) {
           for (const line of gate.lines) out.write(`  ${gate.blocked ? style.red(line) : style.yellow(line)}\n`);
           if (gate.blocked) return false;
@@ -2564,6 +2639,7 @@ async function main(): Promise<number> {
         toolCalls: activity.toolCalls,
         tokens: activity.tokens,
         cost: ledger.displayTotal ? formatMoney(ledger.displayTotal) : "cost unknown",
+        balance: balanceHeader().compact,
         phase: activity.phase,
         operation: activity.operation,
         // The agent's own plan, counted. Present only once it has one — an X-of-Y with nothing
@@ -2587,6 +2663,7 @@ async function main(): Promise<number> {
     turnActive = true;
     currentTurnAbort = new AbortController();
     try {
+      const spendBeforeTurnRwf = sessionSpendRwf() ?? 0;
       // Durable recall belongs to the shared agent, so CLI, desktop and jobs pay for each selected
       // fact once per thread. Wrapping here as well duplicated it on the first turn and left every
       // other front end without the incremental-deduplication policy.
@@ -2649,6 +2726,16 @@ async function main(): Promise<number> {
         toolCalls: result.toolCallsExecuted,
         elapsedMs: Date.now() - started,
       });
+      if (manualBalanceRwf !== undefined) {
+        const turnSpendRwf = Math.max(0, (sessionSpendRwf() ?? spendBeforeTurnRwf) - spendBeforeTurnRwf);
+        if (turnSpendRwf > 0) {
+          const remaining = Math.max(0, manualBalanceRwf - turnSpendRwf);
+          await persistManualBalance(remaining).catch((error: unknown) => {
+            manualBalanceRwf = remaining;
+            out.write(style.yellow(`  Balance was updated for this session but could not be saved: ${error instanceof Error ? error.message : String(error)}\n`));
+          });
+        }
+      }
       // The turn's own closing rule. A transcript without one is a single column in which the end
       // of an answer and the start of the next question look identical.
       out.write(`${rule(sectionStyle(), {
@@ -3163,6 +3250,9 @@ async function main(): Promise<number> {
     const file = await saveSettings(savedSettings, processEnvironment);
     for (const field of SETTING_FIELDS) delete environment[field.key];
     Object.assign(environment, mergedEnvironment(savedSettings, processEnvironment));
+    manualBalanceRwf = parseManualBalance(environment.NOVA_ACCOUNT_BALANCE_RWF);
+    lastConfirmedBalance = undefined;
+    balanceReadState = manualBalanceRwf === undefined ? "checking" : "manual";
     language = resolveControlLanguage(args.language ?? environment.NOVA_LANGUAGE ?? environment.LANG);
     const previous = agent;
     const carried = await loadSession(args.root, previous.sessionId);
@@ -3193,7 +3283,8 @@ async function main(): Promise<number> {
    * itself is bounded at three seconds, and every reason not to act — a pipe, CI, a session that
    * already looked today — is decided before the network is touched at all.
    */
-  const startupUpdate = await runAutoUpdate({
+  const startupBalance = spec.id === "circuitnotion" ? readConfirmedBalance(true) : Promise.resolve(undefined);
+  const startupUpdatePromise = runAutoUpdate({
     context: {
       mode: readAutoUpdateMode(environment),
       interactive: interactive && liveTerminal,
@@ -3217,6 +3308,7 @@ async function main(): Promise<number> {
     // An update check must never be the reason a session fails to start.
     return undefined;
   });
+  const [startupUpdate] = await Promise.all([startupUpdatePromise, startupBalance]);
   for (const line of startupUpdate?.notice ?? []) out.write(`  ${style.dim(line)}\n`);
 
   for (;;) {
@@ -3454,6 +3546,7 @@ async function main(): Promise<number> {
       await previous.relinquish();
       const carried = await loadSession(args.root, previousSessionId);
       agent = await openClient(carried ?? undefined);
+      if (spec.id === "circuitnotion") await readConfirmedBalance(true);
       const priceNote = prices ? "" : " — no price configured, costs will show as unknown";
 
       // Persisted, because a switch the user had to make again on every launch is a switch they
@@ -4403,10 +4496,48 @@ async function main(): Promise<number> {
       continue;
     }
 
+    const manualBalanceCommand = parseManualBalanceCommand(input);
+    if (manualBalanceCommand) {
+      if (manualBalanceCommand.kind === "invalid") {
+        out.write(style.yellow(`  ${manualBalanceCommand.reason}\n`));
+        continue;
+      }
+      if (manualBalanceCommand.kind === "set") {
+        const file = await persistManualBalance(manualBalanceCommand.amountRwf);
+        out.write(style.green(`  Local balance set to ${formatRwf(manualBalanceCommand.amountRwf)}. Nova will subtract measured token costs after each completed turn.\n`));
+        out.write(style.dim(`  This is an estimate, not a provider statement. Saved to ${file}; /balance clear returns to the endpoint.\n`));
+        continue;
+      }
+      if (manualBalanceCommand.kind === "clear") {
+        await persistManualBalance(undefined);
+        const balance = await readConfirmedBalance(true);
+        out.write(balance
+          ? style.green(`  Local balance cleared. Gateway balance: ${formatRwf(balance.balanceRwf)}.\n`)
+          : style.dim("  Local balance cleared. Nova will use the balance endpoint when it is configured and available.\n"));
+        continue;
+      }
+      const local = useManualBalance();
+      if (local) {
+        out.write(`  Locally estimated balance: ${formatRwf(local.balanceRwf)}\n`);
+        out.write(style.dim("  Based on the amount you set minus Nova's measured token costs. Use /balance <amount> to reconcile it with your account.\n"));
+      } else {
+        const balance = await readConfirmedBalance(true);
+        out.write(balance
+          ? `  Gateway-confirmed balance: ${formatRwf(balance.balanceRwf)}\n`
+          : style.dim("  No local balance is set and the balance endpoint is unavailable. Use /balance <amount> to track an estimate locally.\n"));
+      }
+      continue;
+    }
+
     const payCommand = parsePayCommand(input);
     if (payCommand) {
       if (payCommand.kind === "invalid") {
         out.write(style.yellow(`  ${payCommand.reason}\n`));
+        continue;
+      }
+      if (payCommand.kind === "balance" && manualBalanceRwf !== undefined) {
+        out.write(`  Locally estimated balance: ${formatRwf(manualBalanceRwf)}\n`);
+        out.write(style.dim("  This bypasses the balance endpoint and subtracts measured token costs. Use /balance <amount> to reconcile or /balance clear to return to the gateway.\n"));
         continue;
       }
       // Both settings or neither: refusing here, before any amount is discussed, is kinder than

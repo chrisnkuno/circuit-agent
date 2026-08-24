@@ -86,7 +86,7 @@
     },
     "packages/nova-cli": {
       "name": "@circuit-nova/nova-cli",
-      "version": "1.7.1",
+      "version": "1.7.2",
       "bin": {
         "nova": "dist/nova.mjs",
       },

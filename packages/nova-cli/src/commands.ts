@@ -53,6 +53,7 @@ export const COMMANDS = defineCommands({
   "/attach": { args: "<id>", description: "Watch a background job's log live" },
   "/detach": { args: "<task>", description: "Start work in the background; press Alt+B to send a running turn there" },
   "/cost": { description: "Token and cost breakdown for this session" },
+  "/balance": { args: "[amount|clear]", description: "Set an account balance and track it locally from token costs" },
   "/pay": { args: "[amount|balance|status <ref>]", description: "Top up your Nova credit — pay on Circuit Pay's page, Nova never sees your card" },
   "/scan": { args: "[glob]", description: "Deterministic secret scan of the workspace, worst severity first — no model turn needed" },
   "/sessions": { description: "List sessions in this project (an alias for /history)" },

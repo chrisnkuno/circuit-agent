@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { buildCircuitNotionHeaders, CIRCUITNOTION_DEFAULT_BASE_URL, type ChatCompletionUnaryCall } from "./circuitnotion";
+import { buildCircuitNotionHeaders, circuitNotionBaseUrl, type ChatCompletionUnaryCall } from "./circuitnotion";
 import { buildDynamicPresetsPrompt, DynamicPresetsSchema, type PresetContext, type PresetSuggestion } from "../dynamic-presets";
 
 export type CircuitNotionPresetsOptions = {
@@ -50,7 +50,7 @@ export class CircuitNotionPresetsProvider {
     } else {
       const client = new OpenAI({
         apiKey: options.apiKey,
-        baseURL: options.baseURL ?? CIRCUITNOTION_DEFAULT_BASE_URL,
+        baseURL: circuitNotionBaseUrl(options.baseURL),
         defaultHeaders: buildCircuitNotionHeaders(options.relaySecret),
       });
       this.call = async (body, signal) => (await client.chat.completions.create(body, { signal })) as unknown as Awaited<ReturnType<ChatCompletionUnaryCall>>;

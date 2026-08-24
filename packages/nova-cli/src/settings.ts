@@ -105,6 +105,7 @@ export const SETTING_FIELDS = [
   { key: "NOVA_AUTO_UPDATE", label: "Automatic updates — install daily by default", choices: AUTO_UPDATE_CHOICES },
   { key: "NOVA_BILLING_URL", label: "Billing service URL (enables /pay)", url: true },
   { key: "NOVA_BILLING_KEY", label: "Billing service key", secret: true },
+  { key: "NOVA_ACCOUNT_BALANCE_RWF", label: "Account balance in RWF — track locally from token costs instead of the balance endpoint" },
   { key: "NOVA_LOW_BALANCE_RWF", label: "Low-balance alert threshold in RWF (default 2000)" },
   { key: "NOVA_KEYS", label: "Key bindings, e.g. /diff=alt+d,/wander=off" },
   // Off by default, and the label says what it costs: the deterministic suggestions are free and
@@ -187,9 +188,13 @@ export function validateSetting(key: SettingKey, raw: string): string {
     const amount = Number(value);
     if (!Number.isFinite(amount) || amount < 0) throw new Error("Price must be a non-negative number.");
   }
-  if (key === "NOVA_LOW_BALANCE_RWF") {
+  if (key === "NOVA_LOW_BALANCE_RWF" || key === "NOVA_ACCOUNT_BALANCE_RWF") {
     const amount = Number(value);
-    if (!Number.isInteger(amount) || amount < 0) throw new Error("Low-balance threshold must be a non-negative whole number of RWF.");
+    if (!Number.isSafeInteger(amount) || amount < 0) {
+      throw new Error(key === "NOVA_LOW_BALANCE_RWF"
+        ? "Low-balance threshold must be a non-negative whole number of RWF."
+        : "Account balance must be a non-negative whole number of RWF.");
+    }
   }
   if (key === "MODEL_PRICE_CURRENCY" && !/^[A-Za-z]{3}$/.test(value)) throw new Error("Currency must be a three-letter ISO code such as USD.");
   if (key === "NOVA_LANGUAGE" && !/^(en|zh|hi|es|fr|ar|bn|pt|ru|ur)$/i.test(value)) throw new Error("Choose en, zh, hi, es, fr, ar, bn, pt, ru, or ur.");
