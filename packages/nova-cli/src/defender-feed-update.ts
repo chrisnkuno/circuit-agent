@@ -5,10 +5,12 @@ export const OFFICIAL_DEFENDER_FEED_URL = "https://circuit-nova.vercel.app/api/d
 
 /**
  * Release keys are intentionally a map: adding a successor before retiring its predecessor makes
- * key rotation possible without an update outage. The first production key is supplied through
- * NOVA_DEFENDER_BRAIN_PUBLIC_KEYS until it is pinned by a CLI release.
+ * key rotation possible without an update outage. Environment-supplied keys remain available for
+ * controlled staging feeds, but the official authority is rooted here rather than in the network.
  */
-export const OFFICIAL_DEFENDER_FEED_KEYS: Readonly<Record<string, string>> = Object.freeze({});
+export const OFFICIAL_DEFENDER_FEED_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  "release-2026-01": "MCowBQYDK2VwAyEA4/jb1zd6f+jIPAFja1bPNtroXV8MtAZFrKt5BSY+ngI=",
+});
 
 export function defenderFeedKeys(environment: Record<string, string | undefined>): Readonly<Record<string, string>> {
   const configured = environment.NOVA_DEFENDER_BRAIN_PUBLIC_KEYS?.trim();

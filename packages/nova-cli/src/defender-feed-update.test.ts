@@ -5,6 +5,9 @@ describe("Defender feed CLI policy", () => {
   it("uses the official HTTPS authority", () => {
     expect(new URL(OFFICIAL_DEFENDER_FEED_URL).protocol).toBe("https:");
     expect(Object.isFrozen(OFFICIAL_DEFENDER_FEED_KEYS)).toBe(true);
+    expect(OFFICIAL_DEFENDER_FEED_KEYS).toEqual({
+      "release-2026-01": "MCowBQYDK2VwAyEA4/jb1zd6f+jIPAFja1bPNtroXV8MtAZFrKt5BSY+ngI=",
+    });
   });
 
   it("accepts only bounded key-id/string mappings", () => {

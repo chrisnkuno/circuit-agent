@@ -44,8 +44,7 @@ official sources -> scheduled Exa research -> quarantined candidate artifact -> 
 5. For rotation, ship a CLI containing both old and new public keys, switch the server key in a
    later deployment, then remove the old public key only after the supported-client window closes.
 
-Until step 3 is completed, central replication deliberately remains inactive and every CLI uses
-the corpus bundled with its release. Operators may exercise a staging feed with
+The first release root is pinned as `release-2026-01`. Operators may exercise a staging feed with
 `NOVA_DEFENDER_FEED_URL` and `NOVA_DEFENDER_BRAIN_PUBLIC_KEYS`; those overrides are intended for
 controlled testing, not end-user trust bootstrap.
 
