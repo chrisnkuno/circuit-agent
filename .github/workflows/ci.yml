@@ -41,6 +41,7 @@ jobs:
           reply=$(echo '{"id":"ci","protocolVersion":1,"method":"ping","params":{}}' | "$binary")
           echo "$reply"
           echo "$reply" | grep -q '"readOnlyCanonicalSources":true'
+          echo "$reply" | grep -q '"brain.search"'
       - name: CLI native-history and fallback smoke test
         shell: bash
         run: |
@@ -56,13 +57,22 @@ jobs:
           fallback_output=$(NOVA_STATE_BINARY="$RUNNER_TEMP/missing-nova-state" node packages/nova-cli/dist/nova.mjs history search PaymentIntent retry --cwd "$smoke_root")
           echo "$fallback_output"
           echo "$fallback_output" | grep -q '1 match'
+          brain_data="$RUNNER_TEMP/nova-defender-brain"
+          brain_reply=$(echo "{\"id\":\"brain\",\"protocolVersion\":1,\"method\":\"brain.rebuild\",\"params\":{\"sourceRoot\":\"$PWD/packages/nova-state/defender-knowledge\",\"dataRoot\":\"$brain_data\"}}" | "$binary")
+          echo "$brain_reply"
+          echo "$brain_reply" | grep -Eq '"records":[1-9][0-9]*'
+          echo "$brain_reply" | grep -q '"rejected":0'
       - name: Record portable benchmark
         shell: bash
-        run: cargo run --locked --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 100 --messages 20 --queries 50 > nova-state-benchmark.json
+        run: |
+          cargo run --locked --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 100 --messages 20 --queries 50 > nova-state-benchmark.json
+          cargo run --locked --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-defender-brain-bench -- --records 10000 --queries 2000 > nova-defender-brain-benchmark.txt
       - uses: actions/upload-artifact@v4
         with:
           name: nova-state-benchmark-${{ matrix.os }}
-          path: nova-state-benchmark.json
+          path: |
+            nova-state-benchmark.json
+            nova-defender-brain-benchmark.txt
 
   check:
     runs-on: ubuntu-latest

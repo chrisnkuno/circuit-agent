@@ -25,6 +25,8 @@ apps/control-plane-web       apps/nova-desktop       packages/nova-cli
               +---------------------+--------------------+
               |                     |                    |
       packages/agent-runtime  packages/providers  packages/nova-state
+                                                    | history index
+                                                    + security brain (separate DB/corpus)
 
 services/circuitnotion-relay (independently deployed provider infrastructure)
 tooling/reliability          (tests and release evidence, never runtime code)
@@ -46,7 +48,7 @@ release scripts.
 | 7/10 | `apps/nova-desktop` | Tauri UI and Nova sidecar host | Product is correctly separated physically, but the sidecar assembles runtime concerns and its tests reach into CLI PTY fixtures | Depend on public `nova-engine` test helpers; remove `../../../../packages/nova-cli/src/pty/*` imports |
 | 7/10 | `packages/agent-core/src/providers` | CircuitNotion, OpenAI, Anthropic, E2B, Docker, Exa | Provider and sandbox adapters share a package with Nova session policy; optional SDK loading and retry policy are hard to own independently | Extract `packages/providers` and `packages/workspaces`, each with conformance suites |
 | 6/10 | `scripts`, `reliability`, root release config | Builds, packaging, scheduled evidence | Product builds and generated reliability-site publication are mixed in one flat script directory | Group as `tooling/{build,release,reliability}` and expose root scripts only as stable aliases |
-| 5/10 | `packages/nova-state` | Read-only native history index | Boundary is already good; release packaging is the main coupling | Keep package; move native publish scripts beside it or into `tooling/release/nova-state` |
+| 6/10 | `packages/nova-state` | Read-only native history index plus separately stored Defensive Brain | Native runtime boundary is good, but two read models now share one protocol/release package and must not share schemas or authority | Keep one sidecar for distribution efficiency; compartmentalize `history` and `brain` modules, databases, benchmarks, and canonical sources |
 | 4/10 | `cloudflare/circuitnotion-relay` | Independently deployed model relay | Correctly isolated, but `cloudflare/` describes a vendor rather than the service role | Move to `services/circuitnotion-relay`; keep its own tests and deployment config |
 | 3/10 | `reliability/site` | Published evidence viewer | Generated run fixtures and maintained site source occupy the same tree | Keep source in `tooling/reliability/site`; generate run artifacts into an ignored output directory |
 

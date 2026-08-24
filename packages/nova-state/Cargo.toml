@@ -1,6 +1,6 @@
 [package]
 name = "nova-state"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 description = "Nova's local, rebuildable history and memory index"
@@ -24,6 +24,11 @@ benchmark = ["dep:tempfile"]
 [[bin]]
 name = "nova-state-bench"
 path = "src/bin/nova-state-bench.rs"
+required-features = ["benchmark"]
+
+[[bin]]
+name = "nova-defender-brain-bench"
+path = "src/bin/nova-defender-brain-bench.rs"
 required-features = ["benchmark"]
 
 [profile.release]

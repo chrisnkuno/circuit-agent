@@ -57,6 +57,10 @@ describe("NovaStateClient", () => {
     clients.push(client);
     await expect(client.sessions("/workspace", 7)).resolves.toEqual({ root: "/workspace", limit: 7 });
     await expect(client.search("/repo", "PaymentIntent", { window: 4 })).resolves.toEqual({ root: "/repo", query: "PaymentIntent", window: 4 });
+    await expect(client.rebuildDefenderBrain("/knowledge", "/data")).resolves.toEqual({ sourceRoot: "/knowledge", dataRoot: "/data" });
+    await expect(client.searchDefenderBrain("/knowledge", "/data", "PQC migration", 3, "2026-08-24")).resolves.toEqual({
+      sourceRoot: "/knowledge", dataRoot: "/data", query: "PQC migration", limit: 3, now: "2026-08-24",
+    });
   });
 
   it("surfaces protocol errors as typed failures", async () => {

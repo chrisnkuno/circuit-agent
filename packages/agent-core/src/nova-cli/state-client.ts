@@ -24,6 +24,12 @@ export type StateIndexReport = {
   sessions: number; events: number; documents: number;
   failures: Array<{ source: StateEvidenceSource; sessionId?: string; message: string }>;
 };
+export type DefenderBrainReport = { records: number; rejected: number; sourceFiles: number; changed: boolean };
+export type DefenderBrainHit = {
+  id: string; domain: string; title: string; summary: string; guidance: string; tags: string[];
+  sources: Array<{ title: string; url: string; publishedAt: string | null; accessedAt: string; primary: boolean }>;
+  reviewedAt: string; expiresAt: string; confidence: "high" | "medium" | "low"; stale: boolean; score: number;
+};
 
 type StateResponse = { id: string | number | null; protocolVersion: number; ok: boolean; result?: unknown; error?: { code: string; message: string } };
 type PendingRequest = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
@@ -194,6 +200,12 @@ export class NovaStateClient {
   sessions(root: string, limit = 20): Promise<StateSessionSummary[]> { return this.call("session.list", { root, limit }); }
   context(root: string, sessionId: string, source: StateEvidenceSource, position: number, window = 5): Promise<StateContextDocument[]> {
     return this.call("session.context", { root, sessionId, source, position, window });
+  }
+  rebuildDefenderBrain(sourceRoot: string, dataRoot: string): Promise<DefenderBrainReport> {
+    return this.call("brain.rebuild", { sourceRoot, dataRoot });
+  }
+  searchDefenderBrain(sourceRoot: string, dataRoot: string, query: string, limit = 4, now = new Date().toISOString().slice(0, 10)): Promise<DefenderBrainHit[]> {
+    return this.call("brain.search", { sourceRoot, dataRoot, query, limit, now });
   }
 
   async close(): Promise<void> {

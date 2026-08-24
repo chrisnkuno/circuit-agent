@@ -56,6 +56,37 @@ describe("nova tool set", () => {
     await expect(toolNamed(tools, "read_file").execute({ path: "../escape.txt" }, context)).rejects.toThrow(/escapes the workspace/);
   });
 
+  it("retrieves bounded reviewed security knowledge and marks stale evidence", async () => {
+    let received: [string, number] | undefined;
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root),
+      todos: new TodoList(),
+      defenderBrain: {
+        async search(query, limit) {
+          received = [query, limit ?? 4];
+          return { hits: [{
+            id: "pqc", domain: "cryptographic-research", title: "PQC migration", summary: "Inventory first.",
+            guidance: "Use standardized implementations.", tags: ["PQC"], reviewedAt: "2026-08-24",
+            expiresAt: "2026-09-24", confidence: "high", stale: true, score: 1,
+            sources: [{ title: "NIST PQC", url: "https://www.nist.gov/pqc", publishedAt: null, accessedAt: "2026-08-24", primary: true }],
+          }] };
+        },
+      },
+    });
+    const result = await toolNamed(tools, "query_defensive_brain").execute({ query: "PQC migration", limit: 8 }, context);
+    expect(received).toEqual(["PQC migration", 8]);
+    expect(result.content).toContain("STALE — verify before relying on it");
+    expect(result.content).toContain("https://www.nist.gov/pqc");
+    expect(result.data).toEqual({ records: [{ id: "pqc", domain: "cryptographic-research", stale: true, confidence: "high" }] });
+  });
+
+  it("degrades to the curated playbook when the native brain is absent", async () => {
+    const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
+    const result = await toolNamed(tools, "query_defensive_brain").execute({ query: "identity" }, context);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("use read_playbook");
+  });
+
   it("finds a hardcoded secret and masks it in the tool's own output", async () => {
     await fs.writeFile(path.join(root, "src", "config.ts"), 'export const key = "AKIAABCDEFGHIJKLMNOP";\n');
     const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });

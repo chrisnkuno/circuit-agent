@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{SearchOptions, StateIndex};
+use crate::{BrainIndex, SearchOptions, StateIndex};
 
 pub const STATE_PROTOCOL_VERSION: u64 = 1;
 
@@ -99,6 +99,23 @@ struct ContextParams {
     window: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrainParams {
+    source_root: PathBuf,
+    data_root: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrainSearchParams {
+    source_root: PathBuf,
+    data_root: PathBuf,
+    query: String,
+    limit: Option<usize>,
+    now: String,
+}
+
 pub fn handle_request(request: Request) -> Response {
     let id = request.id;
     if request.protocol_version != STATE_PROTOCOL_VERSION {
@@ -116,7 +133,7 @@ pub fn handle_request(request: Request) -> Response {
             "name": "nova-state",
             "version": env!("CARGO_PKG_VERSION"),
             "readOnlyCanonicalSources": true,
-            "capabilities": ["index.rebuild", "search", "session.list", "session.context"]
+            "capabilities": ["index.rebuild", "search", "session.list", "session.context", "brain.rebuild", "brain.search"]
         })),
         "index.rebuild" => parse::<RootParams>(request.params).and_then(|params| {
             let mut index = StateIndex::open(params.root)?;
@@ -150,6 +167,18 @@ pub fn handle_request(request: Request) -> Response {
                 params.position,
                 params.window.unwrap_or(5).clamp(1, 20),
                 None,
+            )?)?)
+        }),
+        "brain.rebuild" => parse::<BrainParams>(request.params).and_then(|params| {
+            let mut brain = BrainIndex::open(params.source_root, params.data_root)?;
+            Ok(serde_json::to_value(brain.rebuild()?)?)
+        }),
+        "brain.search" => parse::<BrainSearchParams>(request.params).and_then(|params| {
+            let brain = BrainIndex::open(params.source_root, params.data_root)?;
+            Ok(serde_json::to_value(brain.search(
+                &params.query,
+                params.limit.unwrap_or(4),
+                &params.now,
             )?)?)
         }),
         other => {

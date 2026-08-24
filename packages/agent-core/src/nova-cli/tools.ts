@@ -1,6 +1,7 @@
 import type { AgentTool } from "../agent-runtime";
 import type { ExaCategory, ExaSearchClient, ExaSearchHit } from "../providers/exa";
 import type { Expense } from "./cost";
+import type { DefenderBrain } from "./defender-brain";
 import type { NovaWorkspace } from "./backends";
 export { runShellCommand } from "./command";
 export type { CommandRunner } from "./command";
@@ -110,6 +111,8 @@ export type NovaToolOptions = {
    * `.nova/memory.md` inside a disposable sandbox is written to something that will be deleted.
    */
   memoryRoot?: string;
+  /** Native, bounded security knowledge retrieval. Defender mode scopes the tool capability. */
+  defenderBrain?: Pick<DefenderBrain, "search">;
   /**
    * Runs one self-contained sub-task through a bounded sub-agent, when the caller (`agent.ts`) has
    * wired one up. Absent this, `delegate_task` is not offered — same "only real capabilities get a
@@ -388,6 +391,41 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
             ? { passed: true, kind, scope: "targeted" as const, summary: `${command} exited 0` }
             : undefined,
         };
+      },
+    },
+    {
+      name: "query_defensive_brain",
+      description:
+        "Retrieve a few current, reviewed defensive-security records relevant to a concrete question. Use this before security analysis; refine the query instead of requesting the entire corpus.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Specific defensive question, technology, control, or behavior." },
+          limit: { type: "integer", minimum: 1, maximum: 8 },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.playbooks,
+      effect: "none",
+      requiresApproval: false,
+      parallelSafe: true,
+      async execute(args) {
+        const query = requiredString(args.query, "query");
+        const limit = optionalInteger(args.limit, "limit") ?? 4;
+        if (!options.defenderBrain) return { content: "Defensive brain unavailable; use read_playbook for the curated fallback.", isError: true };
+        const result = await options.defenderBrain.search(query, limit);
+        if (result.hits.length === 0) {
+          return { content: `No reviewed defensive-brain records matched '${query}'.${result.reason ? ` ${result.reason}` : " Refine the query or use read_playbook."}`, isError: true };
+        }
+        const content = result.hits.map((hit) => [
+          `## ${hit.title} (${hit.domain})`,
+          `Confidence: ${hit.confidence}; reviewed: ${hit.reviewedAt}; expires: ${hit.expiresAt}${hit.stale ? "; STALE — verify before relying on it" : ""}`,
+          hit.summary,
+          hit.guidance,
+          `Sources:\n${hit.sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`,
+        ].join("\n\n")).join("\n\n---\n\n");
+        return { content, data: { records: result.hits.map((hit) => ({ id: hit.id, domain: hit.domain, stale: hit.stale, confidence: hit.confidence })) } };
       },
     },
     {

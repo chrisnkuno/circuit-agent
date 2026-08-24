@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CORE = path.join(ROOT, "packages/agent-core");
 const CLI = path.join(ROOT, "packages/nova-cli");
+const DEFENDER_KNOWLEDGE = path.join(ROOT, "packages", "nova-state", "defender-knowledge");
 const TSC = path.join(ROOT, "node_modules", "typescript", "bin", "tsc");
 
 declare const Bun: {
@@ -66,6 +67,7 @@ await fs.rm(path.join(CLI, "dist"), { recursive: true, force: true });
 // `.bin/tsc` POSIX shim used previously does not.
 await run([process.execPath, TSC, "-p", "tsconfig.build.json"], CORE);
 const rewritten = await addExtensions(path.join(CORE, "dist"));
+await fs.cp(DEFENDER_KNOWLEDGE, path.join(CORE, "dist", "nova-cli", "defender-knowledge"), { recursive: true });
 console.log(`agent-core: emitted modules and types, rewrote ${rewritten} import specifiers`);
 
 // 2. CLI: one self-contained executable.
@@ -95,5 +97,8 @@ if (!built.success) {
   for (const log of built.logs) console.error(log);
   process.exit(1);
 }
+// Defender knowledge is data, not code: keep it outside the bundle so it can be inspected,
+// replaced, and indexed without putting the full corpus in every model request.
+await fs.cp(DEFENDER_KNOWLEDGE, path.join(CLI, "dist", "defender-knowledge"), { recursive: true });
 const { launcher, main, bytes } = await emitCliBundle(path.join(CLI, "dist"));
 console.log(`nova-cli: built ${launcher} + ${path.basename(main)} (${(bytes / 1_000_000).toFixed(2)} MB)`);

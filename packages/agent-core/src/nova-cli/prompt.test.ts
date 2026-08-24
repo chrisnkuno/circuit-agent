@@ -192,7 +192,7 @@ describe("buildNovaSystemPrompt", () => {
   });
 
   it("indexes every security playbook in defender mode, and none of them anywhere else", () => {
-    const defenderPrompt = buildNovaSystemPrompt(context, "defender", ["read_playbook"]);
+    const defenderPrompt = buildNovaSystemPrompt(context, "defender", ["query_defensive_brain", "read_playbook"]);
     // The index, not the text: every category is reachable by id, and the full 44,000 characters
     // are one read_playbook call away instead of being on every request of every iteration.
     for (const entry of DEFENDER_PLAYBOOK_CATALOG) {
@@ -200,6 +200,7 @@ describe("buildNovaSystemPrompt", () => {
       expect(defenderPrompt, entry.title).toContain(entry.title);
     }
     expect(defenderPrompt).toContain("read_playbook");
+    expect(defenderPrompt).toContain("query_defensive_brain");
     expect(defenderPrompt).toContain("DEFENDER mode");
 
     // The bodies stay out. This is the whole saving, so it is asserted rather than assumed.
@@ -209,6 +210,7 @@ describe("buildNovaSystemPrompt", () => {
 
     const buildPrompt = buildNovaSystemPrompt(context, "build", []);
     expect(buildPrompt).not.toContain("read_playbook");
+    expect(buildPrompt).not.toContain("query_defensive_brain");
     expect(buildPrompt).not.toContain("access-control");
   });
 

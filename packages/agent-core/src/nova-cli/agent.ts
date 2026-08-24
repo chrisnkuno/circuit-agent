@@ -34,6 +34,7 @@ import { LocalWorkspace, type NovaWorkspace } from "./backends";
 import { WorkspaceArtifactStore } from "./artifacts";
 import type { ReadResult, WorkspaceLimits } from "./workspace";
 import { DEFAULT_OUTPUT_CEILING } from "../providers/model-capabilities";
+import { DefenderBrain } from "./defender-brain";
 
 /**
  * Nova CLI's agent: the hosted `BoundedAgentRuntime`, hosted locally instead.
@@ -173,6 +174,7 @@ export class NovaAgent {
   /** What `delegate_task` sub-runs have spent this turn — folded into the turn's own total once it finishes. See `createDelegateRunner`. */
   private delegatedRwf = 0;
   private delegatedUsage: ModelUsage = emptyModelUsage();
+  private readonly defenderBrain: DefenderBrain;
 
   /** The environment report for this session, probed on first use and cached. Never throws: a session that cannot describe its environment still runs, just without the section. */
   private loadEnvironment(): Promise<EnvironmentReport | undefined> {
@@ -202,6 +204,7 @@ export class NovaAgent {
     this.workspace = options.workspace ?? new LocalWorkspace(options.root, options.limits);
     this.nestedInstructions = new NestedInstructionTracker(this.workspace);
     this.artifacts = new WorkspaceArtifactStore(this.workspace);
+    this.defenderBrain = new DefenderBrain(path.join(options.root, ".nova", "security-brain"));
     this.checkpoints = new CheckpointStore(options.root, path.join(options.root, ".nova", "checkpoint-index"), options.git);
     this.session = {
       schemaVersion: 2,
@@ -347,6 +350,7 @@ export class NovaAgent {
     // Kills any MCP server process this session actually started. A tooling load that never
     // happened (no turn was ever sent) is `null`, and disposing nothing is correct.
     await (await this.externalTooling)?.dispose();
+    await this.defenderBrain.close();
   }
 
   private loadExternalTooling(): Promise<LocalExternalTooling | undefined> {
@@ -393,6 +397,7 @@ export class NovaAgent {
       // The *local* root, never the workspace: a fact learned during a remote sandbox session must
       // outlive that container, and `.nova/memory.md` inside a disposable sandbox does not.
       memoryRoot: this.options.root,
+      defenderBrain: this.defenderBrain,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
     return {
@@ -419,6 +424,7 @@ export class NovaAgent {
       // The *local* root, never the workspace: a fact learned during a remote sandbox session must
       // outlive that container, and `.nova/memory.md` inside a disposable sandbox does not.
       memoryRoot: this.options.root,
+      defenderBrain: this.defenderBrain,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
     const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
@@ -575,6 +581,8 @@ export class NovaAgent {
         externalToolProviders: externalTooling?.providers,
         hooks: externalTooling?.hooks,
         delegate: delegate.runner,
+        memoryRoot: this.options.root,
+        defenderBrain: this.defenderBrain,
       });
       const capabilities = capabilitiesForMode(this.options.mode);
       const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));

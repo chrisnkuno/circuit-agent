@@ -263,7 +263,7 @@ export function buildNovaSystemPrompt(
     sections.push(
       [
         "Security playbooks, by id. Each holds the concrete triggers for its category — what to grep for and why it matters.",
-        "Call read_playbook(id) for the two or three categories this project actually has a surface for, and skip the rest:",
+        "Call query_defensive_brain with a specific question first; it retrieves only a few reviewed, current records from the native Rust index. Use read_playbook(id) as the curated fallback or for a broad code-review checklist. Never request or paste the whole brain. For playbooks, choose the two or three categories this project actually has a surface for and skip the rest:",
         "a database-free project has no SQL injection to check, and a project that calls no model has no LLM playbook to run.",
         "Read them early, in one turn, before you start looking.",
         "",

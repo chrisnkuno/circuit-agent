@@ -148,6 +148,14 @@ permission mode returns with the transcript, while an explicit startup flag such
 `nova --auto --resume …` deliberately overrides it. Nova's verification nudges are internal: they
 are neither counted as user turns nor indexed as things you said.
 
+Defender mode has a second, security-only memory layer. `query_defensive_brain` searches Nova's
+native Rust + SQLite FTS5 index and returns only a few reviewed records with confidence, review and
+expiry dates, and primary-source provenance. The reviewed corpus covers red teaming, vulnerability
+assessment and safe impact validation, application/cloud security testing, detection-evasion gap
+investigation, malware reverse engineering, cryptographic research, and threat intelligence.
+Existing `read_playbook` checklists remain the portable fallback when the native sidecar is absent.
+Web/Exa refreshes are quarantined candidates and never become active knowledge automatically.
+
 ## Reliability evidence
 
 Nova's scheduled end-to-end suite runs build, debug, scoped search, Defender review, and
