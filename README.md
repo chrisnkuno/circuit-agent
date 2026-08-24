@@ -1,6 +1,26 @@
 # Nova Desktop
 
-Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar that runs `@circuit-nova/nova-core` (`NovaAgent`) with the same `.nova/` session format as `nova-cli`. In release builds the sidecar is compiled into a **single self-contained executable** (via `bun build --compile` on Windows, or `@yao-pkg/pkg` for the Linux cross-build), so end users do **not** need Node installed.
+Windows-first Tauri 2 app for the Nova coding agent. The UI talks to a sidecar that runs
+[`@circuit-nova/nova-core`](https://www.npmjs.com/package/@circuit-nova/nova-core) (`NovaAgent`) with the same `.nova/` session format as `nova-cli`. In release builds the sidecar is compiled into a **single self-contained executable** (via `bun build --compile` on Windows, or `@yao-pkg/pkg` for the Linux cross-build), so end users do **not** need Node installed.
+
+> **Where the agent itself lives.** This repository is the desktop window and its sidecar only.
+> The agent runtime, provider adapters and cost accounting are
+> [`@circuit-nova/nova-core`](https://www.npmjs.com/package/@circuit-nova/nova-core), published
+> from [chrisnkuno/circuit-agent](https://github.com/chrisnkuno/circuit-agent) and consumed here as
+> an ordinary npm dependency. A change to how the agent *thinks* belongs there; a change to how it
+> is *seen and driven* belongs here. See [docs/architecture.md](docs/architecture.md) for the seam.
+
+New here? [CONTRIBUTING.md](CONTRIBUTING.md) is the setup-to-pull-request path.
+
+## Repository map
+
+| Path | What lives there |
+| --- | --- |
+| `src/` | The React window. Testable logic is pulled out into `src/lib/` as pure functions. |
+| `sidecar/` | A JSONL-over-stdio host wrapping `NovaAgent`. Where a turn is actually run. |
+| `src-tauri/` | The Rust shell: windowing, folder picker, settings store, sidecar bridge, updater. |
+| `scripts/` | Sidecar compilation and Windows packaging. |
+| `docs/` | Architecture and the open backlog. |
 
 ## Features
 
@@ -63,10 +83,10 @@ Two decisions worth knowing before changing things:
 
 ## Tests
 
-Run from the repository root, with the rest of the suite:
-
 ```bash
-bun run test
+bun run test        # vitest — the whole suite, window and sidecar. This is what CI gates on.
+bun run test:bun    # bun test — the window only, faster, see below
+bun run check       # test + typecheck + build, the pre-push gate
 ```
 
 UI logic that is worth testing is kept as pure functions in `src/lib/` (transcript parsing, scroll
@@ -75,15 +95,17 @@ DOM — the same split the CLI uses for its menus.
 
 Components are rendered and driven too, which needs a DOM. `bun test` supplies one via the
 `happydom.ts` preload in `bunfig.toml`, and each component test also carries a
-`@vitest-environment happy-dom` docblock so the repo-wide vitest run — which has no such preload —
-can run it rather than failing on `document is not defined`. `bunfig.toml` scopes `bun test` to
-`src/` on purpose: the registered DOM makes the Anthropic SDK refuse to construct a client, so
-`sidecar/`'s tests (which drive a real host against a stubbed provider, including two tabs running
-turns at once) run under vitest only.
+`@vitest-environment happy-dom` docblock so the vitest run — which has no such preload — can run
+it rather than failing on `document is not defined`. `bunfig.toml` scopes `bun test` to `src/` on
+purpose: the registered DOM makes the Anthropic SDK refuse to construct a client, so `sidecar/`'s
+tests (which drive a real host against a stubbed provider, including two tabs running turns at
+once) run under vitest only. Vitest is therefore the runner that covers everything, and the reason
+both exist is that `bun test` is markedly quicker for the tight loop on a component.
 
 ## Prerequisites
 
-- Node 20+
+- [Bun](https://bun.sh) 1.3.14+ (the package manager and the sidecar compiler)
+- Node 22+
 - Rust via rustup (`curl https://sh.rustup.rs -sSf | sh`)
 - Linux build deps (Ubuntu/Debian):
 
@@ -93,25 +115,30 @@ sudo apt install -y \
   patchelf libgtk-3-dev libssl-dev libdbus-1-dev pkg-config
 ```
 
-- For Windows installers: build on Windows with the MSVC toolchain / WebView2, or run `npm run package:windows` on a Linux host with `cargo-xwin` + `llvm-rc` (`/usr/lib/llvm-21/bin`).
+- For Windows installers: build on Windows with the MSVC toolchain / WebView2, or run `bun run package:windows` on a Linux host with `cargo-xwin` + `llvm-rc` (`/usr/lib/llvm-21/bin`).
 
 ## Setup
 
 ```bash
-cd apps/nova-desktop
-npm install
+git clone https://github.com/chrisnkuno/nova-desktop.git
+cd nova-desktop
+bun install
 ```
+
+`bun` rather than `npm`: the sidecar is compiled with `bun build --compile`, and the lockfile in
+this repo is Bun's. There is no second lockfile on purpose — two of them disagreeing is how a CI
+run and a laptop end up on different dependency trees.
 
 ## Development
 
 ```bash
 # Terminal A — optional standalone sidecar smoke test
-npm run sidecar:dev
+bun run sidecar:dev
 # type JSON lines, e.g. {"id":"1","type":"ping"}
 
 # Full desktop app
 source "$HOME/.cargo/env"   # if needed
-npm run tauri:dev
+bun run tauri:dev
 ```
 
 `beforeDevCommand` compiles the sidecar binary and starts Vite, so dev and release run the *same*
@@ -124,14 +151,14 @@ read-only planning thread cannot silently reopen it with build authority.
 
 ## The sidecar binary
 
-`npm run sidecar:binary` compiles `sidecar/src/index.ts` into a single self-contained executable
+`bun run sidecar:binary` compiles `sidecar/src/index.ts` into a single self-contained executable
 named for the Tauri target triple. It embeds its own runtime — **the machine running the installed
 app needs no Node** — and `bun build --compile` cross-compiles, so a Windows `.exe` can be produced
 from Linux or macOS:
 
 ```bash
-npm run sidecar:binary                              # this machine
-npm run sidecar:binary -- x86_64-pc-windows-msvc    # a real Windows PE, from any host
+bun run sidecar:binary                              # this machine
+bun run sidecar:binary -- x86_64-pc-windows-msvc    # a real Windows PE, from any host
 ```
 
 The output is ~95 MB and is never committed; it is reproducible from source in about a second.
@@ -144,8 +171,8 @@ The output is ~95 MB and is never committed; it is reproducible from source in a
 so no Node is required on user machines. Tauri then emits the NSIS installer.
 
 ```bash
-npm run package:windows
-npm run tauri:build
+bun run package:windows
+bun run tauri:build
 ```
 
 ### Portable build (Linux cross-compile or Windows)
@@ -162,26 +189,28 @@ every push.
 
 ### CI
 
-- `.github/workflows/release-desktop.yml` — official NSIS release + auto-update artifacts on GitHub Releases.
-- `.github/workflows/nova-desktop-windows.yml` — Windows portable/MSI build via cargo-xwin cross-compile.
+- `.github/workflows/ci.yml` — tests, typecheck, frontend build, `cargo fmt`/`clippy` on the shell,
+  and the two sidecar checks that matter: that the Windows artifact is a real PE executable of a
+  plausible size, and that the Linux one answers a ping.
+- `.github/workflows/release.yml` — the installers and the signed auto-update artifacts, on a `v*` tag.
 
 ## Releasing + auto-updates
 
-Releases are built by GitHub Actions (`.github/workflows/release-desktop.yml` in the repo
-root) and published to GitHub Releases:
+Releases are built by GitHub Actions (`.github/workflows/release.yml`) and published to GitHub
+Releases:
 
 1. Bump the version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`.
 2. Push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
-The workflow builds the installer on a `windows-latest` runner, signs the updater artifacts,
-and uploads them to the GitHub Release along with `latest.json`. The app checks
-`https://github.com/chrisnkuno/circuit-agent/releases/latest/download/latest.json` on launch
-and updates itself.
+The workflow builds Windows and both macOS architectures, signs the updater artifacts, and
+uploads them to the GitHub Release along with `latest.json`. The app checks
+`https://github.com/chrisnkuno/nova-desktop/releases/latest/download/latest.json` on launch and
+updates itself.
 
 Updater signing keys (public key is in `tauri.conf.json`):
 
 ```bash
-npm run tauri signer generate -- -w ~/.tauri/nova-desktop.key
+bun run tauri signer generate -- -w ~/.tauri/nova-desktop.key
 ```
 
 Then add the private key to GitHub repo secrets as `TAURI_SIGNING_PRIVATE_KEY`

@@ -4,7 +4,11 @@ sidecar/dist/
 release/
 src-tauri/target/
 # Compiled sidecar executables: ~90 MB each, reproducible from source by
-# `npm run sidecar:binary`. Never committed.
+# `bun run sidecar:binary`. Never committed.
 src-tauri/binaries/
 *.log
 .DS_Store
+
+# Bun
+bun.lockb
+*.tsbuildinfo

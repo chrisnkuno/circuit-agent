@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { startAnthropicStub, STUB_MODELS, type AnthropicStub } from "../../../../packages/nova-cli/src/pty/anthropic-stub.js";
+import { startAnthropicStub, STUB_MODELS, type AnthropicStub } from "../test/anthropic-stub.js";
 import { NovaHost } from "./host.js";
 import { settingsToCatalogEnvironment } from "./settings.js";
 import type { IpcEvent, ModelsListResult, NovaSettings } from "./protocol.js";

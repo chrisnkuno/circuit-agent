@@ -1,0 +1,7 @@
+# Every change gets a review from the maintainer by default. Add more specific owners below as the
+# project grows — later lines win, so keep the catch-all first.
+*                       @chrisnkuno
+
+# The parts where a mistake ships to users' machines rather than just to main.
+/.github/workflows/     @chrisnkuno
+/src-tauri/             @chrisnkuno
