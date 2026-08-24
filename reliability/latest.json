@@ -1,6 +1,6 @@
 {
   "generatedAt": "2026-08-23T03:26:12.671Z",
-  "rescoredAt": "2026-08-23T07:01:30.755Z",
+  "rescoredAt": "2026-08-24T04:08:55.613Z",
   "provider": "circuitnotion",
   "model": "circuit-2-turbo",
   "score": 91,
@@ -37,7 +37,7 @@
     "linux",
     "win32"
   ],
-  "auditTests": 3168,
+  "auditTests": 3177,
   "auditFailures": 0,
   "exaScore": null,
   "observations": [
@@ -637,173 +637,173 @@
     {
       "platform": "darwin",
       "architecture": "arm64",
-      "generatedAt": "2026-08-23T06:59:20.897Z",
+      "generatedAt": "2026-08-24T04:07:23.776Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 319,
           "failed": 0,
-          "durationMs": 3612
+          "durationMs": 4637
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 182,
           "failed": 0,
-          "durationMs": 7762
+          "durationMs": 9674
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 5581
+          "durationMs": 8245
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 1453
+          "durationMs": 2153
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 127,
           "failed": 0,
-          "durationMs": 1785
+          "durationMs": 2622
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 1323
+          "durationMs": 1830
         },
         {
           "name": "portability",
           "passed": true,
-          "tests": 105,
+          "tests": 108,
           "failed": 0,
-          "durationMs": 1441
+          "durationMs": 2302
         }
       ],
-      "historyStartupP50Ms": 54
+      "historyStartupP50Ms": 86
     },
     {
       "platform": "linux",
       "architecture": "x64",
-      "generatedAt": "2026-08-23T06:59:33.232Z",
+      "generatedAt": "2026-08-24T04:07:20.416Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 319,
           "failed": 0,
-          "durationMs": 3711
+          "durationMs": 2957
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 182,
           "failed": 0,
-          "durationMs": 6411
+          "durationMs": 5910
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 7402
+          "durationMs": 6033
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 1891
+          "durationMs": 1507
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 127,
           "failed": 0,
-          "durationMs": 2742
+          "durationMs": 2363
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 1558
+          "durationMs": 1289
         },
         {
           "name": "portability",
           "passed": true,
-          "tests": 105,
+          "tests": 108,
           "failed": 0,
-          "durationMs": 1952
+          "durationMs": 1640
         }
       ],
-      "historyStartupP50Ms": 102
+      "historyStartupP50Ms": 77
     },
     {
       "platform": "win32",
       "architecture": "x64",
-      "generatedAt": "2026-08-23T07:00:59.212Z",
+      "generatedAt": "2026-08-24T04:08:25.558Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 319,
           "failed": 0,
-          "durationMs": 8328
+          "durationMs": 6012
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 182,
           "failed": 0,
-          "durationMs": 6503
+          "durationMs": 6575
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 22487
+          "durationMs": 14884
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 3343
+          "durationMs": 3174
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 127,
           "failed": 0,
-          "durationMs": 4025
+          "durationMs": 3930
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 2225
+          "durationMs": 2205
         },
         {
           "name": "portability",
           "passed": true,
-          "tests": 105,
+          "tests": 108,
           "failed": 0,
-          "durationMs": 2747
+          "durationMs": 2673
         }
       ],
-      "historyStartupP50Ms": 144
+      "historyStartupP50Ms": 138
     }
   ]
 }
