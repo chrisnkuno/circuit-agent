@@ -233,6 +233,10 @@ export type AgentRuntimeResult = {
 /** How many times a turn is sent back to the model to verify before the gate gives up and stops. */
 const MAX_VERIFICATION_NUDGES = 1;
 const MAX_UNAVAILABLE_TOOL_RECOVERIES = 1;
+/** Provider calls are safe to retry here because no tool from the returned turn has run yet. */
+const MAX_PROVIDER_RETRIES = 2;
+/** A malformed tool turn is model output, so let the model repair it before failing the run. */
+const MAX_TOOL_TURN_RECOVERIES = 2;
 
 /**
  * How many times a truncated turn is resumed before the run gives up.
@@ -268,6 +272,59 @@ const VERIFICATION_NUDGE =
  */
 const TEST_EVIDENCE_NUDGE =
   "That build/typecheck passing shows the code compiles, not that it behaves correctly. Run the smallest relevant existing test or smoke command for the changed behaviour and report the real result. Add a regression test only when the change would otherwise be unprotected. If the change genuinely has no behaviour to assert (documentation, formatting, configuration), say so explicitly and stop.";
+
+const TRANSIENT_PROVIDER_CODES = new Set([
+  "ABORT_ERR",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function errorRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+/**
+ * Whether another identical provider request is likely to succeed.
+ *
+ * Explicit HTTP status wins over fuzzy message matching. In particular, auth, validation and 404
+ * endpoint mistakes must reach the user immediately instead of being repeated three times. The
+ * recursive cause walk handles fetch/SDK wrappers without depending on one provider's error class.
+ */
+export function isRetryableProviderError(error: unknown): boolean {
+  let current: unknown = error;
+  const visited = new Set<unknown>();
+  const messages: string[] = [];
+  for (let depth = 0; current !== undefined && current !== null && depth < 5 && !visited.has(current); depth += 1) {
+    visited.add(current);
+    const record = errorRecord(current);
+    if (current instanceof Error) messages.push(current.message);
+    else if (typeof current === "string") messages.push(current);
+    if (!record) break;
+
+    const status = Number(record.status ?? record.statusCode);
+    if (Number.isInteger(status)) {
+      if (status === 408 || status === 409 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
+      if (status >= 400 && status < 600) return false;
+    }
+    const code = typeof record.code === "string" ? record.code.toUpperCase() : "";
+    if (TRANSIENT_PROVIDER_CODES.has(code)) return true;
+    current = record.cause;
+  }
+  return messages.some((message) => /\b(?:timed?\s*out|timeout|rate\s*limit|overload(?:ed)?|temporar(?:y|ily)|connection\s*reset|socket\s*hang\s*up|fetch\s*failed|network\s*error)\b/i.test(message));
+}
+
+function providerRetryDelay(attempt: number): Promise<void> {
+  // Short exponential backoff: enough to clear a transient edge failure without making Ctrl+C
+  // feel ignored. Cancellation is checked both before and after this wait by the caller.
+  return new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+}
 
 const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 
@@ -476,6 +533,7 @@ export class BoundedAgentRuntime {
     let workspaceNeedsVerification = false;
     let verificationNudges = 0;
     let unavailableToolRecoveries = 0;
+    let toolTurnRecoveries = 0;
     // Truncated turns resumed so far in this run, capped by `MAX_LENGTH_CONTINUATIONS`.
     let lengthContinuations = 0;
     // Strongest evidence seen for the workspace changes in this run, as a rung on `EVIDENCE_RANK`,
@@ -510,7 +568,7 @@ export class BoundedAgentRuntime {
       );
       if (maximumOutputTokens < 1) return stop("iteration_limit", "Run reached its approved model budget before another provider call.", iteration - 1);
 
-      const turn = await this.dependencies.model.complete({
+      const modelRequest: AgentModelRequest = {
         ...(request.effort ? { effort: request.effort } : {}),
         messages: [...messages],
         tools: definitions,
@@ -519,7 +577,25 @@ export class BoundedAgentRuntime {
         // Deltas are fire-and-forget: a slow consumer must never stall generation, and a lost
         // delta costs nothing because the completed turn is still the source of truth.
         onTextDelta: (text) => void this.dependencies.control.persistEvent({ type: "assistant_delta", iteration, text }),
-      });
+      };
+      let turn: AgentModelTurn | undefined;
+      for (let attempt = 0; attempt <= MAX_PROVIDER_RETRIES; attempt += 1) {
+        try {
+          turn = await this.dependencies.model.complete(modelRequest);
+          break;
+        } catch (error) {
+          if (!isRetryableProviderError(error) || attempt >= MAX_PROVIDER_RETRIES) throw error;
+          if (await this.dependencies.control.isCancellationRequested()) {
+            return stop("cancelled", "Run cancelled while waiting to retry the model provider.", iteration - 1);
+          }
+          await providerRetryDelay(attempt);
+          if (await this.dependencies.control.isCancellationRequested()) {
+            return stop("cancelled", "Run cancelled while waiting to retry the model provider.", iteration - 1);
+          }
+        }
+      }
+      // The loop either returned a turn or rethrew the final provider error.
+      if (!turn) throw new Error("Model provider retry loop ended without a response");
       usage = addUsage(usage, turn.usage);
       actualModelRwf = priceActualModelUsage(usage.inputTokens, usage.outputTokens, this.dependencies.prices);
       if (actualModelRwf > request.modelReservationRwf) throw new Error("Actual model usage exceeds the reserved model budget");
@@ -569,9 +645,38 @@ export class BoundedAgentRuntime {
           ? stop("needs_verification", `Workspace changes were made without passing verification evidence. The agent reported: ${summary}`, iteration)
           : stop("completed", summary, iteration);
       }
-      if (turn.finishReason !== "tool_calls" || turn.toolCalls.length === 0) return stop("failed", "Model returned an invalid tool-call turn.", iteration);
-      if (turn.toolCalls.length > request.maxToolCallsPerTurn) return stop("failed", "Model exceeded the per-turn tool-call limit.", iteration);
+      const recoverToolTurn = (reason: string, instruction: string): boolean => {
+        if (toolTurnRecoveries >= MAX_TOOL_TURN_RECOVERIES) return false;
+        toolTurnRecoveries += 1;
+        messages.push({ role: "user", content: `${reason} ${instruction}`, internal: true });
+        return true;
+      };
+      if (turn.finishReason !== "tool_calls" || turn.toolCalls.length === 0) {
+        if (recoverToolTurn("Your previous response declared tool use but contained no usable tool calls.", "Try again with a valid tool call, or answer normally if no tool is needed.")) continue;
+        return stop("failed", "Model repeatedly returned an invalid tool-call turn.", iteration);
+      }
+      if (turn.toolCalls.length > request.maxToolCallsPerTurn) {
+        if (recoverToolTurn(
+          `Your previous response requested ${turn.toolCalls.length} tools, above the per-turn limit of ${request.maxToolCallsPerTurn}; none were executed.`,
+          `Retry with at most ${request.maxToolCallsPerTurn} calls, prioritizing the calls needed to make progress.`,
+        )) continue;
+        return stop("failed", `Model repeatedly exceeded the per-turn tool-call limit of ${request.maxToolCallsPerTurn}.`, iteration);
+      }
       if (toolCallsExecuted + turn.toolCalls.length > request.maxToolCalls) return stop("iteration_limit", "Run reached its tool-call budget.", iteration);
+
+      const seenCallIds = new Set<string>();
+      const malformed = turn.toolCalls.find((call) => {
+        if (!call.id.trim() || seenCallIds.has(call.id)) return true;
+        seenCallIds.add(call.id);
+        return !normalizeArguments(call.arguments);
+      });
+      if (malformed) {
+        if (recoverToolTurn(
+          "Your previous tool-call response was malformed; no tools were executed.",
+          "Retry with a unique non-empty id for every call and a JSON object for every arguments value.",
+        )) continue;
+        return stop("failed", "Model repeatedly returned malformed tool calls.", iteration);
+      }
 
       const unavailable = turn.toolCalls.find((call) => {
         const tool = this.toolsByName.get(call.name);
@@ -598,13 +703,9 @@ export class BoundedAgentRuntime {
       }
 
       const prepared: Array<{ call: AgentToolCall; tool: AgentTool; argumentsValue: Record<string, unknown> }> = [];
-      const seenCallIds = new Set<string>();
       for (const call of turn.toolCalls) {
-        if (!call.id.trim() || seenCallIds.has(call.id)) return stop("failed", "Model returned a missing or duplicate tool-call identifier.", iteration);
-        seenCallIds.add(call.id);
         const tool = this.toolsByName.get(call.name)!;
-        const argumentsValue = normalizeArguments(call.arguments);
-        if (!argumentsValue) return stop("failed", `Tool ${call.name} arguments must be a JSON object.`, iteration);
+        const argumentsValue = normalizeArguments(call.arguments)!;
         if (tool.requiresApproval) {
           const approval = await this.dependencies.control.isToolCallApproved(call, tool);
           if (approval !== true && approval !== "approved") {

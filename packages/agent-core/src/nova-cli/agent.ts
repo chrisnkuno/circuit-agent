@@ -88,9 +88,12 @@ export type NovaBudgets = {
 };
 
 export const DEFAULT_NOVA_BUDGETS: NovaBudgets = {
-  maxIterations: 60,
-  maxToolCalls: 200,
-  maxToolCallsPerTurn: 8,
+  // Long repository tasks routinely need more than the old 200-call ceiling. These remain hard
+  // bounded at the runtime validator's limits and the monetary reservation still caps every model
+  // turn, so increasing capacity does not grant unbounded execution or spending.
+  maxIterations: 100,
+  maxToolCalls: 500,
+  maxToolCallsPerTurn: 16,
   maxToolResultChars: 40_000,
   maxTotalToolResultChars: 400_000,
   // Raised from 8,000 because that ceiling was being hit in ordinary work — a long file written in

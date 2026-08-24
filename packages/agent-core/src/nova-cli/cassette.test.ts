@@ -224,17 +224,24 @@ describe("a whole agent turn, recorded and replayed", () => {
       { finishReason: "tool_calls", content: "", toolCalls: [{ id: "c1", name: "edit_file", arguments: { path: "app.ts", oldText: "3000", newText: "8080" } }] },
       { finishReason: "stop", content: "unreachable" },
     ]);
-    const faulty = new FaultInjectingTurnProvider(live, [{ at: 2, kind: "throw", message: "socket hang up" }]);
+    // All three attempts fail, proving the retry is bounded while preserving the edit that landed
+    // before the provider outage. A single injected drop now recovers by design.
+    const faulty = new FaultInjectingTurnProvider(live, [
+      { at: 2, kind: "throw", message: "socket hang up" },
+      { at: 3, kind: "throw", message: "socket hang up" },
+      { at: 4, kind: "throw", message: "socket hang up" },
+    ]);
     await expect(agentWith(faulty).send("change the port")).rejects.toThrow(/socket hang up/);
     expect(await fs.readFile(path.join(root, "app.ts"), "utf8")).toContain("8080");
   });
 
-  it("does not follow a malformed turn into a loop", async () => {
-    // finish_reason says "tool_calls" and there are none. Continuing would re-ask forever.
+  it("repairs one malformed turn without following it into a loop", async () => {
+    // finish_reason says "tool_calls" and there are none. The runtime asks for one corrected turn,
+    // and the bounded correction cap still prevents an endless malformed-response loop.
     const faulty = new FaultInjectingTurnProvider(scripted([{ finishReason: "stop", content: "fine" }]), [{ at: 1, kind: "malformed" }]);
     const result = await agentWith(faulty).send("do something");
-    expect(result.status).toBe("failed");
-    expect(result.summary).toMatch(/invalid tool-call turn/);
+    expect(result.status).toBe("completed");
+    expect(result.summary).toBe("fine");
   });
 
   it("reports a refusal as a refusal, not as an empty success", async () => {

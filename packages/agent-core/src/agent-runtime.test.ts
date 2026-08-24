@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { agentMessagePromptParts, BoundedAgentRuntime, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
+import { agentMessagePromptParts, BoundedAgentRuntime, isRetryableProviderError, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
 
 const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 const prices = { inputRwfPerMillionTokens: 1_610, outputRwfPerMillionTokens: 9_660 };
@@ -95,6 +95,129 @@ describe("bounded agent runtime", () => {
     expect(result).toMatchObject({ status: "iteration_limit", iterations: 0, actualModelRwf: 0 });
     expect(result.summary).toContain("approved model budget");
     expect(value.executed()).toBe(0);
+  });
+
+  describe("provider recovery", () => {
+    function runtimeWithProvider(complete: (request: AgentModelRequest) => Promise<AgentModelTurn>, cancelled = () => false) {
+      const events: AgentRuntimeEvent[] = [];
+      return {
+        events,
+        runtime: new BoundedAgentRuntime({
+          model: { complete }, tools: [], prices,
+          control: {
+            async heartbeat() {},
+            async isCancellationRequested() { return cancelled(); },
+            async isToolCallApproved() { return true; },
+            async persistEvent(event) { events.push(event); },
+          },
+        }),
+      };
+    }
+
+    it("retries a transient provider failure and records only the successful model turn", async () => {
+      let calls = 0;
+      const value = runtimeWithProvider(async () => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error("service unavailable"), { status: 503 });
+        return turn({ content: "Recovered after a transient outage." });
+      });
+      await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({
+        status: "completed", summary: "Recovered after a transient outage.", iterations: 1,
+      });
+      expect(calls).toBe(2);
+      expect(value.events.filter((event) => event.type === "model_turn")).toHaveLength(1);
+    });
+
+    it("uses two retries at most and then surfaces the original provider failure", async () => {
+      let calls = 0;
+      const failure = Object.assign(new Error("upstream overloaded"), { statusCode: 503 });
+      const value = runtimeWithProvider(async () => { calls += 1; throw failure; });
+      await expect(value.runtime.execute(baseRequest)).rejects.toBe(failure);
+      expect(calls).toBe(3);
+      expect(value.events).toHaveLength(0);
+    });
+
+    it("does not retry permanent endpoint, authentication, or request errors", async () => {
+      for (const status of [400, 401, 403, 404, 422]) {
+        let calls = 0;
+        const failure = Object.assign(new Error("request failed"), { status });
+        const value = runtimeWithProvider(async () => { calls += 1; throw failure; });
+        await expect(value.runtime.execute(baseRequest)).rejects.toBe(failure);
+        expect(calls).toBe(1);
+      }
+    });
+
+    it("honours cancellation before repeating a failed provider request", async () => {
+      let calls = 0;
+      const value = runtimeWithProvider(async () => {
+        calls += 1;
+        throw Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+      }, () => calls > 0);
+      await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "cancelled", iterations: 0 });
+      expect(calls).toBe(1);
+    });
+
+    it("recognises transient SDK causes but lets an explicit 404 override a vague network message", () => {
+      expect(isRetryableProviderError(new Error("fetch failed", { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) }))).toBe(true);
+      expect(isRetryableProviderError(Object.assign(new Error("temporary network error"), { status: 404 }))).toBe(false);
+      expect(isRetryableProviderError(Object.assign(new Error("rate limited"), { status: 429 }))).toBe(true);
+    });
+  });
+
+  describe("malformed tool-turn recovery", () => {
+    const readTool: AgentTool = {
+      name: "read_file", description: "Read", inputSchema: {}, capabilityId: "workspace.files",
+      effect: "none", requiresApproval: false, parallelSafe: false, async execute() { return { content: "contents" }; },
+    };
+
+    it("asks the model to split a tool batch that exceeds the per-turn limit", async () => {
+      const oversized = Array.from({ length: 5 }, (_, index) => ({ id: `too-many-${index}`, name: "read_file", arguments: {} }));
+      const value = harness([
+        turn({ finishReason: "tool_calls", toolCalls: oversized }),
+        turn({ finishReason: "tool_calls", toolCalls: [{ id: "valid", name: "read_file", arguments: {} }] }),
+        turn({ content: "Recovered." }),
+      ], [readTool]);
+      const result = await value.runtime.execute(baseRequest);
+      expect(result).toMatchObject({ status: "completed", toolCallsExecuted: 1 });
+      expect(value.requests[1].messages.at(-1)?.content).toContain("at most 4 calls");
+      expect(value.events.filter((event) => event.type === "tool_call")).toHaveLength(1);
+    });
+
+    it("fails after two bounded corrections when oversized batches continue", async () => {
+      const oversized = () => turn({
+        finishReason: "tool_calls",
+        toolCalls: Array.from({ length: 5 }, (_, index) => ({ id: crypto.randomUUID(), name: "read_file", arguments: { index } })),
+      });
+      const value = harness([oversized(), oversized(), oversized()], [readTool]);
+      await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({
+        status: "failed", toolCallsExecuted: 0, summary: expect.stringContaining("repeatedly exceeded"),
+      });
+      expect(value.executed()).toBe(3);
+    });
+
+    it.each([
+      ["missing id", [{ id: "", name: "read_file", arguments: {} }]],
+      ["duplicate id", [{ id: "same", name: "read_file", arguments: {} }, { id: "same", name: "read_file", arguments: {} }]],
+      ["non-object arguments", [{ id: "bad-args", name: "read_file", arguments: "{}" }]],
+    ])("repairs %s without executing the malformed call", async (_label, malformedCalls) => {
+      const value = harness([
+        turn({ finishReason: "tool_calls", toolCalls: malformedCalls }),
+        turn({ finishReason: "tool_calls", toolCalls: [{ id: "valid", name: "read_file", arguments: {} }] }),
+        turn({ content: "Recovered." }),
+      ], [readTool]);
+      const result = await value.runtime.execute(baseRequest);
+      expect(result).toMatchObject({ status: "completed", toolCallsExecuted: 1 });
+      expect(value.requests[1].messages.at(-1)?.content).toContain("malformed");
+    });
+
+    it("recovers a declared tool turn with no calls, then allows a normal answer", async () => {
+      const value = harness([
+        turn({ finishReason: "tool_calls", toolCalls: [] }),
+        turn({ content: "No tool was needed." }),
+      ], []);
+      await expect(value.runtime.execute(baseRequest)).resolves.toMatchObject({ status: "completed", toolCallsExecuted: 0 });
+      expect(value.requests[1].messages.at(-1)?.content).toContain("no usable tool calls");
+    });
   });
 
   it("runs a multi-turn coding loop and requires real verification after edits", async () => {

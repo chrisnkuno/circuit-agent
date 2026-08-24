@@ -556,7 +556,13 @@ describe("the budgets a session runs with", () => {
 
   it("falls back to the conservative default for a provider that cannot say", async () => {
     const agent = new NovaAgent({ root, model: providerWith(undefined) as never, prices, mode: "build", approve: async () => "allow" });
-    expect(agent.budgetSnapshot).toMatchObject({ contextLimit: 200_000, maxOutputTokens: 16_000 });
+    expect(agent.budgetSnapshot).toMatchObject({
+      contextLimit: 200_000,
+      maxOutputTokens: 16_000,
+      maxIterations: 100,
+      maxToolCalls: 500,
+      maxToolCallsPerTurn: 16,
+    });
     await agent.dispose();
   });
 
