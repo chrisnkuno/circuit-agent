@@ -37,7 +37,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run build:packages
       - run: bun run reliability:audit
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nova-audit-${{ matrix.os }}
@@ -107,7 +107,7 @@ jobs:
         run: bun run reliability:promote
       - name: Build public spectator data
         run: bun run reliability:publish
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nova-reliability-${{ github.run_id }}
