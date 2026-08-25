@@ -119,7 +119,7 @@ jobs:
             reliability/errors.json
             reliability/site/runs/**
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: reliability/site
       - name: Deploy spectator UI

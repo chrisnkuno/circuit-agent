@@ -34,7 +34,7 @@ jobs:
       - name: Build sanitized public evidence
         run: bun run tooling/reliability/reliability-publish.ts
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: reliability/site
       - name: Deploy spectator UI
