@@ -67,7 +67,7 @@ jobs:
         run: |
           cargo run --locked --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-state-bench -- --sessions 100 --messages 20 --queries 50 > nova-state-benchmark.json
           cargo run --locked --release --features benchmark --manifest-path packages/nova-state/Cargo.toml --bin nova-defender-brain-bench -- --records 10000 --queries 2000 > nova-defender-brain-benchmark.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nova-state-benchmark-${{ matrix.os }}
           path: |

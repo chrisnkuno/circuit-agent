@@ -47,7 +47,7 @@ jobs:
         run: bun run tooling/defender/refresh-defender-brain.ts --force
       - name: Upload quarantined review queue
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: defender-brain-candidates-${{ github.run_id }}
           path: .nova/security-brain/candidates/*.jsonl
