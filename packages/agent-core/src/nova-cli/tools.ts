@@ -347,7 +347,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
     },
     {
       name: "run_command",
-      description: `Run a bounded command in the project root. Use for builds, tests, linters and git inspection. Never launch a dev server, watcher or other persistent process in the foreground; use one bounded start-probe-cleanup command instead. Requires approval. ${workspace.commandGuidance}`,
+      description: `Run a bounded command in the project root. Use for builds, tests, linters and git inspection. Use start_application, not this tool, for a dev server or other application the user needs to open. Requires approval. ${workspace.commandGuidance}`,
       inputSchema: {
         type: "object",
         properties: { command: { type: "string" }, timeoutMs: { type: "integer" } },
@@ -367,7 +367,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
         }
         if (isLikelyPersistentCommand(command)) {
           return {
-            content: "Refused a likely persistent foreground command. Start it in the background, probe the required behavior, and terminate it in the same bounded command (or wrap it with a short timeout).",
+            content: "Refused a likely persistent foreground command. Use start_application so Nova can keep it alive, verify the HTTP endpoint, and return a reachable URL. Use a short timeout only for a temporary smoke test that should stop afterward.",
             isError: true,
             data: { command, reason: "persistent_foreground_command" },
           };
@@ -400,6 +400,83 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
             ? { passed: true, kind, scope: "targeted" as const, summary: `${command} exited 0` }
             : undefined,
         };
+      },
+    },
+    {
+      name: "start_application",
+      description: "Start a local development application and keep it running across turns. Nova waits for a real HTTP response before reporting success; startup logs alone are never treated as proof. Use application_status for logs and stop_application when it is no longer needed. Requires approval.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "Persistent start command, for example 'bun run dev -- --port 4173'." },
+          port: { type: "integer", description: "TCP port the application will listen on." },
+          directory: { type: "string", description: "Project-relative application directory. Defaults to the workspace root." },
+          path: { type: "string", description: "HTTP path used for readiness. Defaults to '/'." },
+          timeoutMs: { type: "integer", description: "Readiness deadline, from 1000 to 60000ms. Defaults to 20000ms." },
+        },
+        required: ["command", "port"],
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.terminal,
+      effect: "workspace",
+      requiresApproval: true,
+      parallelSafe: false,
+      async execute(args, context) {
+        const status = await workspace.startApplication({
+          command: requiredString(args.command, "command"),
+          port: optionalInteger(args.port, "port")!,
+          directory: typeof args.directory === "string" ? args.directory : undefined,
+          path: typeof args.path === "string" ? args.path : undefined,
+          timeoutMs: optionalInteger(args.timeoutMs, "timeoutMs"),
+          signal: context.signal,
+        });
+        return {
+          content: `Application ${status.id} is running and answered HTTP at ${status.url}. It will remain available while this Nova session is open.`,
+          data: status,
+          verification: { passed: true, kind: "smoke", scope: "targeted" as const, summary: `${status.url} answered HTTP` },
+        };
+      },
+    },
+    {
+      name: "application_status",
+      description: "Show managed applications, whether each process is still running, its verified URL, and recent stdout/stderr. Optionally inspect one application id.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Application id such as app-1. Omit to list all applications." } },
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.read,
+      effect: "none",
+      requiresApproval: false,
+      parallelSafe: true,
+      async execute(args) {
+        const id = typeof args.id === "string" && args.id.trim() ? args.id.trim() : undefined;
+        const applications = await workspace.applicationStatus(id);
+        if (applications.length === 0) return { content: id ? `No managed application named ${id}.` : "No managed applications.", data: { applications: [] } };
+        const content = applications.map((application) => {
+          const header = `${application.id}: ${application.state} at ${application.url} (port ${application.port})`;
+          const logs = [application.stdout.trim(), application.stderr.trim()].filter(Boolean).join("\n");
+          return logs ? `${header}\nRecent logs:\n${logs}` : header;
+        }).join("\n\n");
+        return { content, data: { applications } };
+      },
+    },
+    {
+      name: "stop_application",
+      description: "Stop a managed application and its process tree. Requires approval.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string", description: "Application id returned by start_application." } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      capabilityId: NOVA_CAPABILITIES.terminal,
+      effect: "workspace",
+      requiresApproval: true,
+      parallelSafe: false,
+      async execute(args) {
+        const status = await workspace.stopApplication(requiredString(args.id, "id"));
+        return { content: `Stopped ${status.id} on port ${status.port}.`, data: status };
       },
     },
     {

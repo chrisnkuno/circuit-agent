@@ -1670,7 +1670,30 @@ async function main(): Promise<number> {
    * one. A scroll region left set when the process exits is inherited by the user's own shell
    * afterward, which reads as the terminal being broken until they notice and reset it themselves.
    */
-  let exitCleanly = () => { screen?.exit(); uninstallShortcuts(); readline.close(); };
+  let exitCleanly = () => { screen?.exit(); uninstallShortcuts(); readline.close(); abandonPrompt(); };
+
+  /**
+   * Ends the `await readline.question(...)` that the REPL is parked on when the session is closing.
+   *
+   * Closing the interface does not settle a question already in flight, so without this the loop
+   * stays awaiting a line that can never arrive and the shutdown below it — the goodbye, and more
+   * importantly `agent.dispose()` — never runs. That was survivable only while nothing outlived a
+   * turn: node exited on its own once no handles were left. A managed application (`start_application`)
+   * is exactly such a handle, so a Ctrl+C with a preview server running would otherwise hang the
+   * CLI forever and leak the server with it.
+   */
+  let rejectPrompt: ((error: Error) => void) | undefined;
+  const abandonPrompt = () => {
+    // The message is what `isReadlineExit` recognises, so this reaches the same break as Ctrl+D.
+    rejectPrompt?.(new Error("readline was closed"));
+    rejectPrompt = undefined;
+  };
+  /** A prompt that loses to the session ending, rather than outliving it. */
+  const askForInput = (label: string): Promise<string> =>
+    Promise.race([
+      readline.question(label),
+      new Promise<never>((_resolve, reject) => { rejectPrompt = reject; }),
+    ]).finally(() => { rejectPrompt = undefined; });
 
   const approvedBudget = args.budget ? fromUnits(args.budget, display) : undefined;
   if (approvedBudget && !await confirmSpendingCap(readline, interactive, formatMoney(approvedBudget))) {
@@ -2448,7 +2471,7 @@ async function main(): Promise<number> {
   const bindSigint = () => { process.on("SIGINT", handleSigint); readline.on("SIGINT", handleSigint); };
   const unbindSigint = () => { process.off("SIGINT", handleSigint); readline.off("SIGINT", handleSigint); };
   bindSigint();
-  exitCleanly = () => { unbindSigint(); watched.stopAll(); screen?.exit(); uninstallShortcuts(); readline.close(); };
+  exitCleanly = () => { unbindSigint(); watched.stopAll(); screen?.exit(); uninstallShortcuts(); readline.close(); abandonPrompt(); };
 
   /** Set when the turn about to run is a wander lab, so its results chart is printed once, after it. */
   let wanderRunning = false;
@@ -3433,7 +3456,7 @@ async function main(): Promise<number> {
         : inlineBar()
           ? promptBox.draw(mode, where, idleStatusLine())
           : screen ? label : `\n${label}`;
-      rawInput = queued ?? await readline.question(promptLabel);
+      rawInput = queued ?? await askForInput(promptLabel);
     } catch (error) {
       if (isReadlineExit(error) || exitRequested) break;
       throw error;

@@ -61,6 +61,14 @@ export function describeToolCall(toolName: string, args: Record<string, unknown>
       return asString(args.include) ?? "";
     case "run_command":
       return asString(args.command) ?? "";
+    case "start_application": {
+      const command = asString(args.command) ?? "";
+      const port = typeof args.port === "number" ? args.port : undefined;
+      return port === undefined ? command : `${command} :${port}`;
+    }
+    case "application_status":
+    case "stop_application":
+      return asString(args.id) ?? "";
     case "web_search":
     case "deep_research":
       return `"${asString(args.query) ?? ""}"`;
@@ -81,6 +89,18 @@ export function describeToolCall(toolName: string, args: Record<string, unknown>
       return typeof first === "string" ? first.trim() : "";
     }
   }
+}
+
+/**
+ * The verified preview URL out of a managed-application result.
+ *
+ * Trailing sentence punctuation is not part of the link, and a URL that arrives cut in half is
+ * worse than no URL at all — the person reading has to guess a port, which is the exact failure
+ * `start_application` exists to remove.
+ */
+function previewUrl(body: string): string | undefined {
+  const match = /https?:\/\/\S+/.exec(body);
+  return match ? match[0].replace(/[.,;:)\]]+$/, "") : undefined;
 }
 
 function lineCount(content: string): number {
@@ -105,6 +125,21 @@ export function summarizeToolResult(toolName: string, content: string, isError: 
       // A failing command's first line of output is the only part anyone reads first.
       const detail = body.split("\n").slice(1).find((line) => line.trim() !== "");
       return detail ? `exit ${code} · ${truncateMiddle(detail, 48)}` : `exit ${code}`;
+    }
+    case "start_application": {
+      if (isError) return truncateMiddle(body.split("\n").find((line) => line.trim() !== "") ?? "", 60);
+      const url = previewUrl(body);
+      // Never truncated: this URL is the whole result of the call.
+      return url ? `ready at ${url}` : truncateMiddle(body.split("\n")[0] ?? "", 60);
+    }
+    case "application_status": {
+      const entries = body.split("\n").flatMap((line) => {
+        const match = /^(\S+): (starting|running|exited) at (\S+)/.exec(line.trim());
+        return match ? [{ id: match[1], state: match[2], url: match[3] }] : [];
+      });
+      if (entries.length === 0) return "none";
+      if (entries.length === 1) return `${entries[0].state} at ${entries[0].url}`;
+      return `${entries.length} applications`;
     }
     case "grep_files": {
       if (/^No matches/i.test(body)) return "no matches";

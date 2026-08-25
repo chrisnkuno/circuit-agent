@@ -82,6 +82,13 @@ describe("command tokenization", () => {
 });
 
 describe("E2B workspace", () => {
+  it("reports that host-reachable application previews are unsupported instead of inventing a localhost URL", async () => {
+    const { workspace } = e2b();
+    await expect(workspace.startApplication({ command: "npm run dev", port: 3000 })).rejects.toThrow(/not host-reachable.*local workspace/i);
+    expect(await workspace.applicationStatus()).toEqual([]);
+    await expect(workspace.stopApplication("app-1")).rejects.toThrow(/not available/);
+  });
+
   it("confines paths to the sandbox workspace root", async () => {
     const { workspace } = e2b({ "/workspace/repo/app.py": "print(1)\n" });
     await expect(workspace.readFile("../../etc/passwd")).rejects.toThrow(/escapes the workspace root/);

@@ -118,8 +118,38 @@ describe("summarizeToolResult", () => {
     expect(summarizeToolResult("some_future_tool", "\n\nit worked\nmore detail", false)).toBe("it worked");
   });
 
+  it("keeps a verified preview URL whole instead of abbreviating it away", () => {
+    const started = summarizeToolResult(
+      "start_application",
+      "Application app-1 is running and answered HTTP at http://127.0.0.1:4173/. It will remain available while this Nova session is open.",
+      false,
+    );
+    expect(started).toBe("ready at http://127.0.0.1:4173/");
+    expect(started).not.toContain("…");
+  });
+
+  it("shows why a preview failed rather than a half-sentence", () => {
+    const failed = summarizeToolResult("start_application", "Application exited before port 4173 became ready.\n\nRecent logs:\nboom", true);
+    expect(failed).toContain("exited before port 4173");
+    expect(failed).not.toContain("\n");
+  });
+
+  it("summarizes managed application status by state and reachable URL", () => {
+    expect(summarizeToolResult("application_status", "No managed applications.", false)).toBe("none");
+    expect(summarizeToolResult("application_status", "app-1: running at http://127.0.0.1:4173/ (port 4173)\nRecent logs:\nready", false))
+      .toBe("running at http://127.0.0.1:4173/");
+    expect(summarizeToolResult("application_status", "app-1: running at http://127.0.0.1:1/ (port 1)\n\napp-2: exited at http://127.0.0.1:2/ (port 2)", false))
+      .toBe("2 applications");
+  });
+
+  it("names the port a preview was asked to bind, not just the command", () => {
+    expect(describeToolCall("start_application", { command: "bun run dev", port: 4173 })).toBe("bun run dev :4173");
+    expect(describeToolCall("stop_application", { id: "app-1" })).toBe("app-1");
+    expect(describeToolCall("application_status", {})).toBe("");
+  });
+
   it("never returns a multi-line summary, whatever the tool produced", () => {
-    for (const name of ["run_command", "grep_files", "read_file", "write_file", "todo_write", "unknown"]) {
+    for (const name of ["run_command", "grep_files", "read_file", "write_file", "todo_write", "start_application", "application_status", "unknown"]) {
       const summary = summarizeToolResult(name, "first line\nsecond line\nthird", false);
       expect(summary, name).not.toContain("\n");
     }

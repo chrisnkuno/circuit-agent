@@ -65,7 +65,7 @@ export function acpToolKind(toolName: string): "read" | "edit" | "delete" | "mov
   if (/^(read_file|list_files)$/.test(toolName)) return "read";
   if (/^(write_file|edit_file)$/.test(toolName)) return "edit";
   if (/^(glob_files|grep_files|scan_secrets)$/.test(toolName)) return "search";
-  if (/^(run_command|run_tests|verify|typecheck|lint)$/.test(toolName)) return "execute";
+  if (/^(run_command|start_application|application_status|stop_application|run_tests|verify|typecheck|lint)$/.test(toolName)) return "execute";
   if (/^(web_search|deep_research|web_fetch)$/.test(toolName)) return "fetch";
   if (/^(todo_write|todo_read|remember|delegate_task)$/.test(toolName)) return "think";
   return "other";

@@ -143,6 +143,13 @@ describe("buildNovaSystemPrompt", () => {
     expect(prompt).toContain("fails for the old behaviour");
   });
 
+  it("requires verified managed previews instead of trusting server startup text", () => {
+    const prompt = buildNovaSystemPrompt(context, "build", ["run_command", "start_application", "application_status"]);
+    expect(prompt).toContain("use start_application with its actual port");
+    expect(prompt).toContain("Startup log text is not proof");
+    expect(prompt).toContain("Report it as running only after that tool verifies HTTP reachability");
+  });
+
   /**
    * Invariants alone let an agent ship a component whose every property holds and which was never
    * mounted. The prompt has to name all three levels, and has to say the third is not optional.

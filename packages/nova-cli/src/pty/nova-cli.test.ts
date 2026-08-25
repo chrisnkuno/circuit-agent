@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
+import net from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnNova, type NovaProcess, type SpawnNovaOptions } from "./harness";
@@ -22,6 +23,18 @@ import { startAnthropicStub, type AnthropicStub } from "./anthropic-stub";
 
 const PROMPT = /›/;
 const ANTHROPIC_TEST_KEY = "sk-test-fake";
+
+async function unusedPort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Could not allocate a test port");
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return address.port;
+}
 
 describe("nova CLI under a real pty", () => {
   let stub: AnthropicStub;
@@ -134,6 +147,39 @@ describe("nova CLI under a real pty", () => {
       const after = (await p.waitFor(cwd, { timeoutMs: 10_000 })).slice(before);
       expect(after).not.toContain("decided against");
     }, 30_000);
+  });
+
+  describe("managed application previews", () => {
+    it("keeps a verified URL reachable after the tool call and tears it down when the CLI exits", async () => {
+      const port = await unusedPort();
+      await writeFile(path.join(cwd, "server.mjs"), `
+        import http from "node:http";
+        http.createServer((_request, response) => response.end("preview-from-real-cli"))
+          .listen(${port}, "127.0.0.1");
+      `);
+      const p = boot({ args: ["--build"] });
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "tool_call", toolName: "start_application", input: { command: "node server.mjs", port } });
+      stub.enqueue({ kind: "text", text: "The verified preview is ready." });
+      const before = p.output().length;
+      p.writeLine("start the application and keep it available");
+      await p.waitFor(/Nova wants to/, { timeoutMs: 15_000, since: before });
+      p.writeLine("y");
+      await p.waitFor("The verified preview is ready.", { timeoutMs: 15_000, since: before });
+      await p.waitFor(PROMPT, { timeoutMs: 15_000, since: before });
+
+      const url = `http://127.0.0.1:${port}/`;
+      expect(await (await fetch(url)).text()).toBe("preview-from-real-cli");
+      expect(p.output().slice(before)).toContain(url);
+
+      p.write("\x03");
+      expect((await p.waitForExit(10_000)).exitCode).toBe(0);
+      // The goodbye is the proof the REPL actually reached its shutdown path rather than the
+      // process merely running out of handles — that path is what disposes the workspace.
+      expect(p.output()).toContain("bye");
+      await expect(fetch(url)).rejects.toThrow();
+    }, 60_000);
   });
 
   describe("Ctrl+C mid-turn", () => {

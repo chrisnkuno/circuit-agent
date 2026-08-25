@@ -33,11 +33,11 @@ describe("nova tool set", () => {
     const tools = await createNovaTools({ workspace: new LocalWorkspace(root), todos: new TodoList() });
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 
-    for (const name of ["read_file", "list_files", "glob_files", "grep_files", "scan_secrets"]) {
+    for (const name of ["read_file", "list_files", "glob_files", "grep_files", "scan_secrets", "application_status"]) {
       expect(byName[name].effect, name).toBe("none");
       expect(byName[name].requiresApproval, name).toBe(false);
     }
-    for (const name of ["write_file", "edit_file", "run_command"]) {
+    for (const name of ["write_file", "edit_file", "run_command", "start_application", "stop_application"]) {
       expect(byName[name].effect, name).toBe("workspace");
       expect(byName[name].requiresApproval, name).toBe(true);
       // The runtime refuses to parallelise anything with an effect; this is what makes that true.
@@ -154,6 +154,7 @@ describe("nova tool set", () => {
     const run = toolNamed(tools, "run_command");
     const persistent = await run.execute({ command: "cd game && bun run dev", timeoutMs: 100_000 }, context);
     expect(persistent).toMatchObject({ isError: true, data: { reason: "persistent_foreground_command" } });
+    expect(persistent.content).toContain("start_application");
     expect(seen).toHaveLength(0);
 
     const bounded = "bun run dev & server_pid=$!; trap 'kill $server_pid' EXIT; curl --fail http://127.0.0.1:3000";

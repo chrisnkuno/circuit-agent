@@ -239,6 +239,7 @@ export function buildNovaSystemPrompt(
         "it accompanies. A turn that calls nothing but todo_write has spent seconds of the user's time recording that it is about to begin.",
       ].join(" "),
       "- Read tool results carefully. An error is information about the problem, not a reason to try the same thing again.",
+      "- When the user needs to open an application, use start_application with its actual port. Report it as running only after that tool verifies HTTP reachability. Startup log text is not proof. Check application_status if reachability is questioned, and use stop_application when the preview is no longer needed.",
     ].join("\n"),
     [
       "Risk-based safety:",

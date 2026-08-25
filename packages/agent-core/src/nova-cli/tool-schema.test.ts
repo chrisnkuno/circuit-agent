@@ -157,6 +157,9 @@ const GOLDEN_CONTRACT = [
   { name: "write_file", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["path", "content"], properties: ["path", "content"] },
   { name: "edit_file", effect: "workspace", capabilityId: "workspace.files", requiresApproval: true, parallelSafe: false, required: ["path", "oldText", "newText"], properties: ["path", "oldText", "newText", "replaceAll"] },
   { name: "run_command", effect: "workspace", capabilityId: "workspace.terminal", requiresApproval: true, parallelSafe: false, required: ["command"], properties: ["command", "timeoutMs"] },
+  { name: "start_application", effect: "workspace", capabilityId: "workspace.terminal", requiresApproval: true, parallelSafe: false, required: ["command", "port"], properties: ["command", "port", "directory", "path", "timeoutMs"] },
+  { name: "application_status", effect: "none", capabilityId: "workspace.files.read", requiresApproval: false, parallelSafe: true, required: [], properties: ["id"] },
+  { name: "stop_application", effect: "workspace", capabilityId: "workspace.terminal", requiresApproval: true, parallelSafe: false, required: ["id"], properties: ["id"] },
   // Defender-only by capability: current native knowledge and the broad fallback playbooks are
   // retrieved only when needed instead of consuming every request.
   { name: "query_defensive_brain", effect: "none", capabilityId: "security.playbooks", requiresApproval: false, parallelSafe: true, required: ["query"], properties: ["query", "limit"] },

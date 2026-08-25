@@ -18,6 +18,7 @@ import {
   type WorkspaceLimits,
 } from "./workspace";
 import { hasShellSyntax, runLocalCommand, tokenizeCommand, type CommandRunner } from "./command";
+import { LocalApplicationSupervisor, type ApplicationStatus, type StartApplicationRequest } from "./applications";
 export { hasShellSyntax, tokenizeCommand } from "./command";
 
 /**
@@ -56,6 +57,10 @@ export interface NovaWorkspace {
   glob(pattern: string): Promise<string[]>;
   grep(query: string, options?: { include?: string; regex?: boolean }): Promise<GrepMatch[]>;
   runCommand(command: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  /** Managed preview applications. Only the local workspace can expose a host-reachable URL today. */
+  startApplication(request: StartApplicationRequest): Promise<ApplicationStatus>;
+  applicationStatus(id?: string): Promise<ApplicationStatus[]>;
+  stopApplication(id: string): Promise<ApplicationStatus>;
   /**
    * Files under `prefix`, ignoring the ignored-directory list — root-relative, forward-slashed.
    *
@@ -87,7 +92,11 @@ export class LocalWorkspace implements NovaWorkspace {
   /** The host's own platform: this backend runs commands on this machine. */
   readonly commandPlatform: NodeJS.Platform = process.platform;
 
-  constructor(private readonly root: string, private readonly limits: WorkspaceLimits = DEFAULT_WORKSPACE_LIMITS, private readonly runner: CommandRunner = runLocalCommand) {}
+  private readonly applications: LocalApplicationSupervisor;
+
+  constructor(private readonly root: string, private readonly limits: WorkspaceLimits = DEFAULT_WORKSPACE_LIMITS, private readonly runner: CommandRunner = runLocalCommand) {
+    this.applications = new LocalApplicationSupervisor(root);
+  }
 
   get label(): string {
     return this.root;
@@ -149,7 +158,19 @@ export class LocalWorkspace implements NovaWorkspace {
     });
   }
 
-  async dispose(): Promise<void> {}
+  startApplication(request: StartApplicationRequest): Promise<ApplicationStatus> {
+    return this.applications.start(request);
+  }
+
+  async applicationStatus(id?: string): Promise<ApplicationStatus[]> {
+    return this.applications.get(id);
+  }
+
+  stopApplication(id: string): Promise<ApplicationStatus> {
+    return this.applications.stop(id);
+  }
+
+  async dispose(): Promise<void> { await this.applications.dispose(); }
 }
 
 /**
@@ -351,6 +372,16 @@ abstract class SandboxWorkspace implements NovaWorkspace {
       // not an infrastructure failure and must not end the run.
       return { exitCode: 2, stdout: "", stderr: error instanceof Error ? error.message : "Command was refused by the sandbox policy." };
     }
+  }
+
+  async startApplication(_request: StartApplicationRequest): Promise<ApplicationStatus> {
+    throw new Error(`${this.kind} application previews are not host-reachable yet. Run this session in the local workspace to keep a preview server available.`);
+  }
+
+  async applicationStatus(_id?: string): Promise<ApplicationStatus[]> { return []; }
+
+  async stopApplication(_id: string): Promise<ApplicationStatus> {
+    throw new Error(`${this.kind} application previews are not available in this session.`);
   }
 
   async dispose(): Promise<void> {

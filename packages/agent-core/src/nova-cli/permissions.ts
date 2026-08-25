@@ -230,6 +230,10 @@ export function describeToolCall(call: AgentToolCall, tool: AgentTool): string {
       const program = asString(args.command) ?? "a command";
       return `run ${program}${origin}`;
     }
+    case "start_application":
+      return `start ${asString(args.command) ?? "an application"} on port ${String(args.port ?? "unknown")}${origin}`;
+    case "stop_application":
+      return `stop application ${asString(args.id) ?? "unknown"}${origin}`;
     default:
       return `${tool.name}${args.path ? ` ${asString(args.path)}` : ""}${origin}`;
   }
