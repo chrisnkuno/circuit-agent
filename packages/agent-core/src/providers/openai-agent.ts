@@ -30,7 +30,9 @@ export class OpenAIAgentTurnProvider implements AgentTurnProvider {
     this.capabilities = capabilitiesFor(options.model);
     if (call) this.call = call;
     else {
-      const client = new OpenAI({ apiKey: options.apiKey, ...(options.baseURL ? { baseURL: options.baseURL } : {}) });
+      // Retry policy is centralized in BoundedAgentRuntime so attempt counts, cancellation and
+      // messages stay truthful instead of being multiplied invisibly by the SDK.
+      const client = new OpenAI({ apiKey: options.apiKey, ...(options.baseURL ? { baseURL: options.baseURL } : {}), maxRetries: 0 });
       this.call = async (body, signal) => (await client.chat.completions.create(body as never, { signal })) as unknown as ChatResponse | AsyncIterable<ChatStreamChunk>;
     }
   }
@@ -41,11 +43,13 @@ export class OpenAIAgentTurnProvider implements AgentTurnProvider {
     const response = await this.call({
       model: this.options.model,
       messages: toWireMessages(request.messages),
-      tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })),
+      ...(request.tools.length > 0 ? {
+        tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })),
+      } : {}),
       // Inkling's OpenRouter endpoint advertises tools, but not tool_choice or parallel tool
       // calls, and it accepts max_tokens rather than max_completion_tokens. Sending the broader
       // OpenAI contract makes the request fail before Inkling can call a single tool.
-      ...(inkling ? {} : { tool_choice: "auto", parallel_tool_calls: true }),
+      ...(inkling || request.tools.length === 0 ? {} : { tool_choice: "auto", parallel_tool_calls: true }),
       ...(inkling
         ? { max_tokens: request.maxOutputTokens }
         : { max_completion_tokens: request.maxOutputTokens }),
@@ -65,7 +69,10 @@ export class OpenAIAgentTurnProvider implements AgentTurnProvider {
       // streamed response reports no usage without it, and the accounting is not optional.
       stream: true,
       stream_options: { include_usage: true },
-    }, AbortSignal.timeout(this.options.timeoutMs ?? 180_000));
+    }, AbortSignal.any([
+      AbortSignal.timeout(this.options.timeoutMs ?? 180_000),
+      ...(request.signal ? [request.signal] : []),
+    ]));
     return turnFromChatResponse(
       Symbol.asyncIterator in Object(response)
         ? await collectChatStream(response as AsyncIterable<ChatStreamChunk>, request.onTextDelta)

@@ -263,7 +263,9 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
             // work out that a peer dependency is missing. Say what to install instead.
             throw new Error("The Anthropic provider needs the @anthropic-ai/sdk package. Install it with: npm install @anthropic-ai/sdk");
           });
-          client = new Anthropic({ apiKey: options.apiKey, ...(options.baseURL ? { baseURL: options.baseURL } : {}) }) as never;
+          // Retry policy is centralized in BoundedAgentRuntime; hidden SDK retries would make its
+          // bounded attempt count and live progress messages inaccurate.
+          client = new Anthropic({ apiKey: options.apiKey, ...(options.baseURL ? { baseURL: options.baseURL } : {}), maxRetries: 0 }) as never;
         }
         return (await client!.messages.create(body as never, { signal })) as AnthropicResponse | AsyncIterable<AnthropicStreamEvent>;
       };
@@ -298,7 +300,10 @@ export class AnthropicAgentTurnProvider implements AgentTurnProvider {
       // is lost. A caller that passes no `onTextDelta` simply gets the collected turn, exactly as
       // before; nothing above this line can tell the difference.
       stream: true,
-    }, AbortSignal.timeout(this.options.timeoutMs ?? 180_000));
+    }, AbortSignal.any([
+      AbortSignal.timeout(this.options.timeoutMs ?? 180_000),
+      ...(request.signal ? [request.signal] : []),
+    ]));
 
     const response = Symbol.asyncIterator in Object(raw)
       ? await collectAnthropicStream(raw as AsyncIterable<AnthropicStreamEvent>, request.onTextDelta)

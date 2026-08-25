@@ -137,11 +137,9 @@ describe("nova CLI under a real pty", () => {
   });
 
   describe("Ctrl+C mid-turn", () => {
-    // `BoundedAgentRuntime` only checks for cancellation between iterations (see agent-runtime.ts)
-    // — it does not abort an in-flight model call — so this cannot assert the stream stops on the
-    // spot. What it can and must assert: `handleSigint` actually fires (see the readline-vs-process
-    // "SIGINT" fix in nova.ts), the turn still finishes, and the CLI is genuinely usable afterward —
-    // not merely printing "interrupted" while still stuck.
+    // Cancellation must reach the provider request itself. Merely setting a flag for the next
+    // iteration produced the observed 120-second hang: the UI said interrupted while the request
+    // remained alive until its provider timeout.
     it("survives an interrupt during a slow response and returns to a working prompt", async () => {
       const p = boot();
       await p.waitFor(PROMPT, { timeoutMs: 30_000 });
@@ -151,17 +149,115 @@ describe("nova CLI under a real pty", () => {
       p.writeLine("tell me something slowly");
       await p.waitFor(/This is a/, { timeoutMs: 15_000, since: before });
 
+      const interruptedAt = Date.now();
       p.write("\x03");
       await p.waitFor(/interrupted/i, { timeoutMs: 5_000, since: before });
 
       const afterInterrupt = p.output().length;
       await p.waitFor(PROMPT, { timeoutMs: 15_000, since: afterInterrupt });
+      expect(Date.now() - interruptedAt).toBeLessThan(2_000);
 
       // Usable, not just alive: the prompt reappearing could still be a readline artifact if the
       // agent were wedged underneath it. Only a fresh command actually completing proves otherwise.
       const afterPrompt = p.output().length;
       p.writeLine("/help");
       await p.waitFor(/Find your way around|\/palette/i, { timeoutMs: 10_000, since: afterPrompt });
+    }, 60_000);
+
+    it("terminates an in-flight command instead of waiting for its tool timeout", async () => {
+      const p = boot({ args: ["--build"] });
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({
+        kind: "tool_call",
+        toolName: "run_command",
+        input: { command: `node -e "require('node:fs').writeFileSync('started.txt','yes'); setTimeout(()=>{},10000)"`, timeoutMs: 10_000 },
+      });
+      const before = p.output().length;
+      p.writeLine("run the cancellable command");
+      await p.waitFor(/Nova wants to/, { timeoutMs: 15_000, since: before });
+      p.writeLine("y");
+
+      const marker = path.join(cwd, "started.txt");
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && !(await readFile(marker, "utf8").catch(() => ""))) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(await readFile(marker, "utf8")).toBe("yes");
+
+      const interruptedAt = Date.now();
+      const afterStart = p.output().length;
+      p.write("\x03");
+      await p.waitFor(/interrupted/i, { timeoutMs: 2_000, since: afterStart });
+      await p.waitFor(PROMPT, { timeoutMs: 2_000, since: afterStart });
+      expect(Date.now() - interruptedAt).toBeLessThan(2_000);
+    }, 60_000);
+  });
+
+  describe("provider failure messages", () => {
+    it("shows each bounded retry and recovers from a transient rate limit", async () => {
+      const p = boot();
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "error", status: 429, message: "capacity is temporarily limited" });
+      stub.enqueue({ kind: "error", status: 429, message: "capacity is temporarily limited" });
+      stub.enqueue({ kind: "text", text: "Recovered cleanly." });
+      const before = p.output().length;
+      p.writeLine("recover from the provider failure");
+
+      const output = await p.waitFor("Recovered cleanly.", { timeoutMs: 15_000, since: before });
+      expect(output.slice(before)).toContain("rate limited; retrying model request 2/3");
+      expect(output.slice(before)).toContain("rate limited; retrying model request 3/3");
+      expect(stub.requestCount()).toBe(3);
+    }, 45_000);
+
+    it("turns an authentication failure into a concrete settings action without retrying", async () => {
+      const p = boot();
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "error", status: 401, message: "invalid x-api-key" });
+      const before = p.output().length;
+      p.writeLine("make one provider request");
+
+      const output = await p.waitFor("/settings", { timeoutMs: 15_000, since: before });
+      const turn = output.slice(before);
+      expect(turn).toContain("rejected the configured credentials");
+      expect(turn).toContain("nova --doctor");
+      expect(turn).not.toContain("retrying model request");
+      expect(stub.requestCount()).toBe(1);
+
+      stub.enqueue({ kind: "text", text: "Retry recovered." });
+      const afterFailure = p.output().length;
+      p.writeLine("/retry");
+      const retried = await p.waitFor("Retry recovered.", { timeoutMs: 15_000, since: afterFailure });
+      expect(retried.slice(afterFailure)).toContain("retrying the unchanged request");
+      expect(stub.requestCount()).toBe(2);
+    }, 45_000);
+
+    it("refuses to replay a request after a tool ran and continues from current state instead", async () => {
+      const p = boot({ args: ["--build"] });
+      await p.waitFor(PROMPT, { timeoutMs: 30_000 });
+
+      stub.enqueue({ kind: "tool_call", toolName: "run_command", input: { command: "node -e \"process.stdout.write('done')\"" } });
+      stub.enqueue({ kind: "error", status: 401, message: "provider key expired after the tool" });
+      const before = p.output().length;
+      p.writeLine("run one command then finish");
+      await p.waitFor(/Nova wants to/, { timeoutMs: 15_000, since: before });
+      p.writeLine("y");
+      await p.waitFor("/settings", { timeoutMs: 15_000, since: before });
+      await p.waitFor(PROMPT, { timeoutMs: 15_000, since: before });
+
+      const beforeRetry = p.output().length;
+      p.writeLine("/retry");
+      const refused = await p.waitFor("retry refused", { timeoutMs: 5_000, since: beforeRetry });
+      expect(refused.slice(beforeRetry)).toContain("Use /continue");
+
+      stub.enqueue({ kind: "text", text: "Continued without repeating the command." });
+      const beforeContinue = p.output().length;
+      p.writeLine("/continue");
+      const continued = await p.waitFor("Continued without repeating the command.", { timeoutMs: 15_000, since: beforeContinue });
+      expect(continued.slice(beforeContinue)).toContain("1 tools already ran");
+      expect(stub.requests().at(-1)?.messages.at(-1)?.content).toContain("Continue the previous task");
     }, 60_000);
   });
 

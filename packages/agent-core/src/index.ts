@@ -7,7 +7,7 @@
  * honest without making internals unreachable during the transition.
  */
 
-export { BoundedAgentRuntime, validateHistory } from "./agent-runtime";
+export { BoundedAgentRuntime, ProviderRequestError, isRetryableProviderError, providerFailureKind, validateHistory } from "./agent-runtime";
 export type {
   AgentMessage,
   AgentModelRequest,
@@ -16,6 +16,7 @@ export type {
   AgentRuntimeEvent,
   AgentRuntimeRequest,
   AgentRuntimeResult,
+  ProviderFailureKind,
   AgentTool,
   AgentToolCall,
   AgentToolResult,

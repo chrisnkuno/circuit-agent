@@ -55,7 +55,7 @@ export interface NovaWorkspace {
   list(prefix: string, depth: number): Promise<string[]>;
   glob(pattern: string): Promise<string[]>;
   grep(query: string, options?: { include?: string; regex?: boolean }): Promise<GrepMatch[]>;
-  runCommand(command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  runCommand(command: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   /**
    * Files under `prefix`, ignoring the ignored-directory list — root-relative, forward-slashed.
    *
@@ -139,12 +139,13 @@ export class LocalWorkspace implements NovaWorkspace {
     return grepWorkspace(this.root, query, { ...options, limits: this.limits });
   }
 
-  runCommand(command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  runCommand(command: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     return this.runner(command, {
       cwd: this.root,
       timeoutMs,
       strictEnvironment: this.limits.strictCommandEnvironment,
       containProcessTree: this.limits.containProcessTree,
+      signal,
     });
   }
 
@@ -333,7 +334,8 @@ abstract class SandboxWorkspace implements NovaWorkspace {
       .sort();
   }
 
-  async runCommand(command: string, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  async runCommand(command: string, timeoutMs: number, signal?: AbortSignal): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    if (signal?.aborted) return { exitCode: 130, stdout: "", stderr: "Command cancelled before start." };
     if (hasShellSyntax(command)) {
       return {
         exitCode: 2,

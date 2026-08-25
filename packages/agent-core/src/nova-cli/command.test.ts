@@ -46,6 +46,29 @@ describe("local command executor", () => {
     expect(result.exitCode).toBe(124);
     expect(result.stderr).toContain("exceeded 20ms");
   });
+
+  it("terminates the in-flight process tree when the caller cancels", async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runLocalCommand('node -e "setTimeout(() => {}, 10000)"', {
+      cwd: root,
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 40);
+    const result = await pending;
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toContain("cancelled");
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("never starts a command whose signal is already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runLocalCommand("touch should-not-exist", { cwd: root, timeoutMs: 5_000, signal: controller.signal });
+    expect(result.exitCode).toBe(130);
+    await expect(fs.access(path.join(root, "should-not-exist"))).rejects.toThrow();
+  });
 });
 
 describe("sanitizing a spawned command's environment", () => {

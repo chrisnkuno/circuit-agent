@@ -43,7 +43,7 @@
     },
     "packages/agent-core": {
       "name": "@circuit-nova/nova-core",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "openai": "^6.49.0",
         "zod": "^4.4.3",
@@ -59,7 +59,7 @@
     },
     "packages/nova-cli": {
       "name": "@circuit-nova/nova-cli",
-      "version": "1.8.0",
+      "version": "1.8.1",
       "bin": {
         "nova": "dist/nova.mjs",
       },

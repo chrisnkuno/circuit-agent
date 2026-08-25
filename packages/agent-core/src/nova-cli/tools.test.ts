@@ -142,6 +142,45 @@ describe("nova tool set", () => {
     expect(plain.verification).toBeUndefined();
   });
 
+  it("refuses foreground dev servers but permits a bounded start-probe-cleanup smoke command", async () => {
+    const seen: string[] = [];
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root, undefined, async (command: string) => {
+        seen.push(command);
+        return { exitCode: 0, stdout: "HTTP 200", stderr: "" };
+      }),
+      todos: new TodoList(),
+    });
+    const run = toolNamed(tools, "run_command");
+    const persistent = await run.execute({ command: "cd game && bun run dev", timeoutMs: 100_000 }, context);
+    expect(persistent).toMatchObject({ isError: true, data: { reason: "persistent_foreground_command" } });
+    expect(seen).toHaveLength(0);
+
+    const bounded = "bun run dev & server_pid=$!; trap 'kill $server_pid' EXIT; curl --fail http://127.0.0.1:3000";
+    const smoke = await run.execute({ command: bounded }, context);
+    expect(seen).toEqual([bounded]);
+    expect(smoke.verification).toMatchObject({ passed: true, kind: "smoke" });
+  });
+
+  it("does not accept echo-only or explicitly empty scripts as verification", async () => {
+    const outputs = [
+      { stdout: "No build step needed\nNo automated tests for this browser canvas game yet", stderr: "" },
+      { stdout: "0 tests run", stderr: "" },
+    ];
+    const tools = await createNovaTools({
+      workspace: new LocalWorkspace(root, undefined, async () => ({ exitCode: 0, ...outputs.shift()! })),
+      todos: new TodoList(),
+    });
+    const run = toolNamed(tools, "run_command");
+    for (const command of ["bun run build && bun run test", "npm test"]) {
+      const result = await run.execute({ command }, context);
+      expect(result.isError).toBe(false);
+      expect(result.verification).toBeUndefined();
+      expect(result.content).toContain("did not accept this as verification");
+      expect(result.data).toHaveProperty("verificationRejectedReason");
+    }
+  });
+
   it("reports a non-zero command as an error without throwing away its output", async () => {
     const tools = await createNovaTools({
       workspace: new LocalWorkspace(root, undefined, async () => ({ exitCode: 1, stdout: "", stderr: "TypeError: x is not a function" })),

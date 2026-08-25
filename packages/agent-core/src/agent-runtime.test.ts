@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { agentMessagePromptParts, BoundedAgentRuntime, isRetryableProviderError, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
+import { agentMessagePromptParts, BoundedAgentRuntime, isRetryableProviderError, ProviderRequestError, providerFailureKind, type AgentModelRequest, type AgentModelTurn, type AgentRuntimeEvent, type AgentTool, type ToolResultArtifactStore } from "./agent-runtime";
 
 const usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 const prices = { inputRwfPerMillionTokens: 1_610, outputRwfPerMillionTokens: 9_660 };
@@ -126,15 +126,20 @@ describe("bounded agent runtime", () => {
       });
       expect(calls).toBe(2);
       expect(value.events.filter((event) => event.type === "model_turn")).toHaveLength(1);
+      expect(value.events.find((event) => event.type === "provider_retry")).toMatchObject({
+        nextAttempt: 2, maxAttempts: 3, delayMs: 100, reason: "server",
+      });
     });
 
     it("uses two retries at most and then surfaces the original provider failure", async () => {
       let calls = 0;
       const failure = Object.assign(new Error("upstream overloaded"), { statusCode: 503 });
       const value = runtimeWithProvider(async () => { calls += 1; throw failure; });
-      await expect(value.runtime.execute(baseRequest)).rejects.toBe(failure);
+      await expect(value.runtime.execute(baseRequest)).rejects.toMatchObject({
+        name: "ProviderRequestError", attempts: 3, retrySuppressed: null, cause: failure,
+      });
       expect(calls).toBe(3);
-      expect(value.events).toHaveLength(0);
+      expect(value.events.filter((event) => event.type === "provider_retry")).toHaveLength(2);
     });
 
     it("does not retry permanent endpoint, authentication, or request errors", async () => {
@@ -157,10 +162,54 @@ describe("bounded agent runtime", () => {
       expect(calls).toBe(1);
     });
 
+    it("aborts an in-flight provider request immediately and never retries it", async () => {
+      const controller = new AbortController();
+      let calls = 0;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => { markStarted = resolve; });
+      const value = runtimeWithProvider(async (request) => {
+        calls += 1;
+        return await new Promise<AgentModelTurn>((_resolve, reject) => {
+          markStarted();
+          request.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" })), { once: true });
+        });
+      });
+      const pending = value.runtime.execute({ ...baseRequest, signal: controller.signal });
+      await started;
+      controller.abort();
+      await expect(pending).resolves.toMatchObject({ status: "cancelled", iterations: 0 });
+      expect(calls).toBe(1);
+    });
+
+    it("does not retry after a provider has already streamed visible output", async () => {
+      let calls = 0;
+      const failure = Object.assign(new Error("connection reset after output"), { code: "ECONNRESET" });
+      const value = runtimeWithProvider(async (request) => {
+        calls += 1;
+        request.onTextDelta?.("partial answer");
+        throw failure;
+      });
+      await expect(value.runtime.execute(baseRequest)).rejects.toMatchObject({
+        name: "ProviderRequestError", attempts: 1, retrySuppressed: "output_started", cause: failure,
+      });
+      expect(calls).toBe(1);
+    });
+
     it("recognises transient SDK causes but lets an explicit 404 override a vague network message", () => {
       expect(isRetryableProviderError(new Error("fetch failed", { cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }) }))).toBe(true);
       expect(isRetryableProviderError(Object.assign(new Error("temporary network error"), { status: 404 }))).toBe(false);
       expect(isRetryableProviderError(Object.assign(new Error("rate limited"), { status: 429 }))).toBe(true);
+      expect(providerFailureKind(Object.assign(new Error("too many requests"), { status: 429 }))).toBe("rate_limit");
+      expect(providerFailureKind(Object.assign(new Error("gateway timeout"), { status: 504 }))).toBe("server");
+      expect(providerFailureKind(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))).toBe("network");
+    });
+
+    it("keeps the original provider message inside a clear bounded-retry error", () => {
+      const cause = Object.assign(new Error("upstream overloaded"), { status: 503 });
+      const error = new ProviderRequestError(cause, { attempts: 3 });
+      expect(error.message).toContain("failed after 3 attempts");
+      expect(error.message).toContain("upstream overloaded");
+      expect(error.cause).toBe(cause);
     });
   });
 

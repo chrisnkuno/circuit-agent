@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 export type CommandRunner = (
   command: string,
-  options: { cwd: string; timeoutMs: number; strictEnvironment?: boolean; containProcessTree?: boolean },
+  options: { cwd: string; timeoutMs: number; strictEnvironment?: boolean; containProcessTree?: boolean; signal?: AbortSignal },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 /**
@@ -292,6 +292,7 @@ export function resetProcessContainmentProbe(): void {
  * action contains shell syntax. Both paths have bounded output and process-tree cancellation.
  */
 export const runLocalCommand: CommandRunner = async (command, options) => {
+  if (options.signal?.aborted) return { exitCode: 130, stdout: "", stderr: "Command cancelled before start." };
   let throughShell = hasShellSyntax(command);
   let program: string;
   let argv: string[];
@@ -328,7 +329,8 @@ export const runLocalCommand: CommandRunner = async (command, options) => {
     let settled = false;
     let forcedExitCode: number | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let timeout: ReturnType<typeof setTimeout>;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let abort = () => {};
     let closedCode: number | null | undefined;
     let stdoutEnded = false;
     let stderrEnded = false;
@@ -343,8 +345,9 @@ export const runLocalCommand: CommandRunner = async (command, options) => {
     const finish = (exitCode: number) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      options.signal?.removeEventListener("abort", abort);
       resolve({ exitCode: forcedExitCode ?? exitCode, stdout, stderr });
     };
     const append = (target: "stdout" | "stderr", chunk: Buffer | string) => {
@@ -377,6 +380,15 @@ export const runLocalCommand: CommandRunner = async (command, options) => {
       finish(127);
     });
     child.on("close", (code) => { closedCode = code; finishWhenDrained(); });
+
+    abort = () => {
+      if (settled || forcedExitCode === 130) return;
+      forcedExitCode = 130;
+      stderr += "\nCommand cancelled and its process tree was terminated.";
+      terminate();
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
 
     timeout = setTimeout(() => {
       if (settled) return;

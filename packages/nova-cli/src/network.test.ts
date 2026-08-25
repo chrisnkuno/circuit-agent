@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyNetworkError } from "./network";
+import { ProviderRequestError } from "@circuit-nova/nova-core";
 
 /** Builds the error shapes the transport layers actually throw. */
 function transportError(message: string, code: string, cause?: unknown): Error {
@@ -20,6 +21,30 @@ describe("network error classification", () => {
     expect(diagnosis?.message).toContain("API route or selected model");
     expect(diagnosis?.hint).toContain("/v1");
     expect(diagnosis?.hint).toContain("/models");
+  });
+
+  it("turns provider HTTP failures into specific actions", () => {
+    expect(classifyNetworkError(Object.assign(new Error("invalid key"), { status: 401 }), { host: "api.example.com", purpose: "the model API" })).toMatchObject({
+      kind: "authentication", message: expect.stringContaining("credentials"), hint: expect.stringContaining("/settings"),
+    });
+    expect(classifyNetworkError(Object.assign(new Error("forbidden"), { status: 403 }), { host: "api.example.com" })).toMatchObject({
+      kind: "permission", hint: expect.stringContaining("/model"),
+    });
+    expect(classifyNetworkError(Object.assign(new Error("invalid tools"), { status: 422 }), { host: "api.example.com" })).toMatchObject({
+      kind: "bad_request", message: expect.stringContaining("tool-calling"),
+    });
+  });
+
+  it("reports exhausted retries and explains when a partial stream made retry unsafe", () => {
+    const rateLimit = new ProviderRequestError(Object.assign(new Error("too many requests"), { status: 429 }), { attempts: 3 });
+    expect(classifyNetworkError(rateLimit, { host: "api.example.com", purpose: "the model API" })).toMatchObject({
+      kind: "rate_limit", message: expect.stringContaining("after 3 attempts"),
+    });
+
+    const partial = new ProviderRequestError(Object.assign(new Error("socket closed"), { code: "ECONNRESET" }), { attempts: 1, retrySuppressed: "output_started" });
+    const diagnosis = classifyNetworkError(partial, { host: "api.example.com", purpose: "the model API" });
+    expect(diagnosis?.message).toContain("did not retry because output had already started");
+    expect(diagnosis?.hint).toContain("partial output");
   });
 
   it("names the host and purpose for a DNS failure", () => {

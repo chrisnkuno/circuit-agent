@@ -26,7 +26,13 @@ export type StubToolCallTurn = {
   text?: string;
 };
 
-export type StubTurn = StubTextTurn | StubToolCallTurn;
+export type StubErrorTurn = {
+  kind: "error";
+  status: number;
+  message: string;
+};
+
+export type StubTurn = StubTextTurn | StubToolCallTurn | StubErrorTurn;
 
 /** One request as the CLI actually sent it, for tests that assert on what the model was told. */
 export type StubRequest = {
@@ -129,6 +135,15 @@ export function startAnthropicStub(): Promise<AnthropicStub> {
   });
 
   async function respond(res: http.ServerResponse, requestIndex: number, turn: StubTurn, model: string): Promise<void> {
+    if (turn.kind === "error") {
+      const type = turn.status === 429 ? "rate_limit_error"
+        : turn.status === 401 ? "authentication_error"
+        : turn.status >= 500 ? "api_error"
+        : "invalid_request_error";
+      res.writeHead(turn.status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type, message: turn.message } }));
+      return;
+    }
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",

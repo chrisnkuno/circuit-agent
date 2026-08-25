@@ -347,7 +347,7 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
     },
     {
       name: "run_command",
-      description: `Run a command in the project root. Use for builds, tests, linters and git inspection. Requires approval. ${workspace.commandGuidance}`,
+      description: `Run a bounded command in the project root. Use for builds, tests, linters and git inspection. Never launch a dev server, watcher or other persistent process in the foreground; use one bounded start-probe-cleanup command instead. Requires approval. ${workspace.commandGuidance}`,
       inputSchema: {
         type: "object",
         properties: { command: { type: "string" }, timeoutMs: { type: "integer" } },
@@ -358,15 +358,22 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
       effect: "workspace",
       requiresApproval: true,
       parallelSafe: false,
-      async execute(args) {
+      async execute(args, context) {
         const command = requiredString(args.command, "command");
         // Refused, not merely gated: these destroy work that no checkpoint can return, and a
         // human approving quickly is exactly the moment they will not notice which flag it was.
         if (isRefusedCommand(command)) {
           return { content: `Refused: '${command}' can destroy work irrecoverably. Ask the user to run it themselves if it is really intended.`, isError: true };
         }
+        if (isLikelyPersistentCommand(command)) {
+          return {
+            content: "Refused a likely persistent foreground command. Start it in the background, probe the required behavior, and terminate it in the same bounded command (or wrap it with a short timeout).",
+            isError: true,
+            data: { command, reason: "persistent_foreground_command" },
+          };
+        }
         const timeoutMs = Math.min(optionalInteger(args.timeoutMs, "timeoutMs") ?? commandTimeoutMs, commandTimeoutMs);
-        const result = await workspace.runCommand(command, timeoutMs);
+        const result = await workspace.runCommand(command, timeoutMs, context.signal);
         const body = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || "(no output)";
         // A missing program is the one failure whose fix is never "try again": the model has to
         // pick a different program. Naming that explicitly beats an ENOENT the model reads as a
@@ -380,14 +387,16 @@ export async function createNovaTools(options: NovaToolOptions): Promise<AgentTo
           };
         }
         const kind = classifyVerification(command);
+        const rejectedVerification = kind && result.exitCode === 0 ? rejectedVerificationReason(command, result) : null;
+        const verificationNote = rejectedVerification ? `\n\nNova did not accept this as verification: ${rejectedVerification}` : "";
         return {
-          content: `exit ${result.exitCode}\n${body}`,
+          content: `exit ${result.exitCode}\n${body}${verificationNote}`,
           isError: result.exitCode !== 0,
-          data: { command, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, ...(kind ? { verificationKind: kind } : {}) },
+          data: { command, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, ...(kind && !rejectedVerification ? { verificationKind: kind } : {}), ...(rejectedVerification ? { verificationRejectedReason: rejectedVerification } : {}) },
           // A passing test command is the evidence the runtime needs before it will call a
           // workspace-changing run complete. The kind travels with it, so the runtime can tell a
           // behavioural result apart from a build that only proves the code compiles.
-          verification: kind && result.exitCode === 0
+          verification: kind && result.exitCode === 0 && !rejectedVerification
             ? { passed: true, kind, scope: "targeted" as const, summary: `${command} exited 0` }
             : undefined,
         };
@@ -1055,6 +1064,36 @@ const BEHAVIOR_COMMAND = /\b(e2e|end-to-end|playwright|cypress|puppeteer|seleniu
  * named for it, the common HTTP probes, and a health endpoint by name.
  */
 const SMOKE_COMMAND = /\b(smoke|healthcheck|health[-_ ]?check|curl|wget|httpie|\bhttp\s+(?:get|post)\b|playwright\s+screenshot)\b/i;
+
+/** Commands that normally stay alive until somebody stops them. */
+const PERSISTENT_COMMAND = /(?:^|(?:&&|;|\|)\s*)(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve)(?:\s|$)|(?:vite|next\s+dev|webpack\s+serve)(?:\s|$)|bun\s+run\s+--hot\b)|(?:^|\s)(?:--watch|-w)(?:\s|$)/i;
+
+/** A persistent process is acceptable only when the same command proves it will be bounded. */
+function hasPersistentCommandBoundary(command: string): boolean {
+  if (/(?:^|\s)(?:timeout|gtimeout)\s+\d/i.test(command)) return true;
+  const backgrounded = /(?:^|\s)&(?:\s|$)/.test(command);
+  const probed = /\b(?:curl|wget|httpie|healthcheck|health[-_ ]?check)\b/i.test(command);
+  const cleaned = /\b(?:kill|pkill|trap)\b/i.test(command);
+  return backgrounded && probed && cleaned;
+}
+
+/** Prevents a foreground dev server from consuming the whole tool timeout and every retry. */
+export function isLikelyPersistentCommand(command: string): boolean {
+  return PERSISTENT_COMMAND.test(command) && !hasPersistentCommandBoundary(command);
+}
+
+/** Successful process exit is not evidence when the script explicitly says it did no work. */
+export function rejectedVerificationReason(
+  command: string,
+  result: { stdout: string; stderr: string },
+): string | null {
+  const output = `${result.stdout}\n${result.stderr}`.trim();
+  if (/^\s*(?:echo|printf)\b/i.test(command)) return "the command only prints text";
+  if (/\b(?:no (?:automated )?tests?(?: found| configured| available)?|0 tests? (?:run|executed|passed)|no build step (?:needed|required|configured)|nothing to (?:test|build|check))\b/i.test(output)) {
+    return "the command reported that no real build or test ran";
+  }
+  return null;
+}
 
 /** The strongest kind of evidence a command provides, or null when it verifies nothing. */
 export function classifyVerification(command: string): VerificationKind | null {

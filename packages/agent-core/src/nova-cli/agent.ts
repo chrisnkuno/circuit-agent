@@ -35,6 +35,7 @@ import { WorkspaceArtifactStore } from "./artifacts";
 import type { ReadResult, WorkspaceLimits } from "./workspace";
 import { DEFAULT_OUTPUT_CEILING } from "../providers/model-capabilities";
 import { DefenderBrain } from "./defender-brain";
+import { toolProfileForObjective, toolsForProfile } from "./tool-profile";
 
 /**
  * Nova CLI's agent: the hosted `BoundedAgentRuntime`, hosted locally instead.
@@ -167,6 +168,8 @@ export class NovaAgent {
    */
   private environment: Promise<EnvironmentReport> | null = null;
   private cancelled = false;
+  /** The active exchange's cancellation reaches provider I/O and local process trees immediately. */
+  private turnAbort: AbortController | null = null;
   private session: SessionRecord;
   private journal: EventJournal;
   private activeTurnId: string | null = null;
@@ -273,6 +276,7 @@ export class NovaAgent {
 
   cancel(): void {
     this.cancelled = true;
+    this.turnAbort?.abort();
   }
 
   /** Updates the amount this next exchange may spend; used by the CLI's session-wide cap. */
@@ -427,7 +431,10 @@ export class NovaAgent {
       defenderBrain: this.defenderBrain,
     });
     const capabilities = capabilitiesForMode(this.options.mode);
-    const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
+    const scoped = toolsForProfile(
+      tools.filter((tool) => capabilities.includes(tool.capabilityId)),
+      toolProfileForObjective(objective, this.options.mode),
+    );
     delegate.setTools(scoped.filter((tool) => tool.name !== "delegate_task"));
     const systemPrompt = buildNovaSystemPrompt(context, this.options.mode, scoped.map((tool) => tool.name), this.workspace, await this.loadEnvironment());
     const toolSchemas = JSON.stringify(scoped.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })));
@@ -525,6 +532,7 @@ export class NovaAgent {
         effort: "low",
         modelReservationRwf: reservation,
         safetyIdentifier: `nova_cli_${this.session.id}_delegate`.slice(0, 64),
+        signal: this.turnAbort?.signal,
       });
       this.delegatedRwf += result.actualModelRwf;
       this.delegatedUsage = addModelUsage(this.delegatedUsage, result.usage);
@@ -542,6 +550,8 @@ export class NovaAgent {
   async send(objective: string): Promise<NovaTurnResult> {
     if (!objective.trim()) throw new Error("A request is required");
     this.cancelled = false;
+    const turnAbort = new AbortController();
+    this.turnAbort = turnAbort;
     const turnId = `turn_${randomUUID()}`;
     this.activeTurnId = turnId;
     let turnStatus: TurnStatus = "queued";
@@ -585,7 +595,10 @@ export class NovaAgent {
         defenderBrain: this.defenderBrain,
       });
       const capabilities = capabilitiesForMode(this.options.mode);
-      const scoped = tools.filter((tool) => capabilities.includes(tool.capabilityId));
+      const scoped = toolsForProfile(
+        tools.filter((tool) => capabilities.includes(tool.capabilityId)),
+        toolProfileForObjective(objective, this.options.mode),
+      );
       delegate.setTools(scoped.filter((tool) => tool.name !== "delegate_task"));
       /**
        * Durable memory, recalled against this turn's objective and prepended to the prompt.
@@ -632,7 +645,7 @@ export class NovaAgent {
         if (checkpoint) this.options.onEvent?.({ type: "checkpoint", checkpoint });
       }
 
-      const compaction = await this.compactIfNeeded(turnId, objective);
+      const compaction = await this.compactIfNeeded(turnId, objective, turnAbort.signal);
       compactionActualRwf = compaction.actualRwf;
       const runtime = new BoundedAgentRuntime({
         model: this.options.model,
@@ -675,6 +688,7 @@ export class NovaAgent {
         maxOutputTokens: this.budgets.maxOutputTokens,
         modelReservationRwf: Math.max(0, this.budgets.maxRwf - compaction.actualRwf),
         safetyIdentifier: `nova_cli_${this.session.id}`.slice(0, 64),
+        signal: turnAbort.signal,
       });
 
       const combinedUsage = addModelUsage(compaction.usage, addModelUsage(result.usage, this.delegatedUsage));
@@ -699,6 +713,7 @@ export class NovaAgent {
       }
       throw error;
     } finally {
+      if (this.turnAbort === turnAbort) this.turnAbort = null;
       this.activeTurnId = null;
       this.activeTransition = null;
     }
@@ -710,7 +725,7 @@ export class NovaAgent {
    * Uses the same model that does the work, with no tools: compaction is a reading task, and a
    * summarizer holding an `edit_file` tool is a summarizer that will eventually use it.
    */
-  private async compactIfNeeded(turnId: string, objective: string): Promise<{ usage: ModelUsage; actualRwf: number }> {
+  private async compactIfNeeded(turnId: string, objective: string, signal?: AbortSignal): Promise<{ usage: ModelUsage; actualRwf: number }> {
     // Compaction happens between turns, which is already the cleanest boundary a session has: the
     // previous exchange concluded, no tool call is outstanding. `atSafeBoundary` still asks,
     // because "concluded" is not the same as "finished" — an agent that left an item in progress
@@ -742,6 +757,7 @@ export class NovaAgent {
       tools: [],
       maxOutputTokens: maximumOutputTokens,
       safetyIdentifier: `nova_cli_${this.session.id}`.slice(0, 64),
+      signal,
     });
     const actualRwf = priceActualModelUsage(turn.usage.inputTokens, turn.usage.outputTokens, this.options.prices);
     if (actualRwf > this.budgets.maxRwf) throw new Error("Compaction usage exceeds the approved model budget");

@@ -39,7 +39,10 @@ import { completeInput, inlineCompletion, isKnownCommand, parseModeCommand, rend
 import { KeyBindingRegistry, parseBindingOverrides } from "./keybindings";
 import { installShortcuts, openChooser, openDefenderTriage, openModelPicker, openPalette, openTable, replaceLine, withBorrowedKeyboard } from "./shortcuts";
 import { runChooser, type ChooserItem } from "./chooser";
-import { doctorExitCode, renderDoctor, runDoctor } from "./doctor";
+import { doctorExitCode, doctorReport, renderDoctor, runDoctor } from "./doctor";
+import { renderCompletionCard } from "./completion-card";
+import { fallbackSetting, parseFallbackPreference } from "./fallback";
+import { exportSession, type ExportFormat } from "./session-export";
 import { hostOf, providerBaseUrl } from "./endpoints";
 import { fetchDailyFxRate, resolveCurrencyPreference, type FxLookupFailure } from "./local-currency";
 import { classifyNetworkError } from "./network";
@@ -204,6 +207,7 @@ type ParsedArgs = {
   listSessions: boolean;
   listProviders: boolean;
   doctor: boolean;
+  doctorReport: boolean;
   update: boolean;
   checkUpdate: boolean;
   settings: boolean;
@@ -287,8 +291,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const updateRequested = argv[0] === "update" || argv.includes("--update") || argv.includes("--check-update");
   const settingsRequested = argv[0] === "settings" || argv.includes("--settings");
   const historyRequested = argv[0] === "history";
+  const doctorRequested = argv[0] === "doctor" || argv.includes("--doctor");
   const parsed: ParsedArgs = {
-    mode: "build", modeExplicit: false, prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false, doctor: false,
+    mode: "build", modeExplicit: false, prompt: null, resume: null, historyCommand: null, listSessions: false, listProviders: false, doctor: doctorRequested, doctorReport: false,
     update: updateRequested, checkUpdate: false, updateYes: false, packageManager: undefined, version: false, settings: settingsRequested, estimateOnly: false,
     root: process.cwd(), help: false, pace: "off", ascii: false, theme: undefined, pin: false,
     acp: acpRequested,
@@ -297,7 +302,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   };
   const rest: string[] = [];
 
-  for (let index = argv[0] === "update" || argv[0] === "settings" || argv[0] === "acp" || argv[0] === "gallery" || historyRequested ? 1 : 0; index < argv.length; index += 1) {
+  for (let index = argv[0] === "update" || argv[0] === "settings" || argv[0] === "acp" || argv[0] === "gallery" || argv[0] === "doctor" || historyRequested ? 1 : 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--plan" || argument === "-p") { parsed.mode = "plan"; parsed.modeExplicit = true; }
     else if (argument === "--auto" || argument === "-y") { parsed.mode = "auto"; parsed.modeExplicit = true; }
@@ -333,6 +338,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     else if (argument === "--sessions") parsed.listSessions = true;
     else if (argument === "--providers") parsed.listProviders = true;
     else if (argument === "--doctor") parsed.doctor = true;
+    else if (argument === "--report" && doctorRequested) parsed.doctorReport = true;
     else if (argument === "--resume") {
       // Only swallow the next word when it is actually a session id. Otherwise `nova --resume "fix
       // the test"` silently treats the request as an id, resumes nothing, and drops into the REPL.
@@ -422,7 +428,9 @@ ${style.bold("Model")}
   /model                    Pick a model from a list, with prices, keeping the transcript
   /model <name>             Switch straight to one, e.g. /model opus
   nova --providers          Show which providers are configured, and what is missing
-  nova --doctor             Test every endpoint Nova needs and name the one that fails
+  nova doctor              Test service health, credentials and every endpoint Nova needs
+  nova doctor --report     Print a redacted JSON support report with request ids
+  nova --doctor             Alias for nova doctor
   nova settings             Configure keys, URLs, models, pricing and voice input
 
 ${style.bold("Cost")}
@@ -541,6 +549,8 @@ const pendingCalls = new Map<string, {
 }>();
 /** Paths successfully written or edited this turn, for the "files modified" footer. */
 let touchedFiles = new Set<string>();
+/** Latest outcome for each verification class observed in this turn. */
+let verificationChecks = new Map<string, boolean>();
 /** One labelled tool section per turn, so operational logs do not blend into the answer. */
 let toolSectionAnnounced = false;
 
@@ -774,6 +784,16 @@ export function renderEvent(event: NovaEvent): void {
   }
 
   const runtime = event.event;
+  if (runtime.type === "provider_retry") {
+    forgetToolLines();
+    const reason = runtime.reason === "rate_limit" ? "rate limited"
+      : runtime.reason === "server" ? "provider unavailable"
+      : runtime.reason === "network" ? "connection failed"
+      : runtime.reason === "timeout" ? "request timed out"
+      : "temporary provider failure";
+    out.write(style.yellow(`  ${glyphs.elbow} ${reason}; retrying model request ${runtime.nextAttempt}/${runtime.maxAttempts} in ${runtime.delayMs}ms\n`));
+    return;
+  }
   if (runtime.type === "model_turn") {
     // Silent by design: every call this turn announces itself below, so a "thinking (3 tool
     // calls)" line would only restate what the next three lines are about to say.
@@ -813,6 +833,8 @@ export function renderEvent(event: NovaEvent): void {
   }
   if (runtime.type === "tool_result") {
     activity.toolCalls += 1;
+    const verificationKind = typeof runtime.data?.verificationKind === "string" ? runtime.data.verificationKind : undefined;
+    if (verificationKind) verificationChecks.set(verificationKind, !runtime.isError);
     // Read from the structured result rather than from the rendered checklist: the counter must
     // not depend on how the list happens to be printed.
     const items = Array.isArray(runtime.data?.items) ? runtime.data.items as Array<{ status?: string }> : undefined;
@@ -1347,10 +1369,29 @@ async function main(): Promise<number> {
   }
 
   if (args.doctor) {
-    const environment = process.env as Record<string, string | undefined>;
     const depth = detectColorDepth(environment, Boolean(process.stdout.isTTY));
     const probes = await runDoctor(environment);
-    process.stdout.write(`${renderDoctor(probes, depth)}\n`);
+    if (args.doctorReport) {
+      const selectedProvider = environment.NOVA_PROVIDER?.trim();
+      const selectedModel = selectedProvider === "anthropic" ? environment.ANTHROPIC_MODEL
+        : selectedProvider === "openai" ? environment.OPENAI_MODEL
+        : selectedProvider === "ollama" ? environment.OLLAMA_MODEL
+        : environment.CIRCUITNOTION_MODEL;
+      const history = await stateHistory.status().catch(() => undefined);
+      process.stdout.write(`${JSON.stringify(doctorReport(probes, {
+        cliVersion: NOVA_CLI_VERSION,
+        platform: process.platform,
+        arch: process.arch,
+        runtime: `Bun ${process.versions.bun ?? process.version}`,
+        ...(selectedProvider ? { provider: selectedProvider } : {}),
+        ...(selectedModel ? { model: selectedModel } : {}),
+        terminal: { columns: process.stdout.columns, rows: process.stdout.rows, tty: Boolean(process.stdout.isTTY) },
+        ...(history ? { history: { mode: history.mode, ...(history.mode === "native" ? { indexed: history.indexed } : {}), ...(history.reason ? { reason: history.reason } : {}) } } : {}),
+      }), null, 2)}\n`);
+    } else {
+      process.stdout.write(`${renderDoctor(probes, depth)}\n`);
+    }
+    await stateHistory.close();
     return doctorExitCode(probes);
   }
 
@@ -1999,7 +2040,7 @@ async function main(): Promise<number> {
    * Enough to re-establish where the work was, not so much that switching tabs buries the thing you
    * switched in order to do. The full record is still in the tab's sink; this is the reminder.
    */
-  const REPLAY_LINES = 12;
+  const REPLAY_LINES = 24;
 
   /** Writes the shared locals back into the tab being left, and takes it off the terminal. */
   const stashActiveTab = (): void => {
@@ -2379,7 +2420,8 @@ async function main(): Promise<number> {
       activity.awaitingFirstDelta = false;
       spinner?.stop();
       statusBar.clear();
-      out.write(style.yellow("\n  interrupted — finishing the current tool call\n"));
+      const stopping = activity.phase === "operation" ? "stopping the current tool" : "stopping the current model request";
+      out.write(style.yellow(`\n  interrupted — ${stopping}\n`));
       return;
     }
     // Nothing is running, so this is the prompt. A half-typed message must survive a stray
@@ -2514,6 +2556,15 @@ async function main(): Promise<number> {
   let streamedAnswer = false;
   /** The last turn's terminal status, which headless mode turns into the process exit code. */
   let lastTurnStatus: AgentRuntimeResult["status"] = "failed";
+  type RecoverableTurn = {
+    request: string;
+    status: AgentRuntimeResult["status"];
+    toolCalls: number;
+    changedFiles: number;
+  };
+  // Kept behind an object because runTurn mutates it from an async closure. TypeScript otherwise
+  // narrows a separately-declared nullable variable to its initializer in the outer prompt loop.
+  const recoveryState: { last: RecoverableTurn | null } = { last: null };
   /** When the last turn finished, for the pace's cooldown. */
   let lastTurnEndedAt: number | undefined;
   const runTurn = async (request: string): Promise<boolean> => {
@@ -2628,6 +2679,7 @@ async function main(): Promise<number> {
     activity.operation = undefined;
     activity.steps = undefined;
     touchedFiles = new Set();
+    verificationChecks = new Map();
     toolSectionAnnounced = false;
     forgetToolLines();
     markdown.reset();
@@ -2663,12 +2715,21 @@ async function main(): Promise<number> {
     }
     turnActive = true;
     currentTurnAbort = new AbortController();
+    // Recorded only once the request is about to contact the model. A task rejected by safety,
+    // balance or budget preflight was never attempted and must not become a misleading /retry.
+    recoveryState.last = { request, status: "failed", toolCalls: 0, changedFiles: 0 };
     try {
       const spendBeforeTurnRwf = sessionSpendRwf() ?? 0;
       // Durable recall belongs to the shared agent, so CLI, desktop and jobs pay for each selected
       // fact once per thread. Wrapping here as well duplicated it on the first turn and left every
       // other front end without the incremental-deduplication policy.
       const result = await agent.send(request);
+      recoveryState.last = {
+        request,
+        status: result.status,
+        toolCalls: result.toolCallsExecuted,
+        changedFiles: touchedFiles.size,
+      };
       // `agent.send` has atomically saved the canonical snapshot and closed the turn's journal at
       // this point. Rebuild in the background so `/history` is instant after ordinary work; the
       // service coalesces this with a history command if the user asks before replay finishes.
@@ -2706,10 +2767,6 @@ async function main(): Promise<number> {
         out.write(`\n${result.status === "completed" ? asMarkdown(result.summary) : style.yellow(result.summary)}\n`);
       }
 
-      if (touchedFiles.size > 0) {
-        out.write(`${panel([...touchedFiles].sort(), sectionStyle(), { title: "files modified", tone: "good" })}\n`);
-      }
-
       // A finished lab grades every claim it kept, and the grades are the finding. Read from the
       // structured file the lab writes rather than from its prose, and shown only when the run that
       // just ended was a wander — the file lingers in the project afterwards, and reprinting last
@@ -2727,6 +2784,15 @@ async function main(): Promise<number> {
         toolCalls: result.toolCallsExecuted,
         elapsedMs: Date.now() - started,
       });
+      out.write(`${renderCompletionCard({
+        status: result.status,
+        files: [...touchedFiles].sort(),
+        checks: [...verificationChecks].map(([kind, passed]) => ({ kind, passed })),
+        toolCalls: result.toolCallsExecuted,
+        iterations: result.iterations,
+        elapsed: `${(turn.elapsedMs / 1_000).toFixed(1)}s`,
+        cost: turn.cost ? formatMoney(convertTo(turn.cost, display, rates) ?? turn.cost) : "cost unknown",
+      }, sectionStyle())}\n`);
       if (manualBalanceRwf !== undefined) {
         const turnSpendRwf = Math.max(0, (sessionSpendRwf() ?? spendBeforeTurnRwf) - spendBeforeTurnRwf);
         if (turnSpendRwf > 0) {
@@ -2792,6 +2858,14 @@ async function main(): Promise<number> {
       });
       refreshProjectFiles(); // a turn can create files, and the next mention should complete them
     } catch (error) {
+      if (recoveryState.last?.request === request) {
+        recoveryState.last = {
+          ...recoveryState.last,
+          status: "failed",
+          toolCalls: activity.toolCalls,
+          changedFiles: touchedFiles.size,
+        };
+      }
       activity.awaitingFirstDelta = false;
       spinner?.stop();
       statusBar.clear();
@@ -2821,6 +2895,28 @@ async function main(): Promise<number> {
         if (diagnosis.hint) out.write(`  ${style.dim(diagnosis.hint)}\n`);
       } else {
         out.write(`${style.red("error")} ${message}\n`);
+      }
+      const fallback = parseFallbackPreference(environment.NOVA_FALLBACK_MODEL);
+      const transient = diagnosis && ["timeout", "dns", "refused", "reset", "unreachable", "rate_limit", "server_error"].includes(diagnosis.kind);
+      // Cross-provider retry is safe only before visible output, tool execution, or file changes.
+      // A specific target is explicit consent; `ask` merely offers the choice and never spends.
+      if (interactive && transient && !streamedAnswer && activity.toolCalls === 0 && touchedFiles.size === 0 && fallback?.kind === "target") {
+        const attempt = resolveProvider(environment, { provider: fallback.provider, model: fallback.model });
+        if (!("error" in attempt) && (attempt.spec.id !== spec.id || attempt.model !== resolvedModelId)) {
+          const previous = agent;
+          const carried = await loadSession(args.root, previous.sessionId);
+          await previous.relinquish();
+          model = attempt.provider;
+          spec = attempt.spec;
+          prices = attempt.prices;
+          resolvedModelId = attempt.model;
+          ledger.setPrices(prices);
+          agent = await openClient(carried ?? undefined);
+          queuedInput.unshift("/retry");
+          out.write(style.yellow(`  falling back once to ${spec.label} ${resolvedModelId}; the unchanged request is queued for retry\n`));
+        }
+      } else if (interactive && transient && fallback?.kind === "ask") {
+        out.write(style.dim("  fallback is set to ask — use /model to choose an alternate, then /retry\n"));
       }
       // An error says what broke; this says what to do about it. The rules only speak when they
       // recognise the failure — an invented next step after a real error costs a detour to
@@ -3369,11 +3465,97 @@ async function main(): Promise<number> {
     }
 
     if (input === "/exit" || input === "/quit") break;
-    if (input === "/help" || input === "/help all") {
+    if (input === "/help" || input.startsWith("/help ")) {
       // Grouped and filtered to what this session can actually use, with everything one keystroke
       // away. The flag reference stays on `nova --help`, where someone reading about invocation is
       // looking; inside a session it is thirty lines about starting a session you are already in.
-      out.write(`${renderGroupedHelp(navContext(), sectionStyle(), { all: input.endsWith(" all") })}\n`);
+      const requested = input.slice("/help".length).trim();
+      const groupNames = ["work", "review", "steer", "parallel", "learn", "setup"] as const;
+      if (requested && requested !== "all" && !groupNames.includes(requested as typeof groupNames[number])) {
+        out.write(style.yellow("  Choose /help all, work, review, steer, parallel, learn, or setup.\n"));
+        continue;
+      }
+      out.write(`${renderGroupedHelp(navContext(), sectionStyle(), {
+        all: requested === "all" || Boolean(requested),
+        ...(requested && requested !== "all" ? { group: requested as typeof groupNames[number] } : {}),
+      })}\n`);
+      continue;
+    }
+    if (input === "/retry") {
+      const lastRecoverableTurn = recoveryState.last;
+      if (!lastRecoverableTurn) {
+        out.write(style.dim("  nothing to retry — no model request has failed in this session\n"));
+        continue;
+      }
+      if (lastRecoverableTurn.status === "completed") {
+        out.write(style.dim("  the last task completed — describe a new request, or use /continue only after an incomplete task\n"));
+        continue;
+      }
+      if (lastRecoverableTurn.toolCalls > 0 || lastRecoverableTurn.changedFiles > 0) {
+        out.write(style.yellow(`  retry refused — the last task already ran ${lastRecoverableTurn.toolCalls} tool${lastRecoverableTurn.toolCalls === 1 ? "" : "s"} and changed ${lastRecoverableTurn.changedFiles} file${lastRecoverableTurn.changedFiles === 1 ? "" : "s"}.\n`));
+        out.write(style.dim("  Use /continue to inspect the current state and finish without repeating completed actions.\n"));
+        continue;
+      }
+      out.write(style.dim("  retrying the unchanged request — no earlier tool or file action can be duplicated\n"));
+      input = lastRecoverableTurn.request;
+    }
+    if (input === "/continue") {
+      const lastRecoverableTurn = recoveryState.last;
+      if (!lastRecoverableTurn) {
+        out.write(style.dim("  nothing to continue — start a task first\n"));
+        continue;
+      }
+      if (lastRecoverableTurn.status === "completed") {
+        out.write(style.dim("  the last task is already complete\n"));
+        continue;
+      }
+      out.write(style.dim(`  continuing from the current state ${glyphs.middot} ${lastRecoverableTurn.toolCalls} tools already ran ${glyphs.middot} ${lastRecoverableTurn.changedFiles} files changed\n`));
+      input = "Continue the previous task from the current workspace and conversation. Inspect what already completed before acting, do not repeat successful side effects, finish the remaining work, and run the relevant verification.";
+    }
+    if (input === "/fallback" || input.startsWith("/fallback ")) {
+      const raw = input.slice("/fallback".length).trim();
+      if (!raw) {
+        const current = parseFallbackPreference(environment.NOVA_FALLBACK_MODEL) ?? { kind: "off" as const };
+        const label = current.kind === "target" ? `${current.provider}:${current.model}` : current.kind;
+        out.write(style.dim(`  provider fallback: ${label}\n`));
+        continue;
+      }
+      const preference = parseFallbackPreference(raw);
+      if (!preference) {
+        out.write(style.yellow("  Choose /fallback off, /fallback ask, or /fallback provider:model.\n"));
+        continue;
+      }
+      const value = fallbackSetting(preference);
+      savedSettings = { ...savedSettings };
+      if (value) savedSettings.NOVA_FALLBACK_MODEL = value;
+      else delete savedSettings.NOVA_FALLBACK_MODEL;
+      try {
+        await saveSettings(savedSettings, processEnvironment);
+        if (value) environment.NOVA_FALLBACK_MODEL = value;
+        else delete environment.NOVA_FALLBACK_MODEL;
+        out.write(style.dim(`  provider fallback ${preference.kind === "off" ? "disabled" : `set to ${value}`} · saved\n`));
+      } catch (error) {
+        out.write(style.yellow(`  Could not save fallback setting: ${error instanceof Error ? error.message : String(error)}\n`));
+      }
+      continue;
+    }
+    if (input === "/export" || input.startsWith("/export ")) {
+      const format = (input.slice("/export".length).trim() || "markdown") as ExportFormat;
+      if (!["markdown", "json", "support"].includes(format)) {
+        out.write(style.yellow("  Choose /export markdown, /export json, or /export support.\n"));
+        continue;
+      }
+      const record = await loadSession(args.root, agent.sessionId);
+      if (!record) {
+        out.write(style.yellow("  This session has not produced a saved turn yet.\n"));
+        continue;
+      }
+      try {
+        const file = await exportSession(record, format);
+        out.write(style.dim(`  redacted ${format} export written to ${file}\n`));
+      } catch (error) {
+        out.write(style.yellow(`  Could not export the session: ${error instanceof Error ? error.message : String(error)}\n`));
+      }
       continue;
     }
     const modeCommand = parseModeCommand(input);

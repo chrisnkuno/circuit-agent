@@ -154,12 +154,13 @@ describe("headless stream", () => {
     const sink = capture();
     sink.emitter.agentEvent({ type: "checkpoint", checkpoint: { tree: "abc123", label: "before", createdAt: 0, turnId: "t1", messageCount: 0 } });
     sink.emitter.agentEvent({ type: "compaction", tokensBefore: 0, messagesBefore: 40, messagesAfter: 12 });
+    sink.emitter.agentEvent({ type: "runtime", event: { type: "provider_retry", iteration: 1, nextAttempt: 2, maxAttempts: 3, delayMs: 100, reason: "rate_limit" } });
     sink.emitter.agentEvent({ type: "runtime", event: { type: "model_turn", iteration: 1, responseId: "r", model: "m", toolCallCount: 2, usage } });
     sink.emitter.agentEvent({ type: "runtime", event: { type: "tool_result", toolCallId: "c1", toolName: "read_file", isError: false, effect: "none", content: "ok" } });
     sink.emitter.agentEvent({ type: "runtime", event: { type: "runtime_stop", status: "completed", summary: "done" } });
 
     expect(sink.records().map((record) => record.type)).toEqual([
-      "checkpoint", "compaction", "model_turn", "tool_result", "runtime_stop",
+      "checkpoint", "compaction", "provider_retry", "model_turn", "tool_result", "runtime_stop",
     ]);
   });
 

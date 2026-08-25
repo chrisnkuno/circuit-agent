@@ -31,7 +31,10 @@ export class CircuitNotionAgentTurnProvider implements AgentTurnProvider {
     this.capabilities = capabilitiesFor(options.model);
     if (call) this.call = call;
     else {
-      const client = new OpenAI({ apiKey: options.apiKey, baseURL: circuitNotionBaseUrl(options.baseURL), defaultHeaders: buildCircuitNotionHeaders(options.relaySecret) });
+      // The bounded runtime owns retries and reports every attempt. SDK retries here would multiply
+      // three visible attempts into as many as nine real requests while telling the user there were
+      // only three.
+      const client = new OpenAI({ apiKey: options.apiKey, baseURL: circuitNotionBaseUrl(options.baseURL), defaultHeaders: buildCircuitNotionHeaders(options.relaySecret), maxRetries: 0 });
       this.call = async (body, signal) => await client.chat.completions.create(body as never, { signal }) as unknown as ChatResponse | AsyncIterable<ChatStreamChunk>;
     }
   }
@@ -41,14 +44,19 @@ export class CircuitNotionAgentTurnProvider implements AgentTurnProvider {
     const response = await this.call({
       model: this.options.model,
       messages: toWireMessages(request.messages),
-      tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })),
-      tool_choice: "auto",
-      parallel_tool_calls: true,
+      ...(request.tools.length > 0 ? {
+        tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })),
+        tool_choice: "auto",
+        parallel_tool_calls: true,
+      } : {}),
       max_tokens: request.maxOutputTokens,
       temperature: 0,
       prompt_cache_key: PROMPT_CACHE_KEY,
       ...(request.onTextDelta ? { stream: true, stream_options: { include_usage: true } } : {}),
-    }, AbortSignal.timeout(this.options.timeoutMs ?? 120_000));
+    }, AbortSignal.any([
+      AbortSignal.timeout(this.options.timeoutMs ?? 120_000),
+      ...(request.signal ? [request.signal] : []),
+    ]));
     return turnFromChatResponse(
       Symbol.asyncIterator in Object(response)
         ? await collectChatStream(response as AsyncIterable<ChatStreamChunk>, request.onTextDelta)

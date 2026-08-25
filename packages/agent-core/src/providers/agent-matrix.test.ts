@@ -191,6 +191,19 @@ describe("Anthropic adapter", () => {
     safetyIdentifier: "nova_cli_test",
   };
 
+  it("combines caller cancellation with the provider timeout", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const provider = new AnthropicAgentTurnProvider({ apiKey: "sk-ant", model: "claude-opus-5" }, async (_body, signal) => {
+      received = signal;
+      return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    });
+    const pending = provider.complete({ ...request, signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(received?.aborted).toBe(true);
+  });
+
   it("sends tools in Anthropic's schema and no sampling parameters", async () => {
     let body: Record<string, unknown> | undefined;
     const provider = new AnthropicAgentTurnProvider({ apiKey: "sk-ant", model: "claude-opus-5" }, async (value) => {

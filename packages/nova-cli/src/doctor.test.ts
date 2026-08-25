@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildDoctorEndpoints, doctorExitCode, renderDoctor, runDoctor } from "./doctor";
+import { buildDoctorEndpoints, doctorExitCode, doctorReport, renderDoctor, runDoctor } from "./doctor";
 
 function transportError(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
 }
 
 function okFetch() {
-  return vi.fn(async () => new Response(null, { status: 404 }));
+  return vi.fn(async () => new Response(null, { status: 200, headers: { "x-request-id": "req-doctor" } }));
 }
 
 describe("connectivity doctor", () => {
@@ -19,7 +19,7 @@ describe("connectivity doctor", () => {
     expect(endpoints.find((endpoint) => endpoint.id === "provider:circuitnotion")).toMatchObject({
       required: true,
       configured: true,
-      url: "https://api.circuitnotion.com/v1",
+      url: "https://api.circuitnotion.com/v1/models",
     });
     expect(endpoints.find((endpoint) => endpoint.id === "provider:openai")).toMatchObject({ required: false, configured: false });
     // Ollama needs no key, so it is always "configured" — but a local daemon nobody started is
@@ -53,12 +53,33 @@ describe("connectivity doctor", () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes("currency-api")) throw transportError("connect ETIMEDOUT", "ETIMEDOUT");
-      return new Response(null, { status: 404 });
+      return new Response(null, { status: 200 });
     });
     const probes = await runDoctor({ CIRCUITNOTION_API_KEY: "sk-test" }, { fetchImpl });
     expect(doctorExitCode(probes)).toBe(0);
     expect(probes.find((probe) => probe.id === "fx:0")?.ok).toBe(false);
     expect(probes.find((probe) => probe.id === "provider:circuitnotion")?.ok).toBe(true);
+  });
+
+  it("fails on an HTTP 500 even though the host answered, and keeps its request id", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith("https://api.circuitnotion.com")) {
+        return new Response(null, { status: 500, headers: { "x-request-id": "req-backend-500" } });
+      }
+      return new Response(null, { status: 200 });
+    });
+    const probes = await runDoctor({ CIRCUITNOTION_API_KEY: "sk-test" }, { fetchImpl });
+    expect(probes.find((probe) => probe.id === "provider:circuitnotion")).toMatchObject({
+      ok: false, status: 500, requestId: "req-backend-500", diagnosis: { kind: "server_error" },
+    });
+    expect(doctorExitCode(probes)).toBe(1);
+  });
+
+  it("uses a monotonic clock and never renders a negative duration", async () => {
+    const ticks = [100, 90, 200, 190, 300, 290, 400, 390, 500, 490];
+    const probes = await runDoctor({ CIRCUITNOTION_API_KEY: "sk-test" }, { fetchImpl: okFetch(), now: () => ticks.shift() ?? 0 });
+    expect(probes.every((probe) => probe.ms === undefined || probe.ms >= 0)).toBe(true);
   });
 
   it("passes when no provider is configured, and says so", async () => {
@@ -82,7 +103,35 @@ describe("connectivity doctor", () => {
       { fetchImpl: okFetch() },
     );
     const model = probes.find((probe) => probe.id === "provider:circuitnotion");
-    expect(model?.url).toBe("https://relay.example.com/v1");
+    expect(model?.url).toBe("https://relay.example.com/v1/models");
+  });
+
+  it("creates an allowlisted support report without credentials or endpoint URLs", () => {
+    const report = doctorReport([{
+      id: "provider:circuitnotion",
+      purpose: "model API · CircuitNotion",
+      url: "https://user:secret@relay.example.com/v1/models?key=do-not-leak",
+      headers: { Authorization: "Bearer do-not-leak" },
+      required: true,
+      configured: true,
+      ok: false,
+      status: 500,
+      requestId: "req-safe-to-share",
+      diagnosis: { kind: "server_error", message: "The provider returned HTTP 500." },
+    }], {
+      cliVersion: "1.2.3",
+      platform: "linux",
+      arch: "x64",
+      runtime: "Bun 1.3.0",
+      provider: "circuitnotion",
+      model: "test-model",
+    });
+    const serialized = JSON.stringify(report);
+    expect(serialized).toContain("relay.example.com");
+    expect(serialized).toContain("req-safe-to-share");
+    expect(serialized).not.toContain("do-not-leak");
+    expect(serialized).not.toContain("Authorization");
+    expect(serialized).not.toContain("/v1/models");
   });
 });
 

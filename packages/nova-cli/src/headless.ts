@@ -186,6 +186,16 @@ export class HeadlessEmitter {
       this.emit("model_turn", { iteration: safe.iteration, model: safe.model, toolCalls: safe.toolCallCount, usage: safe.usage });
       return;
     }
+    if (safe.type === "provider_retry") {
+      this.emit("provider_retry", {
+        iteration: safe.iteration,
+        nextAttempt: safe.nextAttempt,
+        maxAttempts: safe.maxAttempts,
+        delayMs: safe.delayMs,
+        reason: safe.reason,
+      });
+      return;
+    }
     this.emit("runtime_stop", { status: safe.status, summary: safe.summary });
   }
 

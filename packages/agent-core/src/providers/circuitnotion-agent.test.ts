@@ -9,6 +9,19 @@ describe("CircuitNotion agent turn provider", () => {
     expect(provider.capabilities).toEqual({ contextWindow: 1_000_000, maxOutputTokens: 384_000, supportsEffort: false });
   });
 
+  it("combines caller cancellation with the provider timeout", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const provider = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "circuit-2-turbo" }, async (_body, signal) => {
+      received = signal;
+      return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    });
+    const pending = provider.complete({ messages: [], tools: [], maxOutputTokens: 1_000, safetyIdentifier: "org", signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(received?.aborted).toBe(true);
+  });
+
   it("sends capability-scoped tools and parses tool calls", async () => {
     let body: Record<string, unknown> | undefined;
     const provider = new CircuitNotionAgentTurnProvider({ apiKey: "cn_test", model: "gpt-5.6-luna" }, async (request) => {
@@ -46,6 +59,9 @@ describe("CircuitNotion agent turn provider", () => {
       { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "read_file", arguments: "{\"path\":\"a\"}" } }] },
       { role: "tool", content: "content", tool_call_id: "call-1", name: "read_file" },
     ]);
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("tool_choice");
+    expect(body).not.toHaveProperty("parallel_tool_calls");
   });
 
   it("reports a truncated ending as unfinished, and fails closed on an unknown one or missing usage", async () => {

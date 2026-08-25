@@ -53,6 +53,8 @@ export type AgentModelRequest = {
   tools: AgentToolDefinition[];
   maxOutputTokens: number;
   safetyIdentifier: string;
+  /** Cancels the in-flight provider request, not merely the next runtime checkpoint. */
+  signal?: AbortSignal;
   /**
    * Called with each piece of assistant text as it is generated.
    *
@@ -145,7 +147,7 @@ export type AgentToolResult = {
   data?: Record<string, unknown>;
 };
 
-export type AgentToolContext = { taskId: string; runId: string; stepId: string };
+export type AgentToolContext = { taskId: string; runId: string; stepId: string; signal?: AbortSignal };
 
 /**
  * Where a tool came from: Nova's own fixed set, or something loaded at runtime.
@@ -170,6 +172,9 @@ export type AgentTool = AgentToolDefinition & {
 
 export type AgentRuntimeEvent =
   | { type: "assistant_delta"; iteration: number; text: string }
+  // A retry must be visible while it is happening. Otherwise a transient outage looks exactly
+  // like Nova has frozen, and Ctrl+C becomes the only feedback mechanism the user can discover.
+  | { type: "provider_retry"; iteration: number; nextAttempt: number; maxAttempts: number; delayMs: number; reason: ProviderFailureKind }
   // Usage rides along so a front end can show spend accruing during the turn. Waiting for the
   // final result means the number only appears once the money is already gone.
   | { type: "model_turn"; iteration: number; responseId: string; model: string; toolCallCount: number; usage: ModelUsage }
@@ -237,6 +242,31 @@ const MAX_UNAVAILABLE_TOOL_RECOVERIES = 1;
 const MAX_PROVIDER_RETRIES = 2;
 /** A malformed tool turn is model output, so let the model repair it before failing the run. */
 const MAX_TOOL_TURN_RECOVERIES = 2;
+
+export type ProviderFailureKind = "timeout" | "rate_limit" | "server" | "network" | "unknown";
+
+/**
+ * Adds retry context without discarding the provider's original error shape.
+ *
+ * The cause remains available to the CLI's HTTP/network classifier, while `attempts` explains why
+ * Nova stopped and `retrySuppressed` explains the important partial-stream case where repeating a
+ * request could duplicate paid output or tool intent.
+ */
+export class ProviderRequestError extends Error {
+  readonly attempts: number;
+  readonly retrySuppressed: "output_started" | null;
+
+  constructor(cause: unknown, options: { attempts: number; retrySuppressed?: "output_started" }) {
+    const original = cause instanceof Error ? cause.message : String(cause);
+    const detail = options.retrySuppressed === "output_started"
+      ? "The model connection failed after output began, so Nova did not retry to avoid duplicated output, charges, or tool actions."
+      : `The model request failed after ${options.attempts} attempt${options.attempts === 1 ? "" : "s"}.`;
+    super(`${detail} Provider message: ${original}`, { cause });
+    this.name = "ProviderRequestError";
+    this.attempts = options.attempts;
+    this.retrySuppressed = options.retrySuppressed ?? null;
+  }
+}
 
 /**
  * How many times a truncated turn is resumed before the run gives up.
@@ -320,10 +350,47 @@ export function isRetryableProviderError(error: unknown): boolean {
   return messages.some((message) => /\b(?:timed?\s*out|timeout|rate\s*limit|overload(?:ed)?|temporar(?:y|ily)|connection\s*reset|socket\s*hang\s*up|fetch\s*failed|network\s*error)\b/i.test(message));
 }
 
-function providerRetryDelay(attempt: number): Promise<void> {
-  // Short exponential backoff: enough to clear a transient edge failure without making Ctrl+C
-  // feel ignored. Cancellation is checked both before and after this wait by the caller.
-  return new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+export function providerFailureKind(error: unknown): ProviderFailureKind {
+  let current: unknown = error;
+  const visited = new Set<unknown>();
+  const messages: string[] = [];
+  for (let depth = 0; current !== undefined && current !== null && depth < 5 && !visited.has(current); depth += 1) {
+    visited.add(current);
+    const record = errorRecord(current);
+    if (current instanceof Error) messages.push(current.message);
+    else if (typeof current === "string") messages.push(current);
+    if (!record) break;
+    const status = Number(record.status ?? record.statusCode);
+    if (status === 408) return "timeout";
+    if (status === 429) return "rate_limit";
+    if (status >= 500 && status < 600) return "server";
+    const code = typeof record.code === "string" ? record.code.toUpperCase() : "";
+    if (/TIMEOUT/.test(code) || code === "ETIMEDOUT") return "timeout";
+    if (TRANSIENT_PROVIDER_CODES.has(code)) return "network";
+    current = record.cause;
+  }
+  const message = messages.join(" ");
+  if (/rate\s*limit|too many requests/i.test(message)) return "rate_limit";
+  if (/timed?\s*out|timeout/i.test(message)) return "timeout";
+  if (/overload|service unavailable|bad gateway|gateway timeout/i.test(message)) return "server";
+  if (/connection|socket|fetch failed|network/i.test(message)) return "network";
+  return "unknown";
+}
+
+function providerRetryDelay(attempt: number, signal?: AbortSignal): Promise<boolean> {
+  // Deterministic exponential backoff keeps tests and logs reproducible. The abort listener is
+  // what makes Ctrl+C immediate while Nova is between attempts instead of waiting for a timer.
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const abort = () => finish(false);
+    const finish = (elapsed: boolean) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve(elapsed);
+    };
+    const timer = setTimeout(() => finish(true), 100 * 2 ** attempt);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 const emptyUsage: ModelUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
@@ -554,7 +621,7 @@ export class BoundedAgentRuntime {
 
     for (let iteration = 1; iteration <= request.maxIterations; iteration += 1) {
       await this.dependencies.control.heartbeat();
-      if (await this.dependencies.control.isCancellationRequested()) return stop("cancelled", "Run cancelled at a safe checkpoint.", iteration - 1);
+      if (request.signal?.aborted || await this.dependencies.control.isCancellationRequested()) return stop("cancelled", "Run cancelled at a safe checkpoint.", iteration - 1);
 
       const approvedRemaining = request.modelReservationRwf - actualModelRwf;
       for (; measured < messages.length; measured += 1) {
@@ -574,22 +641,45 @@ export class BoundedAgentRuntime {
         tools: definitions,
         maxOutputTokens: maximumOutputTokens,
         safetyIdentifier: request.safetyIdentifier,
+        signal: request.signal,
         // Deltas are fire-and-forget: a slow consumer must never stall generation, and a lost
         // delta costs nothing because the completed turn is still the source of truth.
         onTextDelta: (text) => void this.dependencies.control.persistEvent({ type: "assistant_delta", iteration, text }),
       };
       let turn: AgentModelTurn | undefined;
       for (let attempt = 0; attempt <= MAX_PROVIDER_RETRIES; attempt += 1) {
+        let emittedOutput = false;
+        const attemptRequest: AgentModelRequest = {
+          ...modelRequest,
+          onTextDelta: modelRequest.onTextDelta
+            ? (text) => { emittedOutput = true; modelRequest.onTextDelta!(text); }
+            : undefined,
+        };
         try {
-          turn = await this.dependencies.model.complete(modelRequest);
+          turn = await this.dependencies.model.complete(attemptRequest);
           break;
         } catch (error) {
-          if (!isRetryableProviderError(error) || attempt >= MAX_PROVIDER_RETRIES) throw error;
-          if (await this.dependencies.control.isCancellationRequested()) {
+          if (request.signal?.aborted || await this.dependencies.control.isCancellationRequested()) {
+            return stop("cancelled", "Run cancelled while waiting for the model provider.", iteration - 1);
+          }
+          // Retrying after streamed output risks duplicating both billed text and tool intent. A
+          // retry is safe only while the failed attempt has remained completely invisible.
+          if (emittedOutput) throw new ProviderRequestError(error, { attempts: attempt + 1, retrySuppressed: "output_started" });
+          if (!isRetryableProviderError(error)) throw error;
+          if (attempt >= MAX_PROVIDER_RETRIES) throw new ProviderRequestError(error, { attempts: attempt + 1 });
+          const delayMs = 100 * 2 ** attempt;
+          await this.dependencies.control.persistEvent({
+            type: "provider_retry",
+            iteration,
+            nextAttempt: attempt + 2,
+            maxAttempts: MAX_PROVIDER_RETRIES + 1,
+            delayMs,
+            reason: providerFailureKind(error),
+          });
+          if (!await providerRetryDelay(attempt, request.signal)) {
             return stop("cancelled", "Run cancelled while waiting to retry the model provider.", iteration - 1);
           }
-          await providerRetryDelay(attempt);
-          if (await this.dependencies.control.isCancellationRequested()) {
+          if (request.signal?.aborted || await this.dependencies.control.isCancellationRequested()) {
             return stop("cancelled", "Run cancelled while waiting to retry the model provider.", iteration - 1);
           }
         }
@@ -719,7 +809,7 @@ export class BoundedAgentRuntime {
 
       messages.push({ role: "assistant", content: turn.content, toolCalls: turn.toolCalls });
       const runOne = async ({ call, tool, argumentsValue }: (typeof prepared)[number]) => {
-        if (await this.dependencies.control.isCancellationRequested()) return { call, tool, result: { content: "Tool execution cancelled before start.", isError: true } as AgentToolResult };
+        if (request.signal?.aborted || await this.dependencies.control.isCancellationRequested()) return { call, tool, result: { content: "Tool execution cancelled before start.", isError: true } as AgentToolResult };
         // Announced before the work, not after: a read of a large file or a long-running command
         // is exactly the moment a person needs to know what is being waited on.
         await this.dependencies.control.persistEvent({ type: "tool_call", toolCallId: call.id, toolName: call.name, effect: tool.effect, arguments: argumentsValue });

@@ -14,7 +14,9 @@ import { hostOf } from "./endpoints";
  * with the network.
  */
 
-export type NetworkErrorKind = "timeout" | "dns" | "refused" | "reset" | "unreachable" | "tls" | "aborted" | "not_found";
+export type NetworkErrorKind =
+  | "timeout" | "dns" | "refused" | "reset" | "unreachable" | "tls" | "aborted"
+  | "not_found" | "authentication" | "permission" | "rate_limit" | "bad_request" | "server_error";
 
 export type NetworkDiagnosis = {
   kind: NetworkErrorKind;
@@ -29,6 +31,10 @@ export type ClassifyOptions = {
   host?: string;
   /** What the call was for, e.g. "the model API". */
   purpose?: string;
+  /** Runtime retry context, normally inferred from ProviderRequestError. */
+  attempts?: number;
+  /** Why a safe automatic retry was not attempted. */
+  retrySuppressed?: "output_started" | null;
 };
 
 /** Error codes the transport layer emits for each failure class. */
@@ -45,6 +51,11 @@ const CODES: Record<NetworkErrorKind, readonly string[]> = {
   ],
   aborted: ["UND_ERR_ABORTED", "ABORT_ERR"],
   not_found: [],
+  authentication: [],
+  permission: [],
+  rate_limit: [],
+  bad_request: [],
+  server_error: [],
 };
 
 const KIND_HINTS: Partial<Record<NetworkErrorKind, string>> = {
@@ -95,6 +106,10 @@ function messageOf(error: unknown): string {
 function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): NetworkDiagnosis {
   const host = options.host ?? "the server";
   const purpose = options.purpose ? `${options.purpose} to ${host}` : `The request to ${host}`;
+  const afterAttempts = options.attempts && options.attempts > 1 ? ` after ${options.attempts} attempts` : "";
+  const duplicateRisk = options.retrySuppressed === "output_started"
+    ? " Nova did not retry because output had already started; retrying automatically could duplicate output, charges, or tool actions."
+    : "";
   switch (kind) {
     case "dns":
       return {
@@ -105,8 +120,8 @@ function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): Network
     case "timeout":
       return {
         kind,
-        message: `${purpose} timed out — ${host} is slow, or the network is blocking it.`,
-        hint: KIND_HINTS.timeout,
+        message: `${purpose} timed out${afterAttempts} — ${host} is slow, or the network is blocking it.${duplicateRisk}`,
+        hint: options.retrySuppressed ? "Review any partial output before retrying manually." : KIND_HINTS.timeout,
       };
     case "refused":
       return {
@@ -117,8 +132,8 @@ function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): Network
     case "reset":
       return {
         kind,
-        message: `The connection to ${host} was reset mid-request — a proxy, firewall, or the server dropped it.`,
-        hint: KIND_HINTS.reset,
+        message: `The connection to ${host} was reset mid-request${afterAttempts} — a proxy, firewall, or the server dropped it.${duplicateRisk}`,
+        hint: options.retrySuppressed ? "Review any partial output before retrying manually." : KIND_HINTS.reset,
       };
     case "unreachable":
       return {
@@ -143,6 +158,36 @@ function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): Network
         message: `${purpose} returned 404 Not Found — the host is reachable, but the API route or selected model does not exist.`,
         hint: "For CircuitNotion use a base URL ending in /v1, then choose a live model with `/model` or refresh `/models`. Run `nova --doctor` to verify the endpoint.",
       };
+    case "authentication":
+      return {
+        kind,
+        message: `${purpose} rejected the configured credentials (401 Unauthorized).`,
+        hint: "Open `/settings` and replace the provider API key, then run `nova --doctor` before retrying.",
+      };
+    case "permission":
+      return {
+        kind,
+        message: `${purpose} denied this account or model (403 Forbidden).`,
+        hint: "Confirm the account can use the selected model, or choose an available model with `/model`.",
+      };
+    case "rate_limit":
+      return {
+        kind,
+        message: `${purpose} is still rate-limited${afterAttempts}.`,
+        hint: "Wait briefly and retry, or choose another available model with `/model`.",
+      };
+    case "bad_request":
+      return {
+        kind,
+        message: `${purpose} rejected the request as invalid. The selected model may not support this request or tool-calling format.`,
+        hint: "Refresh `/models`, choose a compatible model with `/model`, or run `nova --doctor` to verify the provider configuration.",
+      };
+    case "server_error":
+      return {
+        kind,
+        message: `${purpose} remained unavailable${afterAttempts} because the provider returned a server error.`,
+        hint: "The request was retried safely. Wait briefly, check the provider status, or select another model with `/model`.",
+      };
   }
 }
 
@@ -155,6 +200,12 @@ function diagnosisFor(kind: NetworkErrorKind, options: ClassifyOptions): Network
  */
 export function classifyNetworkError(error: unknown, options: ClassifyOptions = {}): NetworkDiagnosis | null {
   const raw = unwrap(error);
+  const retry = error !== null && typeof error === "object" ? error as { attempts?: unknown; retrySuppressed?: unknown } : undefined;
+  const context: ClassifyOptions = {
+    ...options,
+    ...(typeof retry?.attempts === "number" ? { attempts: retry.attempts } : {}),
+    ...(retry?.retrySuppressed === "output_started" ? { retrySuppressed: "output_started" as const } : {}),
+  };
   const name = nameOf(raw) ?? nameOf(error);
   const code = codeOf(raw) ?? codeOf(error);
   const message = messageOf(raw);
@@ -163,17 +214,27 @@ export function classifyNetworkError(error: unknown, options: ClassifyOptions = 
   // network: it is almost always an omitted `/v1` base path or a model id no longer in the live
   // catalog, and both have concrete fixes the raw "404 not found" fails to name.
   if (statusOf(error) === 404 || statusOf(raw) === 404 || /^404\b|\b404 not found\b/i.test(messageOf(error))) {
-    return diagnosisFor("not_found", options);
+    return diagnosisFor("not_found", context);
+  }
+
+  const status = statusOf(error) ?? statusOf(raw);
+  if (status === 401) return diagnosisFor("authentication", context);
+  if (status === 403) return diagnosisFor("permission", context);
+  if (status === 429) return diagnosisFor("rate_limit", context);
+  if (status === 400 || status === 422) return diagnosisFor("bad_request", context);
+  if (status === 408) return diagnosisFor("timeout", context);
+  if (status === 409 || status === 425 || (status !== undefined && status >= 500 && status < 600)) {
+    return diagnosisFor("server_error", context);
   }
 
   // AbortSignal.timeout and user cancellation both surface as an abort; without more signal it is
   // safest to call it a timeout — a cancelled call is still "did not complete", never "internet".
   if (name === "AbortError" || name === "TimeoutError" || name === "APIConnectionTimeoutError") {
-    return diagnosisFor("timeout", options);
+    return diagnosisFor("timeout", context);
   }
   // The SDKs surface any transport failure as APIConnectionError with the real error as `cause`.
   if (name === "APIConnectionError") {
-    return classifyNetworkError(raw, options) ?? { kind: "reset", message: `The connection failed — ${message}`, hint: KIND_HINTS.reset };
+    return classifyNetworkError(raw, context) ?? { kind: "reset", message: `The connection failed — ${message}`, hint: KIND_HINTS.reset };
   }
   if (name === "APIUserAbortError") return null; // the user (or the runtime) cancelled; not a network fault
 
@@ -183,7 +244,7 @@ export function classifyNetworkError(error: unknown, options: ClassifyOptions = 
 
   for (const kind of Object.keys(CODES) as NetworkErrorKind[]) {
     if (code && CODES[kind].some((candidate) => code === candidate || (candidate.endsWith("_") && code.startsWith(candidate)))) {
-      return diagnosisFor(kind, { ...options, host });
+      return diagnosisFor(kind, { ...context, host });
     }
   }
   // Node's fetch wraps undici failures in `TypeError: fetch failed` whose `cause` has the code;

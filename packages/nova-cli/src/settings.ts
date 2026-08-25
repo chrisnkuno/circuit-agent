@@ -74,6 +74,7 @@ export const SETTING_FIELDS = [
   { key: "NOVA_COUNTRY", label: "Location — sets the currency costs are shown in", choices: COUNTRY_CHOICES },
   { key: "NOVA_CURRENCY", label: "Display currency (overrides the one your location implies)", choices: CURRENCY_CHOICES },
   { key: "NOVA_PROVIDER", label: "Default provider", choices: PROVIDER_CHOICES },
+  { key: "NOVA_FALLBACK_MODEL", label: "Fallback after transient provider failure — ask, or provider:model" },
   { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true },
   { key: "ANTHROPIC_BASE_URL", label: "Anthropic base URL", url: true },
   { key: "ANTHROPIC_MODEL", label: "Anthropic model" },
@@ -200,6 +201,9 @@ export function validateSetting(key: SettingKey, raw: string): string {
   if (key === "NOVA_LANGUAGE" && !/^(en|zh|hi|es|fr|ar|bn|pt|ru|ur)$/i.test(value)) throw new Error("Choose en, zh, hi, es, fr, ar, bn, pt, ru, or ur.");
   if (key === "NOVA_PROVIDER" && !/^(anthropic|openai|circuitnotion)$/i.test(value)) throw new Error("Choose anthropic, openai, or circuitnotion.");
   if (key === "NOVA_PROVIDER") return value.toLowerCase();
+  if (key === "NOVA_FALLBACK_MODEL" && value.toLowerCase() !== "ask" && !/^(anthropic|openai|circuitnotion|ollama)[:/][^\s]+$/i.test(value)) {
+    throw new Error("Choose ask, or enter an explicit provider:model such as openai:gpt-5.4-mini.");
+  }
   if (key === "NOVA_COUNTRY") {
     const country = normalizeCountryCode(value);
     if (!country) throw new Error("Enter a two-letter ISO country code, such as RW or EG.");

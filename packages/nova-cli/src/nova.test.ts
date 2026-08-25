@@ -52,6 +52,12 @@ describe("argument parsing", () => {
     expect(parseArgs(["--json", "--auto", "go"])).toMatchObject({ json: true, mode: "auto", prompt: "go" });
   });
 
+  it("accepts doctor as a command and emits an optional support report", () => {
+    expect(parseArgs(["doctor"])).toMatchObject({ doctor: true, doctorReport: false, prompt: null });
+    expect(parseArgs(["doctor", "--report"])).toMatchObject({ doctor: true, doctorReport: true, prompt: null });
+    expect(parseArgs(["--doctor", "--report"])).toMatchObject({ doctor: true, doctorReport: true, prompt: null });
+  });
+
   it("treats every non-flag word as the request, so quoting is optional", () => {
     expect(parseArgs(["fix", "the", "failing", "test"]).prompt).toBe("fix the failing test");
     expect(parseArgs(["--plan", "why", "is", "it", "slow"])).toMatchObject({ mode: "plan", prompt: "why is it slow" });
@@ -303,6 +309,15 @@ describe("renderEvent", () => {
     renderEvent({ type: "compaction", tokensBefore: 0, messagesBefore: 40, messagesAfter: 6 });
     restore();
     expect(writes.join("")).toContain("compacted context (40 → 6 messages)");
+  });
+
+  it("shows why a provider request is retrying and the bounded attempt count", () => {
+    const { writes, restore } = captureStdout();
+    renderEvent({ type: "runtime", event: { type: "provider_retry", iteration: 1, nextAttempt: 2, maxAttempts: 3, delayMs: 100, reason: "rate_limit" } });
+    restore();
+    expect(writes.join("")).toContain("rate limited");
+    expect(writes.join("")).toContain("2/3");
+    expect(writes.join("")).toContain("100ms");
   });
 
   it("announces a tool call with what it was called with, before any result exists", () => {

@@ -87,9 +87,9 @@ export function isEssential(command: string): boolean {
  */
 export const COMMAND_GROUP: Readonly<Record<string, NavGroupId>> = {
   "/mode": "steer", "/plan": "steer", "/build": "steer", "/auto": "steer", "/defender": "steer",
-  "/model": "steer", "/models": "steer", "/slow": "steer", "/clear": "steer", "/memory": "steer",
-  "/todos": "review", "/diff": "review", "/undo": "work", "/cost": "review", "/expand": "review",
-  "/history": "review", "/sessions": "review", "/balance": "review", "/pay": "review", "/scan": "work", "/wander": "work", "/voice": "work",
+  "/model": "steer", "/models": "steer", "/fallback": "steer", "/slow": "steer", "/clear": "steer", "/memory": "steer",
+  "/todos": "review", "/diff": "review", "/undo": "work", "/retry": "work", "/continue": "work", "/cost": "review", "/expand": "review",
+  "/history": "review", "/sessions": "review", "/export": "review", "/balance": "review", "/pay": "review", "/scan": "work", "/wander": "work", "/voice": "work",
   "/files": "work", "/pull": "work", "/where": "review",
   "/jobs": "parallel", "/detach": "parallel", "/attach": "parallel", "/watch": "parallel",
   "/tab": "parallel", "/workspace": "parallel",
@@ -308,9 +308,9 @@ export class CommandUsage {
  * half of the design and is not optional — a short list is only honest if the way to the long one
  * is on screen.
  */
-export function renderGroupedHelp(context: NavContext, style: SectionStyle, options: { all?: boolean } = {}): string {
+export function renderGroupedHelp(context: NavContext, style: SectionStyle, options: { all?: boolean; group?: NavGroupId } = {}): string {
   const glyphs = style.glyphs ?? UNICODE_GLYPHS;
-  const groups = groupedCommands(context, options.all);
+  const groups = groupedCommands(context, options.all).filter((group) => !options.group || group.id === options.group);
   const width = Math.max(32, style.width);
   // One column width for every row, and names clipped into it. A row whose name overruns the
   // column pushes its own description out of line, and a description column that is not a column
@@ -349,7 +349,7 @@ export function renderGroupedHelp(context: NavContext, style: SectionStyle, opti
   // nothing, so the least important hint is dropped whole and the rest stays readable.
   const hints = options.all
     ? [`${glyphs.star} start with these`, "/palette searches all of these by what they do"]
-    : [`${glyphs.star} start with these`, "/help all shows every command", "/palette searches them by what they do", "/keys for shortcuts"];
+    : [`${glyphs.star} start with these`, "/help all or /help <group> narrows this", "/palette searches them by what they do", "/keys for shortcuts"];
   const separator = ` ${glyphs.middot} `;
   const kept = [...hints];
   while (kept.length > 1 && visibleWidth(`${glyphs.middot} ${kept.join(separator)}`) > width - 4) kept.pop();

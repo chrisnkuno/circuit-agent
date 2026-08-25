@@ -27,6 +27,19 @@ function respond(overrides: Partial<ChatResponse["choices"][number]> = {}): Chat
 }
 
 describe("OpenAI agent adapter", () => {
+  it("combines caller cancellation with the provider timeout", async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const provider = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async (_body, signal) => {
+      received = signal;
+      return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    });
+    const pending = provider.complete({ ...request, signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(received?.aborted).toBe(true);
+  });
+
   it("sends tools in the function-calling schema and identifies the caller", async () => {
     let body: Record<string, unknown> | undefined;
     const provider = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async (value) => {
@@ -57,6 +70,18 @@ describe("OpenAI agent adapter", () => {
     expect(body).not.toHaveProperty("tool_choice");
     expect(body).not.toHaveProperty("parallel_tool_calls");
     expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("omits the entire tool contract for a tool-free chat profile", async () => {
+    let body: Record<string, unknown> | undefined;
+    const provider = new OpenAIAgentTurnProvider({ apiKey: "sk-test", model: "gpt-5.6-terra" }, async (value) => {
+      body = value;
+      return respond();
+    });
+    await provider.complete({ ...request, tools: [] });
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("tool_choice");
+    expect(body).not.toHaveProperty("parallel_tool_calls");
   });
 
   it("reads usage including cached input, so a cached session is priced correctly", async () => {
