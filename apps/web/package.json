@@ -12,7 +12,7 @@
     "wander:once": "bun run scripts/run-wander-once.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.116.0",
+    "@anthropic-ai/sdk": "^0.120.0",
     "@circuit-nova/nova-core": "workspace:*",
     "@convex-dev/better-auth": "^0.12.5",
     "better-auth": "~1.6.15",
