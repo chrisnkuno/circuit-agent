@@ -124,7 +124,7 @@ jobs:
           path: reliability/site
       - name: Deploy spectator UI
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: Publish latest evidence to README
         if: success()
         run: |
