@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-rusqlite = { version = "0.32", features = ["bundled-full"] }
+rusqlite = { version = "0.40", features = ["bundled-full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = "0.10"
