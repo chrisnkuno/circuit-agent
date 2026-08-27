@@ -44,6 +44,34 @@ async function boot() {
 }
 
 describe("switching models under a real pty", () => {
+  it("sends the earlier requests and answers to the newly selected model", async () => {
+    stub.enqueue({ kind: "text", text: "I will remember cobalt." });
+    stub.enqueue({ kind: "text", text: "The codename was cobalt." });
+    const p = await boot();
+
+    const firstTurnAt = p.output().length;
+    p.writeLine("Remember that the codename is cobalt.");
+    await p.waitFor(/I will remember cobalt.*turn complete.*│ ›/s, { timeoutMs: 20_000, since: firstTurnAt });
+
+    const switchedAt = p.output().length;
+    p.writeLine("/model haiku");
+    await p.waitFor(/switched to.*claude-haiku-4-5/s, { timeoutMs: 15_000, since: switchedAt });
+
+    p.writeLine("What was the codename?");
+    await p.waitFor(/The codename was cobalt/, { timeoutMs: 20_000, since: switchedAt });
+
+    const request = stub.requests().at(-1)!;
+    expect(request.model).toBe("claude-haiku-4-5");
+    expect(request.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: "Remember that the codename is cobalt." }),
+      expect.objectContaining({ role: "assistant", content: expect.arrayContaining([
+        expect.objectContaining({ type: "text", text: "I will remember cobalt." }),
+      ]) }),
+      expect.objectContaining({ role: "user", content: "What was the codename?" }),
+    ]));
+    p.kill();
+  }, 60_000);
+
   it("switches on a partial name, without being told the provider", async () => {
     const p = await boot();
     const mark = p.output().length;

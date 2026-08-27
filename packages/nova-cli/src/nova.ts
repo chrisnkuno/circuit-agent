@@ -2927,14 +2927,13 @@ async function main(): Promise<number> {
         const attempt = resolveProvider(environment, { provider: fallback.provider, model: fallback.model });
         if (!("error" in attempt) && (attempt.spec.id !== spec.id || attempt.model !== resolvedModelId)) {
           const previous = agent;
-          const carried = await loadSession(args.root, previous.sessionId);
-          await previous.relinquish();
+          const carried = await previous.relinquish();
           model = attempt.provider;
           spec = attempt.spec;
           prices = attempt.prices;
           resolvedModelId = attempt.model;
           ledger.setPrices(prices);
-          agent = await openClient(carried ?? undefined);
+          agent = await openClient(carried);
           queuedInput.unshift("/retry");
           out.write(style.yellow(`  falling back once to ${spec.label} ${resolvedModelId}; the unchanged request is queued for retry\n`));
         }
@@ -3375,9 +3374,8 @@ async function main(): Promise<number> {
     balanceReadState = manualBalanceRwf === undefined ? "checking" : "manual";
     language = resolveControlLanguage(args.language ?? environment.NOVA_LANGUAGE ?? environment.LANG);
     const previous = agent;
-    const carried = await loadSession(args.root, previous.sessionId);
-    await previous.relinquish();
-    agent = await openClient(carried ?? undefined);
+    const carried = await previous.relinquish();
+    agent = await openClient(carried);
     out.write(style.green(`  settings saved to ${file}\n`));
     await applyCurrencyPreference();
     out.write(style.dim(`  Settings are active now${environment.EXA_API_KEY?.trim() ? "; Exa web_search is available" : ""}. Use /model only to change the selected model.\n`));
@@ -3602,11 +3600,9 @@ async function main(): Promise<number> {
       // just produced is still in context when it starts building — Cline's behaviour, and the
       // reason Plan mode is useful rather than a separate conversation.
       const previous = agent;
-      // Read before relinquishing: the client's sessionId is only valid while it is still open.
-      const previousSessionId = previous.sessionId;
-      await previous.relinquish();
-      const carried = await loadSession(args.root, previousSessionId);
-      agent = await openClient(carried ?? undefined);
+      // Relinquishing returns the live transcript atomically, before retiring the old client.
+      const carried = await previous.relinquish();
+      agent = await openClient(carried);
       const posture = mode === "plan" ? "read-only; no write tools" : mode === "build" ? "edits and commands require approval" : mode === "defender" ? "security review; every fix still requires approval" : "ordinary edits and commands are pre-approved; sensitive and external actions require approval";
       out.write(style.dim(`  switched to ${mode} mode · ${posture}\n`));
       continue;
@@ -3752,10 +3748,8 @@ async function main(): Promise<number> {
       resolvedModelId = attempt.model;
       ledger.setPrices(prices);
       const previous = agent;
-      const previousSessionId = previous.sessionId;
-      await previous.relinquish();
-      const carried = await loadSession(args.root, previousSessionId);
-      agent = await openClient(carried ?? undefined);
+      const carried = await previous.relinquish();
+      agent = await openClient(carried);
       if (spec.id === "circuitnotion") await readConfirmedBalance(true);
       const priceNote = prices ? "" : " — no price configured, costs will show as unknown";
 
@@ -3871,10 +3865,8 @@ async function main(): Promise<number> {
       // The pace lives in the agent's budgets, which are fixed when the client is built — so the
       // client is rebuilt around the same session, exactly as a mode or model switch does.
       const previous = agent;
-      const previousSessionId = previous.sessionId;
-      await previous.relinquish();
-      const carried = await loadSession(args.root, previousSessionId);
-      agent = await openClient(carried ?? undefined);
+      const carried = await previous.relinquish();
+      agent = await openClient(carried);
       out.write(`${describePace(pace, sectionStyle())}\n`);
       continue;
     }

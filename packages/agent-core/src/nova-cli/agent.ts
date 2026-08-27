@@ -252,6 +252,18 @@ export class NovaAgent {
     return this.session.id;
   }
 
+  /**
+   * A self-contained handoff record for rebuilding this session around another model or mode.
+   *
+   * Handoffs used to close the agent and then re-read this record from disk. That made a transient
+   * read/integrity failure indistinguishable from an empty conversation: the replacement agent
+   * silently started a new thread. The live agent is the authority for its current transcript, so
+   * capture it before retirement and pass it directly to the replacement.
+   */
+  snapshot(): SessionRecord {
+    return structuredClone(this.session);
+  }
+
   /** Restores a previous session's transcript and standing approvals. */
   resume(record: SessionRecord): void {
     this.session = { ...record, mode: this.options.mode };

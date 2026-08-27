@@ -281,13 +281,15 @@ export class NovaSessionDaemon {
     this.sessions.delete(sessionId);
   }
 
-  /** Retires an agent for a mode/model handoff while deliberately leaving its shared workspace alive. */
-  async relinquish(clientId: string, sessionId: string): Promise<void> {
+  /** Retires an agent for a mode/model handoff and returns the exact conversation to transfer. */
+  async relinquish(clientId: string, sessionId: string): Promise<SessionRecord> {
     const live = this.requireAttached(clientId, sessionId);
     if (live.subscribers.size > 1) throw new Error("Cannot replace a session while another client is attached");
     await live.tail.catch(() => undefined);
+    const record = live.agent.snapshot();
     await live.agent.relinquish();
     this.sessions.delete(sessionId);
+    return record;
   }
 
   disconnect(clientId: string): void {
@@ -357,11 +359,12 @@ export class NovaDaemonClient {
     this.activeSession = null;
     this.info = null;
   }
-  async relinquish(): Promise<void> {
-    if (this.activeSession) await this.daemon.relinquish(this.id, this.activeSession);
+  async relinquish(): Promise<SessionRecord | undefined> {
+    const record = this.activeSession ? await this.daemon.relinquish(this.id, this.activeSession) : undefined;
     this.activeSession = null;
     this.info = null;
     this.daemon.disconnect(this.id);
+    return record;
   }
   async dispose(): Promise<void> {
     await this.release(true);

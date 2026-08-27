@@ -105,6 +105,34 @@ describe("NovaSessionDaemon", () => {
     expect(order).toEqual(["first", "second"]);
   });
 
+  it("returns the complete transcript atomically when a model handoff retires the agent", async () => {
+    const firstModel = modelWith(() => ({ content: "The project codename is cobalt." }));
+    const first = daemon.connect({ id: "before-model-switch" });
+    await first.open(factory(firstModel));
+    await first.send("Remember the project codename.", "command_remember");
+
+    const carried = await first.relinquish();
+    expect(carried?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: "Remember the project codename." }),
+      expect.objectContaining({ role: "assistant", content: "The project codename is cobalt." }),
+    ]));
+
+    const requests: AgentModelRequest[] = [];
+    const secondModel = modelWith((request) => {
+      requests.push(request);
+      return { content: "cobalt" };
+    });
+    const second = daemon.connect({ id: "after-model-switch" });
+    await second.open(factory(secondModel), carried);
+    await second.send("What was the codename?", "command_recall");
+
+    expect(requests[0].messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: "Remember the project codename." }),
+      expect.objectContaining({ role: "assistant", content: "The project codename is cobalt." }),
+    ]));
+    expect(requests[0].messages.at(-1)).toEqual({ role: "user", content: "What was the codename?" });
+  });
+
   it("brokers approvals through the attached client and fans out events", async () => {
     const notifications: DaemonNotification[] = [];
     const model = modelWith((_request, call) => call === 1

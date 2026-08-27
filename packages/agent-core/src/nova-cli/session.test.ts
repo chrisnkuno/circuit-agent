@@ -372,6 +372,10 @@ describe("checkpoints against a real repository", () => {
       await fs.mkdir(path.join(repo, ".nova"), { recursive: true });
       await fs.writeFile(path.join(repo, ".nova", "session.json"), "{}");
 
+      const patch = await store.diffPatch();
+      expect(patch).toContain("diff --git a/app.ts b/app.ts");
+      expect(patch).toContain("+// destroyed");
+
       expect(await store.restore(checkpoint!.tree)).toBe(true);
       // Modified files revert, files the agent created are removed, and Nova's own state survives.
       expect(await fs.readFile(path.join(repo, "app.ts"), "utf8")).toBe("export const port = 3000;\n");

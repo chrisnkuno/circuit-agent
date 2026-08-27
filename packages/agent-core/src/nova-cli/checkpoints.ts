@@ -135,7 +135,7 @@ export class CheckpointStore {
     const checkpoint = this.latest();
     if (!checkpoint) return "";
     const result = await this.git(
-      ["diff", "--unified=3", "--function-context=false", "--no-color", checkpoint.tree, "--", ...EXCLUDE_NOVA],
+      ["diff", "--unified=3", "--no-color", checkpoint.tree, "--", ...EXCLUDE_NOVA],
       { cwd: this.root },
     );
     return result.exitCode === 0 ? result.stdout : "";
