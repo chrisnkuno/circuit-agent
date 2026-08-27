@@ -1,6 +1,6 @@
 {
   "name": "nova-desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Nova Desktop — a Tauri 2 desktop app for the Nova coding agent, with parallel tabs, guarded approvals, git checkpoints and real cost accounting.",
   "license": "MIT",

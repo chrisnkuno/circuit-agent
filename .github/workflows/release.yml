@@ -24,10 +24,9 @@
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password (unset if none)
 # The matching public key is baked into src-tauri/tauri.conf.json.
 #
-# Optional, for a macOS build users can open without right-click → Open. Without all of these the
-# .dmg still builds and still runs, but it is unsigned and Gatekeeper will warn on first launch:
-#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
-#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+# macOS builds are intentionally unsigned until a complete Apple signing identity is provisioned.
+# Merely exporting empty APPLE_* values makes Tauri attempt certificate import and abort the build,
+# so enable those variables as one deliberate change when the six credentials are ready.
 name: Release
 
 on:
@@ -103,12 +102,6 @@ jobs:
           # Apple-silicon runner: `rustc --print host-tuple` would say aarch64 and the sidecar would
           # be built for the wrong machine. Naming the target is what keeps the two in step.
           NOVA_SIDECAR_TARGET: ${{ matrix.triple }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Nova ${{ github.ref_name }}"
