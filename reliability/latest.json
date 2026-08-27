@@ -1,9 +1,8 @@
 {
-  "generatedAt": "2026-08-23T03:26:12.671Z",
-  "rescoredAt": "2026-08-26T04:06:22.273Z",
-  "provider": "circuitnotion",
-  "model": "circuit-2-turbo",
-  "score": 91,
+  "generatedAt": "2026-08-27T14:18:21.202Z",
+  "provider": "openai",
+  "model": "cohere/north-mini-code:free",
+  "score": 92,
   "grade": "excellent",
   "components": {
     "completion": 16,
@@ -11,8 +10,8 @@
     "outputQuality": 7,
     "toolReliability": 10,
     "speed": 7,
-    "economy": 6.3,
-    "prediction": 4.2,
+    "economy": 7,
+    "prediction": 4.1,
     "scope": 7,
     "memoryResume": 7,
     "security": 6,
@@ -24,14 +23,14 @@
   },
   "cases": 6,
   "passed": 6,
-  "actualTokens": 160028,
-  "predictionCoverage": 67,
+  "actualTokens": 69673,
+  "predictionCoverage": 33,
   "toolFailureRate": 0,
   "providerFailureRate": 0,
   "completionRate": 100,
   "verificationRate": 100,
   "outputQualityRate": 100,
-  "medianLatencyMs": 13593,
+  "medianLatencyMs": 8555,
   "auditPlatforms": [
     "darwin",
     "linux",
@@ -47,95 +46,115 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 24770,
+      "actualTokens": 22593,
       "economicalTokenTarget": 45000,
-      "predictedTokensLow": 31980,
-      "predictedTokensHigh": 85107,
+      "predictedTokensLow": 31561,
+      "predictedTokensHigh": 83993,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 5,
+      "toolCalls": 6,
       "providerAttempts": 1,
-      "elapsedMs": 18799,
+      "elapsedMs": 28688,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:23:39.769Z",
+          "at": "2026-08-27T14:16:29.842Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:39.778Z",
+          "at": "2026-08-27T14:16:29.844Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-23T03:23:39.782Z",
+          "at": "2026-08-27T14:16:29.844Z",
           "type": "tool_call",
-          "tool": "run_command"
+          "tool": "glob_files"
         },
         {
-          "at": "2026-08-23T03:23:39.828Z",
+          "at": "2026-08-27T14:16:29.846Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:23:39.829Z",
+          "at": "2026-08-27T14:16:29.847Z",
           "type": "tool_result",
-          "tool": "run_command",
+          "tool": "glob_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:23:45.870Z",
+          "at": "2026-08-27T14:16:30.654Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:45.876Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-23T03:23:45.914Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-23T03:23:45.929Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:23:45.933Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:23:47.341Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:23:47.342Z",
+          "at": "2026-08-27T14:16:30.657Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-23T03:23:47.492Z",
+          "at": "2026-08-27T14:16:30.668Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:23:50.662Z",
+          "at": "2026-08-27T14:16:35.128Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:50.664Z",
+          "at": "2026-08-27T14:16:35.129Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-27T14:16:35.133Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-27T14:16:38.637Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-27T14:16:38.638Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-27T14:16:38.640Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-27T14:16:39.230Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-27T14:16:39.231Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-27T14:16:39.331Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-08-27T14:16:51.591Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-27T14:16:51.591Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -143,15 +162,15 @@
       "artifact": {
         "kind": "files",
         "label": "Slug utility",
-        "url": "runs/latest/build/slug.mjs",
+        "url": "runs/north-mini-code/build/slug.mjs",
         "downloads": [
           {
             "label": "slug.mjs",
-            "url": "runs/latest/build/slug.mjs"
+            "url": "runs/north-mini-code/build/slug.mjs"
           },
           {
             "label": "slug.test.mjs",
-            "url": "runs/latest/build/slug.test.mjs"
+            "url": "runs/north-mini-code/build/slug.test.mjs"
           }
         ]
       }
@@ -162,200 +181,96 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 93167,
+      "actualTokens": 16951,
       "economicalTokenTarget": 38000,
-      "predictedTokensLow": 8986,
-      "predictedTokensHigh": 23915,
+      "predictedTokensLow": 31316,
+      "predictedTokensHigh": 83342,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 12,
+      "toolCalls": 5,
       "providerAttempts": 1,
-      "elapsedMs": 98155,
+      "elapsedMs": 62414,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 5,
       "outputQualityChecksTotal": 5,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:23:55.607Z",
+          "at": "2026-08-27T14:16:58.858Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:55.612Z",
+          "at": "2026-08-27T14:16:58.860Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-23T03:23:55.617Z",
+          "at": "2026-08-27T14:16:58.862Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:25.752Z",
+          "at": "2026-08-27T14:17:41.720Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:24:38.689Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:38.698Z",
+          "at": "2026-08-27T14:17:41.724Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-08-23T03:24:38.727Z",
+          "at": "2026-08-27T14:17:41.727Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-08-23T03:24:38.738Z",
+          "at": "2026-08-27T14:17:41.729Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-08-23T03:24:38.748Z",
+          "at": "2026-08-27T14:17:41.730Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:38.754Z",
+          "at": "2026-08-27T14:17:41.733Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:38.756Z",
+          "at": "2026-08-27T14:17:41.736Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:41.610Z",
+          "at": "2026-08-27T14:17:42.653Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:24:41.613Z",
-          "type": "tool_call",
-          "tool": "edit_file"
-        },
-        {
-          "at": "2026-08-23T03:24:41.631Z",
-          "type": "tool_result",
-          "tool": "edit_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:46.424Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:52.788Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:52.789Z",
-          "type": "tool_call",
-          "tool": "list_files"
-        },
-        {
-          "at": "2026-08-23T03:24:52.792Z",
+          "at": "2026-08-27T14:17:42.653Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-23T03:24:52.856Z",
-          "type": "tool_result",
-          "tool": "list_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:52.856Z",
+          "at": "2026-08-27T14:17:42.804Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:56.013Z",
+          "at": "2026-08-27T14:17:55.089Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:24:56.015Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:56.015Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:56.023Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:56.024Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:59.121Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:59.122Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:59.122Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:59.126Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:59.126Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:25:05.207Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:25:25.641Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:25:25.645Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-08-23T03:25:25.714Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:25:29.541Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:25:29.542Z",
+          "at": "2026-08-27T14:17:55.089Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -363,19 +278,19 @@
       "artifact": {
         "kind": "web",
         "label": "Responsive offline web build",
-        "url": "runs/latest/web/index.html",
+        "url": "runs/north-mini-code/web/index.html",
         "downloads": [
           {
             "label": "index.html",
-            "url": "runs/latest/web/index.html"
+            "url": "runs/north-mini-code/web/index.html"
           },
           {
             "label": "styles.css",
-            "url": "runs/latest/web/styles.css"
+            "url": "runs/north-mini-code/web/styles.css"
           },
           {
             "label": "app.js",
-            "url": "runs/latest/web/app.js"
+            "url": "runs/north-mini-code/web/app.js"
           }
         ]
       }
@@ -386,84 +301,96 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 18774,
+      "actualTokens": 13984,
       "economicalTokenTarget": 25000,
-      "predictedTokensLow": 8898,
-      "predictedTokensHigh": 23681,
+      "predictedTokensLow": 8680,
+      "predictedTokensHigh": 23100,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 4,
+      "toolCalls": 5,
       "providerAttempts": 1,
-      "elapsedMs": 9966,
+      "elapsedMs": 9543,
       "latencyTargetMs": 360000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:25:33.784Z",
+          "at": "2026-08-27T14:17:58.410Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:33.789Z",
+          "at": "2026-08-27T14:17:58.412Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-23T03:25:33.790Z",
+          "at": "2026-08-27T14:17:58.413Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-23T03:25:33.797Z",
+          "at": "2026-08-27T14:17:58.413Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-08-27T14:17:58.416Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:33.799Z",
+          "at": "2026-08-27T14:17:58.416Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:35.795Z",
+          "at": "2026-08-27T14:17:58.417Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-27T14:18:02.167Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:35.804Z",
+          "at": "2026-08-27T14:18:02.170Z",
           "type": "tool_call",
           "tool": "edit_file"
         },
         {
-          "at": "2026-08-23T03:25:35.830Z",
+          "at": "2026-08-27T14:18:02.172Z",
           "type": "tool_result",
           "tool": "edit_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:37.749Z",
+          "at": "2026-08-27T14:18:03.322Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:37.754Z",
+          "at": "2026-08-27T14:18:03.324Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-23T03:25:37.912Z",
+          "at": "2026-08-27T14:18:03.377Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:40.135Z",
+          "at": "2026-08-27T14:18:05.285Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:40.136Z",
+          "at": "2026-08-27T14:18:05.285Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -471,15 +398,15 @@
       "artifact": {
         "kind": "files",
         "label": "Math repair",
-        "url": "runs/latest/debug/math.mjs",
+        "url": "runs/north-mini-code/debug/math.mjs",
         "downloads": [
           {
             "label": "math.mjs",
-            "url": "runs/latest/debug/math.mjs"
+            "url": "runs/north-mini-code/debug/math.mjs"
           },
           {
             "label": "math.test.mjs",
-            "url": "runs/latest/debug/math.test.mjs"
+            "url": "runs/north-mini-code/debug/math.test.mjs"
           }
         ]
       }
@@ -490,43 +417,44 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 7653,
+      "actualTokens": 5306,
       "economicalTokenTarget": 8000,
-      "predictedTokensLow": 6990,
-      "predictedTokensHigh": 18602,
+      "predictedTokensLow": 6096,
+      "predictedTokensHigh": 16223,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 6220,
+      "elapsedMs": 5196,
       "latencyTargetMs": 180000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:25:45.206Z",
+          "at": "2026-08-27T14:18:09.757Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:45.211Z",
+          "at": "2026-08-27T14:18:09.759Z",
           "type": "tool_call",
           "tool": "grep_files"
         },
         {
-          "at": "2026-08-23T03:25:45.220Z",
+          "at": "2026-08-27T14:18:09.762Z",
           "type": "tool_result",
           "tool": "grep_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:47.182Z",
+          "at": "2026-08-27T14:18:11.307Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:47.183Z",
+          "at": "2026-08-27T14:18:11.307Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -534,11 +462,11 @@
       "artifact": {
         "kind": "markdown",
         "label": "search report",
-        "url": "runs/latest/notes/search.md",
+        "url": "runs/north-mini-code/notes/search.md",
         "downloads": [
           {
             "label": "search.md",
-            "url": "runs/latest/notes/search.md"
+            "url": "runs/north-mini-code/notes/search.md"
           }
         ]
       }
@@ -549,43 +477,44 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 11814,
+      "actualTokens": 8977,
       "economicalTokenTarget": 12000,
-      "predictedTokensLow": 11211,
-      "predictedTokensHigh": 36164,
+      "predictedTokensLow": 11344,
+      "predictedTokensHigh": 36592,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 17220,
+      "elapsedMs": 7567,
       "latencyTargetMs": 300000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:25:56.080Z",
+          "at": "2026-08-27T14:18:13.594Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:56.084Z",
+          "at": "2026-08-27T14:18:13.596Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-23T03:25:56.090Z",
+          "at": "2026-08-27T14:18:13.599Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:26:08.156Z",
+          "at": "2026-08-27T14:18:19.515Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:26:08.158Z",
+          "at": "2026-08-27T14:18:19.515Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -593,11 +522,11 @@
       "artifact": {
         "kind": "markdown",
         "label": "defender report",
-        "url": "runs/latest/notes/defender.md",
+        "url": "runs/north-mini-code/notes/defender.md",
         "downloads": [
           {
             "label": "defender.md",
-            "url": "runs/latest/notes/defender.md"
+            "url": "runs/north-mini-code/notes/defender.md"
           }
         ]
       }
@@ -608,11 +537,11 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 3850,
+      "actualTokens": 1862,
       "economicalTokenTarget": 8000,
       "predictedTokensLow": 1,
       "predictedTokensHigh": 8000,
-      "elapsedMs": 3475,
+      "elapsedMs": 1324,
       "latencyTargetMs": 120000,
       "outputQualityChecksPassed": 2,
       "outputQualityChecksTotal": 2,
@@ -620,14 +549,15 @@
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 0,
+      "failureReasons": [],
       "artifact": {
         "kind": "markdown",
         "label": "resume report",
-        "url": "runs/latest/notes/resume.md",
+        "url": "runs/north-mini-code/notes/resume.md",
         "downloads": [
           {
             "label": "resume.md",
-            "url": "runs/latest/notes/resume.md"
+            "url": "runs/north-mini-code/notes/resume.md"
           }
         ]
       }
@@ -637,59 +567,59 @@
     {
       "platform": "darwin",
       "architecture": "arm64",
-      "generatedAt": "2026-08-26T04:04:38.194Z",
+      "generatedAt": "2026-08-27T14:14:28.639Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 300,
           "failed": 0,
-          "durationMs": 2582
+          "durationMs": 3483
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 200,
           "failed": 0,
-          "durationMs": 12037
+          "durationMs": 10131
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 7428
+          "durationMs": 8072
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 1549
+          "durationMs": 2561
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 107,
           "failed": 0,
-          "durationMs": 1898
+          "durationMs": 3058
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 1318
+          "durationMs": 1876
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 1676
+          "durationMs": 1903
         }
       ],
-      "historyStartupP50Ms": 71
+      "historyStartupP50Ms": 95
     },
     {
       "platform": "linux",
@@ -751,59 +681,59 @@
     {
       "platform": "win32",
       "architecture": "x64",
-      "generatedAt": "2026-08-26T04:05:50.074Z",
+      "generatedAt": "2026-08-27T14:15:43.621Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 300,
           "failed": 0,
-          "durationMs": 3864
+          "durationMs": 3919
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 200,
           "failed": 0,
-          "durationMs": 5265
+          "durationMs": 5729
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 16054
+          "durationMs": 25616
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 3275
+          "durationMs": 3176
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 107,
           "failed": 0,
-          "durationMs": 3484
+          "durationMs": 3596
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 2155
+          "durationMs": 2164
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 2669
+          "durationMs": 2733
         }
       ],
-      "historyStartupP50Ms": 156
+      "historyStartupP50Ms": 160
     }
   ]
 }
