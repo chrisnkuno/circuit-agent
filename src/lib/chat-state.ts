@@ -1,5 +1,5 @@
 import type { TurnCostPoint } from "./cost-chart";
-import type { IpcEvent } from "./settings";
+import type { ApprovalPreview, IpcEvent } from "./settings";
 
 /**
  * What a stream of sidecar events does to the transcript — as a pure reduction.
@@ -21,7 +21,14 @@ export type ChatMessage = {
   content: string;
 };
 
-export type ApprovalState = { requestId: string; toolName: string; summary: string };
+export type ApprovalState = {
+  requestId: string;
+  toolName: string;
+  summary: string;
+  effect?: "none" | "workspace" | "external";
+  safety?: { sensitive: boolean; categories: string[]; reasons: string[] };
+  preview?: ApprovalPreview;
+};
 
 /**
  * One thing the agent did, as a single entry that resolves — not two lines.
@@ -60,6 +67,11 @@ export type ChatState = {
   /** Per-turn spend, for the charts. Empty until a turn has finished. */
   costTurns?: TurnCostPoint[];
   error: string | null;
+  /** Latest working-tree summary and a monotonic signal for panels that need to re-read it. */
+  diffStat?: string;
+  workspaceRevision?: number;
+  /** The live sentence under Activity while a turn is running. */
+  progress?: string;
   /**
    * How the last turn ended.
    *
@@ -127,7 +139,14 @@ export function applyChatEvent(state: ChatState, event: IpcEvent, now: () => num
     case "approval_needed":
       return {
         ...state,
-        approval: { requestId: event.requestId, toolName: event.toolName, summary: event.summary },
+        approval: {
+          requestId: event.requestId,
+          toolName: event.toolName,
+          summary: event.summary,
+          ...(event.effect ? { effect: event.effect } : {}),
+          ...(event.safety ? { safety: event.safety } : {}),
+          ...(event.preview ? { preview: event.preview } : {}),
+        },
       };
 
     case "cost":
@@ -138,15 +157,18 @@ export function applyChatEvent(state: ChatState, event: IpcEvent, now: () => num
         ...(event.budgetFraction === undefined ? {} : { budgetFraction: event.budgetFraction }),
       };
 
+    case "workspace_changed":
+      return { ...state, diffStat: event.diffStat, workspaceRevision: (state.workspaceRevision ?? 0) + 1 };
+
     case "error":
       return { ...state, error: event.message };
 
     case "turn_status": {
-      if (event.status === "running") return state;
+      if (event.status === "running") return { ...state, progress: event.summary ?? state.progress ?? "Working…" };
       // How the turn ended, and that it ended, recorded before anything is done with its text: the
       // suggestions read both, and a status carrying no summary writes no message, so this is the
       // only place either fact exists.
-      const ended: ChatState = { ...state, lastStatus: event.status, turns: (state.turns ?? 0) + 1 };
+      const ended: ChatState = { ...state, progress: undefined, lastStatus: event.status, turns: (state.turns ?? 0) + 1 };
       // The turn is over, so whatever was streaming is now final: it is re-filed under a stable id
       // so the next turn's deltas cannot append to it. Text already produced survives a cancelled
       // or failed turn — losing a half-written answer because it was interrupted is the worst

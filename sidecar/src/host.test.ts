@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { startAnthropicStub, type AnthropicStub } from "../test/anthropic-stub.js";
 import { NovaHost } from "./host.js";
 import type { IpcEvent, NovaSettings } from "./protocol.js";
@@ -19,6 +21,7 @@ import type { IpcEvent, NovaSettings } from "./protocol.js";
 
 let stub: AnthropicStub;
 let roots: string[] = [];
+const exec = promisify(execFile);
 
 const settings = (): NovaSettings => ({
   provider: "anthropic",
@@ -40,6 +43,14 @@ afterAll(async () => {
 async function tempProject(name: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `nova-tabs-${name}-`));
   roots.push(root);
+  return root;
+}
+
+async function gitProject(name: string): Promise<string> {
+  const root = await tempProject(name);
+  await fs.writeFile(path.join(root, "app.ts"), "export const value = 1;\n", "utf8");
+  await exec("git", ["init", "-q"], { cwd: root });
+  await exec("git", ["add", "app.ts"], { cwd: root });
   return root;
 }
 
@@ -219,6 +230,93 @@ describe("two tabs in one window", () => {
  * only the second one is worth anything to the person who asked for the work.
  */
 describe("files a turn creates", () => {
+  it("streams named work and returns the actual patch, then announces the refreshed tree", async () => {
+    const { request, events } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await gitProject("live-diff");
+    const opened = await request({ type: "session.open", root, mode: "auto" }) as { tabId: string };
+
+    stub.enqueue({ kind: "tool_call", toolName: "edit_file", input: { path: "app.ts", oldText: "value = 1", newText: "value = 2" } });
+    stub.enqueue({ kind: "text", text: "Updated app.ts." });
+    await request({ type: "turn.send", objective: "update app.ts", tabId: opened.tabId });
+
+    expect(await fs.readFile(path.join(root, "app.ts"), "utf8")).toContain("value = 2");
+    expect(forTab(events, opened.tabId)).toContainEqual(expect.objectContaining({ type: "checkpoint" }));
+    const patch = await request({ type: "diff.get", tabId: opened.tabId }) as { diff: string };
+    expect(patch.diff).toContain("diff --git a/app.ts b/app.ts");
+    expect(patch.diff).toContain("+export const value = 2;");
+
+    const tabEvents = forTab(events, opened.tabId);
+    expect(tabEvents).toContainEqual(expect.objectContaining({ type: "tool_call", name: "edit_file", summary: "app.ts" }));
+    expect(tabEvents).toContainEqual(expect.objectContaining({ type: "turn_status", status: "running", summary: "edit_file: app.ts" }));
+    expect(tabEvents).toContainEqual(expect.objectContaining({ type: "workspace_changed", diffStat: expect.stringContaining("app.ts") }));
+  }, 60_000);
+
+  it("restores the durable human transcript when a session is resumed", async () => {
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await tempProject("resume-transcript");
+    const opened = await request({ type: "session.open", root }) as { tabId: string; sessionId: string };
+    stub.enqueue({ kind: "text", text: "The remembered answer." });
+    await request({ type: "turn.send", objective: "Remember this request", tabId: opened.tabId });
+
+    const resumed = await request({ type: "session.resume", root, sessionId: opened.sessionId, tabId: opened.tabId }) as {
+      transcript: Array<{ role: string; content: string }>;
+    };
+    expect(resumed.transcript).toEqual([
+      expect.objectContaining({ role: "user", content: "Remember this request" }),
+      expect.objectContaining({ role: "assistant", content: "The remembered answer." }),
+    ]);
+  }, 60_000);
+
+  it("supports a code-only undo and refreshes the desktop working-tree signal", async () => {
+    const { request, events } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await gitProject("scoped-undo");
+    const opened = await request({ type: "session.open", root, mode: "auto" }) as { tabId: string };
+    stub.enqueue({ kind: "tool_call", toolName: "edit_file", input: { path: "app.ts", oldText: "value = 1", newText: "value = 2" } });
+    stub.enqueue({ kind: "text", text: "Changed it." });
+    await request({ type: "turn.send", objective: "change the value", tabId: opened.tabId });
+
+    const undone = await request({ type: "undo", scope: "code", tabId: opened.tabId }) as { undone: boolean; transcript: unknown[]; diffStat: string };
+    expect(undone.undone).toBe(true);
+    expect(undone.transcript).toEqual([]);
+    expect(await fs.readFile(path.join(root, "app.ts"), "utf8")).toContain("value = 1");
+    expect(forTab(events, opened.tabId).at(-1)).toEqual(expect.objectContaining({ type: "workspace_changed" }));
+  }, 60_000);
+
+  it("forwards the exact proposed edit before the approval can be answered", async () => {
+    const { request, events } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const root = await gitProject("approval-preview");
+    const opened = await request({ type: "session.open", root, mode: "build" }) as { tabId: string };
+    stub.enqueue({ kind: "tool_call", toolName: "edit_file", input: { path: "app.ts", oldText: "value = 1", newText: "value = 2" } });
+    const turn = request({ type: "turn.send", objective: "change the value", tabId: opened.tabId });
+
+    let approval: Extract<IpcEvent, { type: "approval_needed" }> | undefined;
+    for (let attempt = 0; attempt < 100 && !approval; attempt += 1) {
+      approval = forTab(events, opened.tabId).find((event): event is Extract<IpcEvent, { type: "approval_needed" }> => event.type === "approval_needed");
+      if (!approval) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(approval).toEqual(expect.objectContaining({
+      toolName: "edit_file",
+      effect: "workspace",
+      preview: { toolName: "edit_file", path: "app.ts", oldText: "value = 1", newText: "value = 2" },
+    }));
+    await request({ type: "approval.respond", requestId: approval!.requestId, decision: "deny" });
+    await turn;
+    expect(await fs.readFile(path.join(root, "app.ts"), "utf8")).toContain("value = 1");
+  }, 60_000);
+
+  it("reports the tools this mode can actually call", async () => {
+    const { request } = bootHost();
+    await request({ type: "settings.set", settings: settings() });
+    const opened = await request({ type: "session.open", root: await tempProject("inspect-tools"), mode: "plan" }) as { tabId: string };
+    const result = await request({ type: "tools.get", tabId: opened.tabId }) as { tools: Array<{ name: string; effect: string; provenance: { kind: string } }> };
+    expect(result.tools).toContainEqual(expect.objectContaining({ name: "read_file", effect: "none", provenance: { kind: "built-in" } }));
+    expect(result.tools.some((tool) => tool.name === "write_file")).toBe(false);
+  }, 60_000);
+
   it("writes into the project that was opened, on this machine", async () => {
     const { request } = bootHost();
     await request({ type: "settings.set", settings: settings() });

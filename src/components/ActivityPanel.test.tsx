@@ -26,13 +26,12 @@ describe("the activity panel", () => {
   });
 
   it("says what state a call is in, in words as well as colour", () => {
-    render(<ActivityPanel busy entries={[entry({ id: "1", status: "running" })]} />);
+    render(<ActivityPanel busy progress="Running tests…" entries={[entry({ id: "1", status: "running" })]} />);
     expect(screen.getByText("running")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Running tests");
   });
 
-  it("shows the output of a call that failed, and not of one that worked", () => {
-    // A preview beside every successful call is the wall of text this panel exists to remove from
-    // the transcript; beside a failure it is the reason you opened the panel.
+  it("keeps successful output available without expanding it into the transcript", () => {
     const { container } = render(
       <ActivityPanel busy={false} entries={[
         entry({ id: "1", status: "failed", preview: "exit 1" }),
@@ -40,7 +39,10 @@ describe("the activity panel", () => {
       ]} />,
     );
     const previews = [...container.querySelectorAll(".activity-preview")].map((node) => node.textContent);
-    expect(previews).toEqual(["exit 1"]);
+    expect(previews).toEqual(["exit 1", "exit 0"]);
+    const details = [...container.querySelectorAll("details")];
+    expect(details[0].hasAttribute("open")).toBe(true);
+    expect(details[1].hasAttribute("open")).toBe(false);
   });
 
   it("explains itself before anything has run", () => {

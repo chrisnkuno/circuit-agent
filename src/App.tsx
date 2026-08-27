@@ -35,7 +35,7 @@ function UpdateBanner({ status, onInstall }: { status: UpdateStatus; onInstall: 
 }
 
 /** Kept in step with the same sentence the Rust side sends to any request left in flight. */
-const SIDECAR_STOPPED = "Nova's engine stopped unexpectedly. Your session is saved — send another message to restart it.";
+const SIDECAR_STOPPED = "Nova's engine stopped unexpectedly. Your saved sessions are safe; restart the engine, then resume the one you need.";
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -43,6 +43,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(true);
   const [settings, setSettings] = useState<NovaSettings>(defaultSettings());
   const [bootError, setBootError] = useState<string | null>(null);
+  const [restartingEngine, setRestartingEngine] = useState(false);
   /**
    * Sidecar events waiting to be folded into the transcript.
    *
@@ -182,6 +183,23 @@ export default function App() {
     setShowSettings(false);
   }
 
+  /** Restarts the executable and re-applies credentials; Chat then restores the last project. */
+  async function restartEngine() {
+    if (restartingEngine) return;
+    setRestartingEngine(true);
+    try {
+      await ensureSidecar();
+      await pushSettings(settings);
+      setSidecarReady(true);
+      setBootError(null);
+    } catch (error) {
+      setSidecarReady(false);
+      setBootError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRestartingEngine(false);
+    }
+  }
+
   if (!ready) {
     return (
       <div className="settings-hero">
@@ -223,9 +241,12 @@ export default function App() {
         <div className="settings-card">
           <h1>Nova</h1>
           <p className="error-banner">{bootError}</p>
-          <button className="btn primary" type="button" onClick={() => setShowSettings(true)}>
-            Open settings
-          </button>
+          <div className="btn-group">
+            <button className="btn primary" type="button" disabled={restartingEngine} onClick={() => void restartEngine()}>
+              {restartingEngine ? "Restarting…" : "Restart engine"}
+            </button>
+            <button className="btn ghost" type="button" onClick={() => setShowSettings(true)}>Open settings</button>
+          </div>
         </div>
       </div>
     );

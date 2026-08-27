@@ -83,8 +83,9 @@ describe("a streamed answer", () => {
   it("does not settle anything while the turn is still running", () => {
     const streaming = applyChatEvents(fresh(), [delta("mid")], clock);
     const after = applyChatEvent(streaming, status("running"), clock);
-    expect(after).toBe(streaming); // same object: nothing to repaint
+    expect(after.progress).toBe("Working…");
     expect(after.messages[0].id).toBe(STREAMING_ID);
+    expect(after.streaming).toBe("mid");
   });
 });
 
@@ -95,6 +96,20 @@ describe("a streamed answer", () => {
  * result are one thing rather than two.
  */
 describe("what the agent did", () => {
+  it("keeps the current engine phase visible while a turn is running", () => {
+    let state = applyChatEvent(fresh(), status("running", "Running tests…"), clock);
+    expect(state.progress).toBe("Running tests…");
+    state = applyChatEvent(state, status("completed", "Done."), clock);
+    expect(state.progress).toBeUndefined();
+  });
+
+  it("records working-tree refreshes without adding noise to the transcript", () => {
+    const state = applyChatEvent(fresh(), { type: "workspace_changed", diffStat: " src/app.ts | 2 +-" } as IpcEvent, clock);
+    expect(state.diffStat).toContain("src/app.ts");
+    expect(state.workspaceRevision).toBe(1);
+    expect(state.messages).toEqual([]);
+  });
+
   it("records a call with its summary, out of the conversation", () => {
     const state = applyChatEvent(fresh(), { type: "tool_call", toolCallId: "a", name: "read_file", summary: "app.ts" } as IpcEvent, clock);
     expect(state.messages).toHaveLength(0);
@@ -161,6 +176,15 @@ describe("approvals", () => {
   it("does not add a transcript message — an approval is a question, not output", () => {
     const state = applyChatEvent(fresh(), { type: "approval_needed", requestId: "r", toolName: "a", summary: "s" } as IpcEvent, clock);
     expect(state.messages).toEqual([]);
+  });
+
+  it("keeps the exact change preview and safety reason for the approval dialog", () => {
+    const preview = { toolName: "write_file" as const, path: "src/new.ts", content: "export {}" };
+    const safety = { sensitive: true, categories: ["credential"], reasons: ["credential path"] };
+    const state = applyChatEvent(fresh(), {
+      type: "approval_needed", requestId: "r", toolName: "write_file", summary: "write src/new.ts", preview, safety, effect: "workspace",
+    } as IpcEvent, clock);
+    expect(state.approval).toEqual(expect.objectContaining({ preview, safety, effect: "workspace" }));
   });
 });
 

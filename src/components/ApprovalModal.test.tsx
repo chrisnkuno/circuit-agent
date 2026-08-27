@@ -76,4 +76,25 @@ describe("the approval dialog", () => {
     view.rerender(<ApprovalModal approval={{ ...approval, requestId: "r2" }} onRespond={() => {}} />);
     expect(document.activeElement?.getAttribute("role")).toBe("alertdialog");
   });
+
+  it("shows the exact proposed file replacement before a decision", () => {
+    render(<ApprovalModal approval={{
+      ...approval,
+      toolName: "edit_file",
+      preview: { toolName: "edit_file", path: "src/app.ts", oldText: "const value = 1", newText: "const value = 2" },
+    }} onRespond={() => {}} />);
+    expect(screen.getByRole("heading", { name: "Exact proposed change" })).toBeTruthy();
+    const change = screen.getByText(/@@ proposed replacement @@/).textContent ?? "";
+    expect(change).toContain("-const value = 1");
+    expect(change).toContain("+const value = 2");
+  });
+
+  it("states why the core classified an action as sensitive", () => {
+    render(<ApprovalModal approval={{
+      ...approval,
+      safety: { sensitive: true, categories: ["credential"], reasons: ["writes a credential file"] },
+    }} onRespond={() => {}} />);
+    expect(screen.getByText("Sensitive action")).toBeTruthy();
+    expect(screen.getByText("writes a credential file")).toBeTruthy();
+  });
 });

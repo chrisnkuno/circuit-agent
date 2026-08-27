@@ -10,6 +10,14 @@ import type { NovaMode } from "@circuit-nova/nova-core/nova-cli/permissions";
 
 export type { NovaMode };
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
+export type RestoreScope = "code" | "conversation" | "both";
+
+/** The durable conversation projected into the window when a session is resumed. */
+export type TranscriptMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
 
 /**
  * The providers this app offers, in the order the picker shows them.
@@ -141,11 +149,12 @@ export type IpcRequest =
    * in this protocol that should have an ambiguous answer.
    */
   | { id: string; type: "approval.respond"; requestId: string; decision: PermissionDecision }
-  | ({ id: string; type: "undo" } & TabScoped)
+  | ({ id: string; type: "undo"; scope?: RestoreScope } & TabScoped)
   | ({ id: string; type: "cancel" } & TabScoped)
   | ({ id: string; type: "cost.get" } & TabScoped)
   | ({ id: string; type: "diff.get" } & TabScoped)
   | ({ id: string; type: "todos.get" } & TabScoped)
+  | ({ id: string; type: "tools.get" } & TabScoped)
   | ({ id: string; type: "scan.secrets"; include?: string } & TabScoped)
   | ({ id: string; type: "files.list"; pattern?: string } & TabScoped)
   | ({ id: string; type: "files.read"; path: string; limit?: number } & TabScoped)
@@ -196,9 +205,16 @@ export type IpcEvent =
       summary: string;
       actionDigest: string;
       scopeKey: string;
+      effect?: "none" | "workspace" | "external";
+      safety?: { sensitive: boolean; categories: string[]; reasons: string[] };
+      preview?:
+        | { toolName: "write_file"; path: string; content: string }
+        | { toolName: "edit_file"; path: string; oldText: string; newText: string };
     } & TabTagged)
   | ({ type: "turn_status"; status: string; summary?: string } & TabTagged)
   | ({ type: "cost"; report: string; displayTotal?: string; budgetFraction?: number } & TabTagged)
+  /** Latest git summary after a turn; also acts as the refresh revision for diff and file panels. */
+  | ({ type: "workspace_changed"; diffStat: string } & TabTagged)
   | ({ type: "checkpoint"; id: string; label?: string } & TabTagged)
   | ({ type: "error"; message: string } & TabTagged)
   | { type: "ready" };

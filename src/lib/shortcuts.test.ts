@@ -26,6 +26,7 @@ describe("matching a keypress to an action", () => {
       expect(matchShortcut({ key, typing: true })).toBeUndefined();
     }
     expect(matchShortcut({ key: "m", ctrlKey: true })).toBe("models");
+    expect(matchShortcut({ key: "g", ctrlKey: true })).toBe("palette");
     expect(matchShortcut({ key: "d", ctrlKey: true })).toBe("diff");
     expect(matchShortcut({ key: "z", ctrlKey: true })).toBe("undo");
     expect(matchShortcut({ key: "/", ctrlKey: true })).toBe("focus-composer");
@@ -71,6 +72,7 @@ describe("the documented list", () => {
       matchShortcut({ key: "F1" }),
       matchShortcut({ key: "/", ctrlKey: true }),
       matchShortcut({ key: "m", ctrlKey: true }),
+      matchShortcut({ key: "g", ctrlKey: true }),
       matchShortcut({ key: "d", ctrlKey: true }),
       matchShortcut({ key: "p", ctrlKey: true }),
       matchShortcut({ key: "z", ctrlKey: true }),

@@ -44,12 +44,17 @@ const WRITING_TOOLS = new Set(["write_file", "edit_file", "deploy_app"]);
  * that failed changed nothing, and offering to review it would send the reader to an empty diff.
  */
 export function changedFileCount(activity: readonly ActivityEntry[]): number {
+  return changedFilePaths(activity).length;
+}
+
+/** Successful paths the engine reported changing, in first-touch order. */
+export function changedFilePaths(activity: readonly ActivityEntry[]): string[] {
   const touched = new Set<string>();
   for (const entry of activity) {
     if (!WRITING_TOOLS.has(entry.name) || entry.status !== "ok") continue;
     touched.add(entry.summary ?? entry.id);
   }
-  return touched.size;
+  return [...touched];
 }
 
 export type DesktopSessionState = {

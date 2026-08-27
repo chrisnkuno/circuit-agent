@@ -6,7 +6,7 @@
       "name": "nova-desktop",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.116.0",
-        "@circuit-nova/nova-core": "^0.11.0",
+        "@circuit-nova/nova-core": "^0.12.0",
         "@radix-ui/react-dialog": "^1.1.23",
         "@radix-ui/react-dropdown-menu": "^2.1.24",
         "@radix-ui/react-popover": "^1.1.23",
@@ -85,7 +85,7 @@
 
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.14.0", "", {}, "sha512-C3UGsiCwSprE2NKIIFA3hCDlpXTMCAXRZuEVp88L1GY36Y41+rYL5fryE+nOFhp4p4JPQvdV8PQ4DWgHgeTE+w=="],
 
-    "@circuit-nova/nova-core": ["@circuit-nova/nova-core@0.11.0", "", { "dependencies": { "openai": "^6.49.0", "zod": "^4.4.3" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.30.0", "e2b": ">=2.0.0" }, "optionalPeers": ["@anthropic-ai/sdk", "e2b"] }, "sha512-5rHrIhTBb4og3b9R6f7uj6O/e8ISnpo/8iVTs50TgKD2M9BtjLkGfbYIrsX4Wntc/1KcYyM7CQ0pGT76OZW25A=="],
+    "@circuit-nova/nova-core": ["@circuit-nova/nova-core@0.12.0", "", { "dependencies": { "openai": "^6.49.0", "zod": "^4.4.3" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.30.0", "e2b": ">=2.0.0" }, "optionalPeers": ["@anthropic-ai/sdk", "e2b"] }, "sha512-l949cif9NM7CFi6oAoBnuHIXFznNc4PAN4xvI5ibxshRTfiTK6x32iNmhV4QHlh9kckzOPMiKu7t87/y4yjMmA=="],
 
     "@connectrpc/connect": ["@connectrpc/connect@2.1.2", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA=="],
 

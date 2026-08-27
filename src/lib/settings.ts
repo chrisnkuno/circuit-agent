@@ -8,6 +8,8 @@ import type { NovaMode } from "@circuit-nova/nova-core/nova-cli/permissions";
 
 export type { NovaMode };
 export type PermissionDecision = "allow" | "allow_always" | "deny" | "deny_always";
+export type RestoreScope = "code" | "conversation" | "both";
+export type TranscriptMessage = { id: string; role: "user" | "assistant"; content: string };
 
 export const CIRCUITNOTION_DEFAULT_BASE_URL = "https://api.circuitnotion.com/v1";
 
@@ -76,12 +78,20 @@ export type IpcEvent =
       summary: string;
       actionDigest: string;
       scopeKey: string;
+      effect?: "none" | "workspace" | "external";
+      safety?: { sensitive: boolean; categories: string[]; reasons: string[] };
+      preview?: ApprovalPreview;
     } & TabTagged)
   | ({ type: "turn_status"; status: string; summary?: string } & TabTagged)
   | ({ type: "cost"; report: string; displayTotal?: string; budgetFraction?: number } & TabTagged)
+  | ({ type: "workspace_changed"; diffStat: string } & TabTagged)
   | ({ type: "checkpoint"; id: string; label?: string } & TabTagged)
   | ({ type: "error"; message: string } & TabTagged)
   | { type: "ready" };
+
+export type ApprovalPreview =
+  | { toolName: "write_file"; path: string; content: string }
+  | { toolName: "edit_file"; path: string; oldText: string; newText: string };
 
 export function defaultSettings(): NovaSettings {
   return {

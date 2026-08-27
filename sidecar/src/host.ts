@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -30,7 +31,7 @@ import { addMemory, forgetMemory, loadMemories, memoryFile, type MemoryKind, typ
 import { billingFromEnvironment, BillingError } from "@circuit-nova/nova-core/nova-cli/billing";
 import { verifyCredentials } from "./verify.js";
 import { TabRegistry } from "./tabs.js";
-import type { IpcEvent, IpcRequest, ModelsListResult, NovaSettings, ProviderId } from "./protocol.js";
+import type { IpcEvent, IpcRequest, ModelsListResult, NovaSettings, ProviderId, TranscriptMessage } from "./protocol.js";
 import { DEFAULT_MODELS, DESKTOP_PROVIDER_IDS } from "./protocol.js";
 import { credentialsFor, settingsToCatalogEnvironment, settingsToEnvironment, validateApiKey } from "./settings.js";
 import { fetchableProviders, loadLiveModels } from "@circuit-nova/nova-core/providers/model-fetch";
@@ -46,6 +47,47 @@ function formatProviderError(raw: string): string {
     return "Rate-limited by the provider. Wait a moment and try again, or switch to a different model in Settings.";
   }
   return raw;
+}
+
+/** The useful part of a tool call, matching the detail the CLI keeps beside its live tool row. */
+function describeRuntimeTool(name: string, args: Record<string, unknown>): string {
+  const text = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = args[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return "";
+  };
+  switch (name) {
+    case "read_file": case "write_file": case "edit_file": return text("path");
+    case "list_files": return text("path", "pattern") || "project files";
+    case "grep_files": return [text("query"), text("path")].filter(Boolean).join(" in ");
+    case "run_command": return text("command");
+    case "web_search": case "deep_research": return text("query");
+    case "web_fetch": return text("url");
+    case "delegate_task": return text("task");
+    default: return text("path", "command", "query", "url", "task", "name");
+  }
+}
+
+/** Only the human conversation, never hidden prompts or bulky tool protocol messages. */
+function transcriptFor(record?: SessionRecord): TranscriptMessage[] {
+  if (!record) return [];
+  return record.messages.flatMap((message, index) => {
+    if (message.internal || message.role === "system" || message.role === "tool" || !message.content.trim()) return [];
+    return [{ id: `restored-${index}`, role: message.role, content: message.content }];
+  });
+}
+
+/** Read-only Git call used only by the 0.12.0 diff compatibility path below. */
+function readGit(args: string[], cwd: string): Promise<{ exitCode: number; stdout: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.on("error", () => resolve({ exitCode: 127, stdout }));
+    child.on("close", (code) => resolve({ exitCode: code ?? 0, stdout }));
+  });
 }
 
 type PendingApproval = {
@@ -106,6 +148,8 @@ type TabSlot = {
    * would answer the first and lose the second.
    */
   pendingApprovals: Set<string>;
+  /** Latest core checkpoint, retained so this build can recover if an older core cannot render it. */
+  checkpointTree?: string;
 };
 
 export class NovaHost {
@@ -215,7 +259,7 @@ export class NovaHost {
       case "approval.respond":
         return this.respondApproval(request.requestId, request.decision);
       case "undo":
-        return await this.undo(request.tabId);
+        return await this.undo(request.scope, request.tabId);
       case "cancel":
         // Cancels only the tab it was asked about. A stop button that reached across tabs would end
         // work the user can see is running somewhere else on screen.
@@ -226,9 +270,25 @@ export class NovaHost {
       case "billing.balance":
         return await this.balanceSnapshot();
       case "diff.get":
-        return { diff: (await this.maybeSlot(request.tabId)?.client.diffStat()) ?? "" };
+        // The panel renders a patch, not a one-line --stat summary. Returning diffStat here made a
+        // working session look as though it had no inspectable code even after files changed.
+        return { diff: await this.diffPatch(request.tabId) };
       case "todos.get":
         return { todos: this.maybeSlot(request.tabId)?.client.todos ?? [] };
+      case "tools.get": {
+        const inspected = await this.slot(request.tabId).client.inspectTools();
+        return {
+          tools: inspected.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            effect: tool.effect,
+            requiresApproval: tool.requiresApproval,
+            provenance: tool.provenance ?? { kind: "built-in" },
+          })),
+          hooks: inspected.hooks,
+          providerIds: inspected.providerIds,
+        };
+      }
       case "files.list":
         // Through the workspace, so a sandboxed session lists the sandbox's files and not this
         // machine's. Read-only and free, like the scan.
@@ -443,6 +503,8 @@ export class NovaHost {
     // Skipped when it was already retired above, so nothing is released twice.
     if (entry.previous && entry.previous !== retiredFirst) await this.retireSlot(entry.previous);
 
+    const diffStat = await client.diffStat().catch(() => "");
+
     return {
       tabId: entry.tabId,
       sessionId: opened.sessionId,
@@ -453,6 +515,8 @@ export class NovaHost {
       model: resolved.model,
       provider: resolved.spec.id,
       title: slot.title,
+      transcript: transcriptFor(record),
+      diffStat,
     };
   }
 
@@ -594,7 +658,7 @@ export class NovaHost {
     if (!entry) return;
     const tag = { tabId: entry.tabId, sessionId: notification.sessionId };
     if (notification.type === "agent_event") {
-      this.forwardNovaEvent(notification.event, tag);
+      this.forwardNovaEvent(notification.event, tag, entry.payload);
     } else if (notification.type === "approval_requested") {
       entry.payload.pendingApprovals.add(notification.request.id);
       this.emit({
@@ -606,12 +670,16 @@ export class NovaHost {
         summary: notification.request.summary,
         actionDigest: notification.request.actionDigest,
         scopeKey: notification.request.scopeKey,
+        effect: notification.request.effect,
+        safety: notification.request.safety,
+        ...(notification.request.preview ? { preview: notification.request.preview } : {}),
       });
     }
   }
 
-  private forwardNovaEvent(event: NovaEvent, tag: { tabId: string; sessionId: string }) {
+  private forwardNovaEvent(event: NovaEvent, tag: { tabId: string; sessionId: string }, slot: TabSlot) {
     if (event.type === "checkpoint") {
+      slot.checkpointTree = event.checkpoint.tree;
       this.emit({ ...tag, type: "checkpoint", id: event.checkpoint.tree, label: event.checkpoint.label });
       return;
     }
@@ -619,13 +687,21 @@ export class NovaHost {
     const runtime = event.event;
     if (runtime.type === "assistant_delta") {
       this.emit({ ...tag, type: "assistant_delta", text: runtime.text });
+    } else if (runtime.type === "provider_retry") {
+      this.emit({ ...tag, type: "turn_status", status: "running", summary: `Provider retry ${runtime.nextAttempt}/${runtime.maxAttempts}…` });
+    } else if (runtime.type === "model_turn") {
+      const tools = runtime.toolCallCount === 0 ? "writing the response" : `preparing ${runtime.toolCallCount} tool ${runtime.toolCallCount === 1 ? "call" : "calls"}`;
+      this.emit({ ...tag, type: "turn_status", status: "running", summary: `Model turn ${runtime.iteration}: ${tools}…` });
     } else if (runtime.type === "tool_call") {
+      const summary = describeRuntimeTool(runtime.toolName, runtime.arguments);
       this.emit({
         ...tag,
         type: "tool_call",
         toolCallId: runtime.toolCallId,
         name: runtime.toolName,
+        ...(summary ? { summary } : {}),
       });
+      this.emit({ ...tag, type: "turn_status", status: "running", summary: summary ? `${runtime.toolName}: ${summary}` : `Running ${runtime.toolName}…` });
     } else if (runtime.type === "tool_result") {
       this.emit({
         ...tag,
@@ -633,8 +709,13 @@ export class NovaHost {
         toolCallId: runtime.toolCallId,
         name: runtime.toolName,
         ok: !runtime.isError,
-        preview: runtime.content.slice(0, 400),
+        // Enough to prove a check ran and show its outcome, still bounded so a verbose command
+        // cannot turn the renderer event queue into a copy of its complete log.
+        preview: runtime.content.slice(0, 1_600),
       });
+      this.emit({ ...tag, type: "turn_status", status: "running", summary: runtime.isError ? `${runtime.toolName} failed` : `${runtime.toolName} finished` });
+    } else if (runtime.type === "runtime_stop") {
+      this.emit({ ...tag, type: "turn_status", status: "running", summary: runtime.summary });
     }
   }
 
@@ -654,7 +735,7 @@ export class NovaHost {
       throw new Error("Session budget exhausted. Raise the budget in Settings or start a new session.");
     }
     slot.running = true;
-    this.emit({ ...tag, type: "turn_status", status: "running" });
+    this.emit({ ...tag, type: "turn_status", status: "running", summary: "Reading the project and planning the work…" });
     const started = Date.now();
     try {
       const result = await slot.client.send(objective, commandId);
@@ -684,6 +765,11 @@ export class NovaHost {
           }
         }
       }
+      // The CLI asks the same client for this after a turn. Emit it before completion so the
+      // window's Changes panel and an already-open diff refresh in the same event batch as the
+      // answer, rather than waiting for the user to close and reopen something.
+      const diffStat = await slot.client.diffStat().catch(() => "");
+      this.emit({ ...tag, type: "workspace_changed", diffStat });
       this.emit({ ...tag, type: "turn_status", status: result.status, summary: result.summary });
       return {
         status: result.status,
@@ -706,9 +792,14 @@ export class NovaHost {
     }
   }
 
-  private async undo(tabId?: string) {
-    const checkpoint = await this.slot(tabId).client.undo();
-    return { undone: !!checkpoint, checkpoint };
+  private async undo(scope: "code" | "conversation" | "both" = "both", tabId?: string) {
+    const slot = this.slot(tabId);
+    const checkpoint = await slot.client.undo(scope);
+    const record = scope === "code" ? undefined : await loadSession(slot.root, slot.client.sessionId);
+    const diffStat = await slot.client.diffStat().catch(() => "");
+    const entry = this.tabs.resolve(tabId);
+    this.emit({ tabId: entry.tabId, sessionId: entry.sessionId, type: "workspace_changed", diffStat });
+    return { undone: !!checkpoint, checkpoint, transcript: transcriptFor(record ?? undefined), diffStat };
   }
 
   /**
@@ -776,6 +867,19 @@ export class NovaHost {
     const target = path.resolve(dest?.trim() || path.join(slot.root, "nova-pull"));
     await downloadProject(slot.workspace, target);
     return { dest: target };
+  }
+
+  /**
+   * The core is authoritative. The fallback exists for nova-core 0.12.0, whose invalid Git flag
+   * made diffPatch return an empty string even while diffStat proved the checkpoint had changes.
+   */
+  private async diffPatch(tabId?: string): Promise<string> {
+    const slot = this.maybeSlot(tabId);
+    if (!slot) return "";
+    const fromCore = await slot.client.diffPatch();
+    if (fromCore || !slot.checkpointTree || slot.workspace.kind !== "local") return fromCore;
+    const result = await readGit(["diff", "--unified=3", "--no-color", slot.checkpointTree, "--", ".", ":(exclude).nova"], slot.root);
+    return result.exitCode === 0 ? result.stdout : "";
   }
 
   /** Shutdown: every tab, not just the one in front — each holds a live session of its own. */

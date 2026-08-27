@@ -26,7 +26,7 @@ import { ancestorsOf, buildFileTree, describeFolder, searchFiles, type FileNode 
 /** How much of a file the preview will pull. Enough to read a source file; not enough to hang. */
 const PREVIEW_LINES = 2_000;
 
-export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (path: string) => void; tabId?: string }) {
+export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (path: string) => void; tabId?: string; refreshKey?: number }) {
   const [paths, setPaths] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,7 +47,7 @@ export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [props.open, props.tabId]);
+  }, [props.open, props.tabId, props.refreshKey]);
 
   useEffect(() => {
     if (!props.open || !selected) return;
@@ -61,7 +61,7 @@ export function FilePanel(props: { open: boolean; onClose: () => void; onPick: (
       .catch((err) => { if (!cancelled) { setContents(null); setContentsError(err instanceof Error ? err.message : String(err)); } })
       .finally(() => { if (!cancelled) setReading(false); });
     return () => { cancelled = true; };
-  }, [props.open, props.tabId, selected]);
+  }, [props.open, props.tabId, props.refreshKey, selected]);
 
   useEffect(() => {
     if (props.open) return;

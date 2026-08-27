@@ -1,13 +1,30 @@
 import { useEffect, useRef } from "react";
 import { approvalDetail, approvalKey } from "../lib/approval";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
-import type { PermissionDecision } from "../lib/settings";
+import type { ApprovalPreview, PermissionDecision } from "../lib/settings";
 
 export type ApprovalState = {
   requestId: string;
   toolName: string;
   summary: string;
+  effect?: "none" | "workspace" | "external";
+  safety?: { sensitive: boolean; categories: string[]; reasons: string[] };
+  preview?: ApprovalPreview;
 };
+
+/** A compact unified replacement view from the exact arguments the core is waiting to execute. */
+export function renderApprovalPreview(preview: ApprovalPreview): string {
+  if (preview.toolName === "write_file") {
+    return [`--- /dev/null`, `+++ ${preview.path}`, ...preview.content.split("\n").map((line) => `+${line}`)].join("\n");
+  }
+  return [
+    `--- ${preview.path}`,
+    `+++ ${preview.path}`,
+    "@@ proposed replacement @@",
+    ...preview.oldText.split("\n").map((line) => `-${line}`),
+    ...preview.newText.split("\n").map((line) => `+${line}`),
+  ].join("\n");
+}
 
 const CHOICES: Array<{ decision: PermissionDecision; label: string; key: string; hint: string; tone?: "danger" }> = [
   { decision: "allow", label: "Allow once", key: "Y", hint: "Run this one call" },
@@ -71,11 +88,25 @@ export function ApprovalModal(props: {
 
         {detail.note ? <p className="approval-note">{detail.note}</p> : null}
 
+        {props.approval.safety?.sensitive ? (
+          <div className="approval-warning" role="note">
+            <strong>Sensitive action</strong>
+            <span>{props.approval.safety.reasons.join(" · ") || props.approval.safety.categories.join(" · ")}</span>
+          </div>
+        ) : null}
+
         {/* The subject is the thing under review, so it is shown in full and selectable rather than
             truncated to fit. It scrolls if it is long; it is never shortened. */}
         <pre id="approval-subject" className={`approval-subject${detail.executes ? " executes" : ""}`}>
           {detail.subject ?? "No detail was provided for this call."}
         </pre>
+
+        {props.approval.preview ? (
+          <section className="approval-change" aria-labelledby="approval-change-title">
+            <h3 id="approval-change-title">Exact proposed change</h3>
+            <pre>{renderApprovalPreview(props.approval.preview)}</pre>
+          </section>
+        ) : null}
 
         <div className="modal-actions">
           {CHOICES.map((choice) => (

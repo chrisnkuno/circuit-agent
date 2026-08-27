@@ -5,7 +5,7 @@
 > they are developed.
 
 
-Audited 2026-08-22 against this repository (React + Tauri shell, `sidecar/` Node host driving
+Audited 2026-08-27 against this repository (React + Tauri shell, `sidecar/` Node host driving
 `@circuit-nova/nova-core`) and compared with what [`nova-cli`](https://github.com/chrisnkuno/circuit-agent/tree/main/packages/nova-cli) already does. Every gap below
 names the file that proves it, so nothing here rests on impression. Same rule as the gap register:
 an item closes on named evidence, not on a component existing.
@@ -37,11 +37,11 @@ The bar this list is written against:
 
 | # | Gap | Evidence | Closure evidence |
 |---|---|---|---|
-| 1 | **The engine dying kills the app.** `onSidecarExit` sets a boot error and stops; there is no restart, no reconnect, no session recovery. One sidecar crash costs the whole window and every open tab. | `src/App.tsx:126`, `src/lib/ipc.ts:195` | Sidecar killed mid-session: the app restarts it, re-opens each tab's session by id, and replays the transcript; test asserts recovery without a manual relaunch |
-| 2 | **Approvals are granted without seeing the change.** The modal shows a one-line summary; `write_file`/`edit_file` are approved with no diff and no file preview. The security boundary of the app asks for consent to text nobody has read. | `src/components/ApprovalModal.tsx` (no diff path), `src/lib/approval.ts:37` | An edit approval renders the unified diff (and a write shows the content) before any decision is possible; test asserts the dialog cannot decide without the change being rendered |
+| 1 | **Partially closed — the engine can restart, but tabs do not reconnect automatically.** The dead-engine screen now starts a fresh sidecar and reapplies settings; the last project reopens and saved sessions are resumable. Exact per-tab recovery after a crash remains missing. | `src/App.tsx`, `src/lib/ipc.ts` | Full closure: kill the sidecar mid-session; the app automatically restarts it, re-opens every tab by session id, and replays each transcript without manual selection |
+| 2 | **Closed 2026-08-27 — file approvals show the exact proposed change.** The daemon forwards the bounded write/edit preview and safety classification; the modal renders the new file or exact old/new replacement before any decision. | `src/components/ApprovalModal.tsx`, `sidecar/src/host.ts` | Integration test observes the preview before responding, denies it, and proves the file stayed unchanged; component tests cover write/edit rendering and sensitive reasons |
 | 3 | **No background work.** The CLI has `/detach`, `/jobs`, `/watch`, `/attach` and durable job state; the sidecar has no job handlers at all, so the desktop can only run what the front tab is watching. | `sidecar/src/host.ts:164-244` (no job case), [`nova-cli/src/jobs-command.ts`](https://github.com/chrisnkuno/circuit-agent/blob/main/packages/nova-cli/src/jobs-command.ts) | Start work, close the window, reopen: the job is still running and its output is attachable; approvals raised by a background job reach the window |
-| 4 | **Memory is implemented but unreachable.** `memory.list`/`memory.add`/`memory.forget` exist in the sidecar and have no IPC wrapper and no UI, so the desktop agent silently has none of the project memory the CLI accumulates. | `sidecar/src/host.ts:202-206` vs `src/lib/ipc.ts` (no memory export) | A fact remembered in the window is recalled in a later desktop session and by the CLI in the same project |
-| 5 | **Undo is one turn, one shape.** The CLI undoes code, conversation, or both, and lists checkpoints; the desktop has a single `undo` with no scope and no checkpoint list. | `src/lib/ipc.ts:117`, `sidecar/src/host.ts:706` | Checkpoint list is browsable and restorable, with code/conversation/both selectable, matching `/undo` |
+| 4 | **Closed 2026-08-27 — memory is reachable and shared.** The window lists, adds and forgets project/user memory through the same core files as `/memory`, including kind and exact scoped index. | `src/components/MemoryPanel.tsx`, `src/lib/ipc.ts` | Component coverage plus shared sidecar/core implementation; cross-surface packaged smoke remains in the release checklist below |
+| 5 | **Partially closed 2026-08-27 — Undo scopes match; checkpoint browsing remains.** The window exposes code, conversation, or both, restores visible conversation after undo, and refreshes the diff. It still lacks a checkpoint timeline for restoring older turns. | `src/components/ModeBar.tsx`, `sidecar/src/host.ts`, `sidecar/src/host.test.ts` | Real Git test proves code-only restore; add a browsable checkpoint timeline to fully close |
 
 ## P1 — capability the terminal has and the window does not
 
@@ -49,8 +49,8 @@ The bar this list is written against:
 |---|---|---|---|
 | 6 | **No content search.** `files.list` is glob-only and `files.read` reads; there is no grep, so finding code in the window means asking the agent to do it. | `src/lib/ipc.ts:167,180`, `sidecar/src/host.ts:229-237` | Project-wide search returns ranked matches with file:line and opens the hit |
 | 7 | **Files are read-only.** The CLI has a built-in editor (`/edit`) that writes through the workspace, sandbox included; the desktop can only view. | `sidecar/src/host.ts:233` (no write case), [`nova-cli/src/editor-screen.tsx`](https://github.com/chrisnkuno/circuit-agent/blob/main/packages/nova-cli/src/editor-screen.tsx) | A file edited in the window is written through the workspace and appears in the next diff |
-| 8 | **What the agent can call is invisible.** No desktop equivalent of `/tools`: skills, hooks, MCP servers and plugins loaded from `.nova/` are not listed anywhere in the UI. | [`nova-cli/src/tools-command.ts`](https://github.com/chrisnkuno/circuit-agent/blob/main/packages/nova-cli/src/tools-command.ts) vs `src` (no tools panel) | A panel lists tools, providers and hook scripts for the session, built from the same call the turn uses |
-| 9 | **No `@` file references in the composer.** The composer has no mention grammar, so context has to be described in prose. | `src/lib/composer.ts` (no `@` handling), `src/components/FilePanel.tsx` | Typing `@` completes against the project tree and the reference reaches the turn as a real path |
+| 8 | **Closed 2026-08-27 — tools and provenance are visible.** The panel reads `NovaDaemonClient.inspectTools()` for the active tab and shows mode-scoped built-ins, skills/plugins/MCP provenance, effect and approval posture. | `src/components/ToolsPanel.tsx`, `sidecar/src/host.ts` | Sidecar integration and component tests cover mode scoping, provenance and filtering |
+| 9 | **Inline `@` completion is missing.** The File panel can already append a real `@path` mention, but typing `@` in the composer offers no project-tree completion. | `src/lib/composer.ts`, `src/components/FilePanel.tsx` | Typing `@` completes against the project tree and the selected reference reaches the turn unchanged |
 | 10 | **No transcript export.** Copy exists per message; there is no session export or share. | `src/components/Message.tsx:9` | A session exports to Markdown/JSON with tool calls and cost intact |
 | 11 | **No way to pay.** The CLI now has `/pay` (top-up, balance, `status <ref>`) against a billing gateway; the desktop has no payment surface at all, and a window is the easier place to show a checkout. | [`nova-cli/src/pay.ts`](https://github.com/chrisnkuno/circuit-agent/blob/main/packages/nova-cli/src/pay.ts) vs this repository (no billing IPC) | The window creates a checkout, shows the link and code, confirms the payment, and shows the balance the service reports |
 | 12 | **Voice and `/wander` are CLI-only.** Both exist in the CLI and have no desktop surface; the window is where a microphone is actually convenient. | [`nova-cli/src/voice.ts`](https://github.com/chrisnkuno/circuit-agent/blob/main/packages/nova-cli/src/voice.ts), [`nova-cli/src/wander.ts`](https://github.com/chrisnkuno/circuit-agent/blob/main/packages/nova-cli/src/wander.ts) | Voice capture produces an editable prompt in the composer |
@@ -63,6 +63,36 @@ The bar this list is written against:
 | 14 | **No tray, no global shortcut, no deep link, no single-instance guard.** | same search, `src-tauri/capabilities/default.json` | Tray shows running/waiting state; a global chord focuses the composer; `nova://` opens a session; a second launch focuses the existing window |
 | 15 | **Window state is not remembered** beyond workspace state — size, position and monitor are not restored. | `src/lib/ipc.ts:228-235` | Reopening restores the previous window geometry |
 | 16 | **No offline/credential-failure state distinct from a crash.** Provider failures surface as generic errors. | `src/lib/crash.ts`, `src/App.tsx` boot error path | A provider outage and a missing key produce distinct, actionable states |
+
+## Done in the 2026-08-27 desktop parity pass
+
+- Resumed sessions now repaint their durable user/assistant transcript instead of showing an empty
+  window while the model privately retains the context.
+- The Activity panel forwards named progress and keeps bounded successful command/tool output
+  expandable, so a passing test run is visible evidence rather than a green word with no output.
+- The Changes panel receives the current diff stat on open/resume/turn/undo; the diff and open-file
+  panels re-read when the workspace revision changes.
+- `/tools` and `/memory` now have native desktop panels backed by the same daemon/core paths.
+- Undo now offers code, conversation or both. Full completion still requires the older-checkpoint
+  timeline, not another undo implementation.
+- Edit/write approvals render the exact proposed replacement or new-file contents and the core's
+  sensitive-action reason before a decision is accepted.
+- A searchable Commands palette (Ctrl G) exposes desktop actions by intent, following the CLI's
+  progressive-discovery model without routing UI actions through slash-command text.
+- A dead sidecar now has a real Restart engine action that reapplies settings and restores the last
+  project instead of sending the user to Settings with no route back to work.
+
+## Exact work remaining for full parity
+
+1. P0: sidecar crash restart/reconnect and per-tab transcript replay.
+2. P0: durable background jobs with attach/watch and approval routing after window restart.
+3. P0: checkpoint timeline and restore-to-selected-turn.
+4. P1: project-wide content search, workspace-backed editing, inline `@` completion, transcript export, payment, voice and
+   the bounded research lab.
+5. P2: native notifications, tray/single-instance/deep links, window geometry restore, and distinct
+   offline/provider states.
+6. Release proof: packaged Linux smoke, then signed Windows and macOS packages, with a real visual
+   pass for narrow/short windows, resumed transcripts, diff refresh, approvals and updater behavior.
 
 ## Done in this pass (CLI)
 

@@ -63,6 +63,13 @@ describe("the mode bar", () => {
     expect((screen.getByRole("button", { name: "Stop" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("offers the CLI's file, conversation, and combined undo scopes", () => {
+    const props = renderBar();
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Undo/ }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Undo conversation only" }));
+    expect(props.onUndo).toHaveBeenCalledWith("conversation");
+  });
+
   it("locks the mode while a turn is running", () => {
     renderBar({ busy: true });
     expect((screen.getByRole("radio", { name: "Plan" }) as HTMLButtonElement).disabled).toBe(true);

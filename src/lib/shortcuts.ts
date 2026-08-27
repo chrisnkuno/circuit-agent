@@ -18,6 +18,7 @@ export type ShortcutAction =
   | "models"
   | "files"
   | "guide"
+  | "palette"
   | "plan"
   | "build"
   | "auto"
@@ -53,6 +54,7 @@ export const SHORTCUTS: readonly ShortcutBinding[] = [
   { action: "undo", label: "Undo the last turn", keys: "Ctrl Z" },
   { action: "settings", label: "Open settings", keys: "Ctrl ," },
   { action: "guide", label: "Open the guide", keys: "F1" },
+  { action: "palette", label: "Search every desktop command", keys: "Ctrl G" },
   { action: "tab-new", label: "New tab — a second piece of work, running at the same time", keys: "Ctrl T" },
   { action: "tab-close", label: "Close this tab", keys: "Ctrl W" },
   { action: "tab-next", label: "Next tab", keys: "Ctrl ⇥" },
@@ -112,6 +114,7 @@ export function matchShortcut(event: ShortcutEvent): ShortcutAction | undefined 
   if (!mod || event.altKey) return undefined;
   switch (key) {
     case "/": return "focus-composer";
+    case "g": return "palette";
     case "m": return "models";
     case "d": return "diff";
     // The chord every editor uses for "open a file", so the explorer is where the hand already

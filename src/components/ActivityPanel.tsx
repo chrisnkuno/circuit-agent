@@ -13,7 +13,7 @@ import type { ActivityEntry } from "../lib/chat-state";
  * the panel the length of the work rather than twice the length of it, and makes "what is it doing
  * right now" the last line rather than something to hunt for.
  */
-export function ActivityPanel(props: { entries?: readonly ActivityEntry[]; busy: boolean }) {
+export function ActivityPanel(props: { entries?: readonly ActivityEntry[]; busy: boolean; progress?: string }) {
   const listRef = useRef<HTMLOListElement>(null);
   // Tolerates a tab whose chat state predates this panel. The reducer always supplies the list, so
   // this is not a guard against the app's own logic — it is a guard against a *stale shape*, which
@@ -37,9 +37,10 @@ export function ActivityPanel(props: { entries?: readonly ActivityEntry[]; busy:
         {count > 0 ? <span className="panel-count">{count}</span> : null}
       </div>
       <div className="panel-body">
+        {props.busy && props.progress ? <p className="activity-progress" role="status">{props.progress}</p> : null}
         {count === 0 ? (
           <p className="panel-empty">
-            {props.busy ? "Working…" : "Nothing yet. Tools Nova runs — reads, edits, commands — are listed here."}
+            {props.busy ? "Waiting for the first operation…" : "Nothing yet. Tools Nova runs — reads, edits, commands — are listed here."}
           </p>
         ) : (
           <ol className="activity" ref={listRef}>
@@ -49,10 +50,11 @@ export function ActivityPanel(props: { entries?: readonly ActivityEntry[]; busy:
                 <div className="activity-text">
                   <span className="activity-name">{entry.name}</span>
                   {entry.summary ? <span className="activity-summary" title={entry.summary}>{entry.summary}</span> : null}
-                  {/* Only for a tool that failed: a preview beside every successful call is the wall
-                      of text this panel exists to get out of the transcript. */}
-                  {entry.status === "failed" && entry.preview ? (
-                    <span className="activity-preview">{entry.preview}</span>
+                  {entry.preview ? (
+                    <details className={`activity-output${entry.status === "failed" ? " failed" : ""}`} open={entry.status === "failed"}>
+                      <summary>{entry.status === "failed" ? "Failure output" : "Show output"}</summary>
+                      <pre className="activity-preview">{entry.preview}</pre>
+                    </details>
                   ) : null}
                 </div>
                 {/* The state in a word as well as a colour, so it survives colour blindness and a

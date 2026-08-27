@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { PlacedSecretFinding } from "./scan";
 import type { TurnCostPoint } from "./cost-chart";
-import type { IpcEvent, NovaMode, NovaSettings, PermissionDecision, ProviderId } from "./settings";
+import type { IpcEvent, NovaMode, NovaSettings, PermissionDecision, ProviderId, RestoreScope, TranscriptMessage } from "./settings";
 
 type RequestPayload = Record<string, unknown> & { type: string };
 
@@ -43,6 +43,8 @@ export type OpenedSession = {
   model: string;
   provider: string;
   title: string;
+  transcript: TranscriptMessage[];
+  diffStat: string;
 };
 
 /** One row per open tab, as the sidecar sees them — the truth the strip is drawn from. */
@@ -114,8 +116,12 @@ export async function respondApproval(requestId: string, decision: PermissionDec
   return await sidecarRequest({ type: "approval.respond", requestId, decision });
 }
 
-export async function undoTurn(tabId?: string) {
-  return await sidecarRequest({ type: "undo", ...(tabId ? { tabId } : {}) });
+export async function undoTurn(scope: RestoreScope = "both", tabId?: string) {
+  return await sidecarRequest<{ undone: boolean; transcript: TranscriptMessage[]; diffStat: string }>({
+    type: "undo",
+    scope,
+    ...(tabId ? { tabId } : {}),
+  });
 }
 
 /** Stops the turn in one tab. Work running in any other tab is left alone. */
@@ -165,6 +171,56 @@ export async function getDiff(tabId?: string) {
 
 export async function getTodos(tabId?: string) {
   return await sidecarRequest<{ todos: Array<{ id: string; content: string; status: string }> }>({ type: "todos.get", ...(tabId ? { tabId } : {}) });
+}
+
+export type ToolSummary = {
+  name: string;
+  description: string;
+  effect: "none" | "workspace" | "external";
+  requiresApproval: boolean;
+  provenance: { kind: string; providerId?: string };
+};
+
+export async function getTools(tabId?: string) {
+  return await sidecarRequest<{
+    tools: ToolSummary[];
+    hooks: { preToolUse: string[]; postToolUse: string[] };
+    providerIds: string[];
+  }>({ type: "tools.get", ...(tabId ? { tabId } : {}) });
+}
+
+export type MemoryEntry = {
+  scope: "project" | "user";
+  index: number;
+  text: string;
+  kind: "preference" | "convention" | "decision" | "lesson" | "fact";
+  pinned: boolean;
+};
+
+export async function listMemories(tabId?: string) {
+  return await sidecarRequest<{ entries: MemoryEntry[]; files: { project: string; user: string } }>({
+    type: "memory.list",
+    ...(tabId ? { tabId } : {}),
+  });
+}
+
+export async function addMemory(scope: MemoryEntry["scope"], text: string, kind: MemoryEntry["kind"], tabId?: string) {
+  return await sidecarRequest<{ changed: boolean; entries: MemoryEntry[] }>({
+    type: "memory.add",
+    scope,
+    text,
+    kind,
+    ...(tabId ? { tabId } : {}),
+  });
+}
+
+export async function forgetMemory(scope: MemoryEntry["scope"], index: number, tabId?: string) {
+  return await sidecarRequest<{ changed: boolean; entries: MemoryEntry[] }>({
+    type: "memory.forget",
+    scope,
+    index,
+    ...(tabId ? { tabId } : {}),
+  });
 }
 
 export async function pullSandbox(dest?: string, tabId?: string) {

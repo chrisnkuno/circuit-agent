@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalModal, type ApprovalState } from "../components/ApprovalModal";
 import { CostPanel } from "../components/CostPanel";
 import { ActivityPanel } from "../components/ActivityPanel";
+import { ChangesPanel } from "../components/ChangesPanel";
 import { ModeBar } from "../components/ModeBar";
 import { SessionList, type SessionSummary } from "../components/SessionList";
 import { Message } from "../components/Message";
@@ -10,6 +11,9 @@ import { DiffPanel } from "../components/DiffPanel";
 import { ScanPanel } from "../components/ScanPanel";
 import { GuidePanel } from "../components/GuidePanel";
 import { FilePanel } from "../components/FilePanel";
+import { ToolsPanel } from "../components/ToolsPanel";
+import { MemoryPanel } from "../components/MemoryPanel";
+import { CommandPalette, type DesktopCommand } from "../components/CommandPalette";
 import { sendsOnKey } from "../lib/composer";
 import { projectName } from "../lib/starters";
 import { SuggestionBar } from "../components/SuggestionBar";
@@ -21,6 +25,7 @@ import { Separator } from "../components/ui/separator";
 import {
   composerSuggestions,
   recoverySuggestions,
+  changedFilePaths,
   starters,
   type DesktopSessionState,
   type Suggestion,
@@ -77,7 +82,7 @@ import {
 import { TabStrip } from "../components/TabStrip";
 import { Tooltip } from "../components/ui/tooltip";
 import { providerIsConfigured } from "../lib/settings";
-import type { NovaMode, NovaSettings, PermissionDecision, ProviderId } from "../lib/settings";
+import type { NovaMode, NovaSettings, PermissionDecision, ProviderId, RestoreScope } from "../lib/settings";
 
 /**
  * The id the first tab carries before any session exists.
@@ -136,6 +141,9 @@ export function ChatScreen(props: {
   const [showScan, setShowScan] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [showTools, setShowTools] = useState(false);
+  const [showMemory, setShowMemory] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   /**
    * Suggestions this session has already acted on.
@@ -169,6 +177,7 @@ export function ChatScreen(props: {
   // composer here, which was the whole complaint that tabs answer.
   const busy = (current?.busy ?? false) || current?.status === "running";
   const { messages, activity, approval, costReport, displayTotal, budgetFraction, costTurns, error } = chat;
+  const changedPaths = changedFilePaths(activity);
 
   /** Patches the tab in front. Every old `setSomething` became one of these. */
   // Resolved through `findTab` rather than keyed straight into `updateTab`, for the same reason
@@ -263,7 +272,7 @@ export function ChatScreen(props: {
     const onKey = (event: KeyboardEvent) => {
       // A modal owns the keyboard while it is open; the approval dialog in particular must not
       // have Escape mean two different things at once.
-      if (approval || showDiff || showScan || showFiles || showGuide) return;
+      if (approval || showDiff || showScan || showFiles || showGuide || showTools || showMemory || showPalette) return;
       const action = matchShortcut({
         key: event.key,
         ctrlKey: event.ctrlKey,
@@ -281,6 +290,7 @@ export function ChatScreen(props: {
         case "diff": setShowDiff(true); break;
         case "files": setShowFiles(true); break;
         case "guide": setShowGuide((open) => !open); break;
+        case "palette": setShowPalette(true); break;
         case "settings": props.onOpenSettings(); break;
         case "models": setModelMenuOpen((open) => !open); break;
         case "plan": void handleMode("plan"); break;
@@ -593,12 +603,30 @@ export function ChatScreen(props: {
     }
   }
 
-  async function handleUndo() {
+  async function handleUndo(scope: RestoreScope = "both") {
+    const target = tabId;
+    if (!target) return;
+    setBusy(true, target);
     try {
-      await undoTurn(sidecarTabId(tabId));
-      addSystemMessage("Undid last turn checkpoint.");
+      const result = await undoTurn(scope, sidecarTabId(target));
+      if (!result.undone) {
+        addSystemMessage("Nothing to undo.", target);
+        return;
+      }
+      if (scope !== "code") {
+        patchChat((chat) => ({
+          ...initialChatState(),
+          messages: [...result.transcript, { id: `undo-${Date.now()}`, role: "system", content: scope === "both" ? "Undid the last turn's files and conversation." : "Undid the last conversation turn; files were kept." }],
+          diffStat: result.diffStat,
+          workspaceRevision: (chat.workspaceRevision ?? 0) + 1,
+        }), target);
+      } else {
+        addSystemMessage("Undid the last turn's file changes; conversation was kept.", target);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false, target);
     }
   }
 
@@ -643,13 +671,28 @@ export function ChatScreen(props: {
     setError(null);
     try {
       const resumed = await resumeSession(root, id, mode, sandbox, sandbox && upload, sidecarTabId(target));
+      const [todoState, cost] = await Promise.all([
+        getTodos(resumed.tabId),
+        getCost(resumed.tabId),
+      ]);
       setTabsState((state) => {
         const adopted = adoptTabId(state, target, resumed.tabId);
         return updateTab(adopted, resumed.tabId, {
           sessionId: resumed.sessionId,
+          todos: todoState.todos,
+          warning: cost.warning,
           // Resuming replaces this tab's transcript, same as opening: what is on screen belongs to
           // the session being left, not the one being joined. Every *other* tab is untouched.
-          chat: { ...initialChatState(), messages: [{ id: "resume", role: "system", content: `Resumed ${resumed.title || resumed.sessionId}` }] },
+          chat: {
+            ...initialChatState(),
+            messages: [...resumed.transcript, { id: "resume", role: "system", content: `Resumed ${resumed.title || resumed.sessionId}` }],
+            diffStat: resumed.diffStat,
+            workspaceRevision: 1,
+            costReport: cost.report,
+            displayTotal: cost.displayTotal,
+            budgetFraction: cost.budgetFraction,
+            costTurns: cost.turns ?? [],
+          },
           status: "idle",
           unread: 0,
           needsApproval: false,
@@ -786,6 +829,22 @@ export function ChatScreen(props: {
   const nextSuggestions = composerSuggestions(sessionState);
   const recovery = recoverySuggestions(sessionState);
   const openingStarters = starters(sessionState);
+  const commands: DesktopCommand[] = [
+    { id: "diff", label: "Review changes", description: "Open the current unified diff", shortcut: "Ctrl D", disabled: !root, run: () => setShowDiff(true) },
+    { id: "files", label: "Browse files", description: "Read a file or add it to the prompt", shortcut: "Ctrl P", disabled: !root, run: () => setShowFiles(true) },
+    { id: "tools", label: "Inspect tools and extensions", description: "Built-ins, skills, plugins, MCP servers and hooks", disabled: !root, run: () => setShowTools(true) },
+    { id: "memory", label: "Manage memory", description: "Project and personal facts shared with Nova CLI", disabled: !root, run: () => setShowMemory(true) },
+    { id: "scan", label: "Scan for secrets", description: "Deterministic workspace scan with no model turn", disabled: !root, run: () => setShowScan(true) },
+    { id: "undo", label: "Undo last turn", description: "Restore files and conversation", shortcut: "Ctrl Z", disabled: !root || busy, run: () => void handleUndo("both") },
+    { id: "models", label: "Switch model", description: "Choose from the providers configured now", shortcut: "Ctrl M", disabled: busy, run: () => setModelMenuOpen(true) },
+    { id: "plan", label: "Plan mode", description: "Read and reason without writes", shortcut: "Alt 1", disabled: busy || mode === "plan", run: () => void handleMode("plan") },
+    { id: "build", label: "Build mode", description: "Ask before edits and commands", shortcut: "Alt 2", disabled: busy || mode === "build", run: () => void handleMode("build") },
+    { id: "auto", label: "Auto mode", description: "Apply ordinary workspace edits", shortcut: "Alt 3", disabled: busy || mode === "auto", run: () => void handleMode("auto") },
+    { id: "defender", label: "Defender mode", description: "Security review with approvals", shortcut: "Alt 4", disabled: busy || mode === "defender", run: () => void handleMode("defender") },
+    { id: "new-tab", label: "New tab", description: "Start another piece of work in parallel", shortcut: "Ctrl T", run: handleNewTab },
+    { id: "guide", label: "Open guide", description: "Modes, approvals, sessions and shortcuts", shortcut: "F1", run: () => setShowGuide(true) },
+    { id: "settings", label: "Open settings", description: "Providers, credentials, budget and sandbox", shortcut: "Ctrl ,", run: props.onOpenSettings },
+  ];
 
   return (
     <div className="app-shell">
@@ -846,6 +905,9 @@ export function ChatScreen(props: {
             onOpenChange={setModelMenuOpen}
           />
           <Separator orientation="vertical" className="topbar-rule" />
+          <Tooltip label="Search every action by what it does (Ctrl G)">
+            <Button variant="ghost" onClick={() => setShowPalette(true)}>Commands</Button>
+          </Tooltip>
           <Tooltip label="A second piece of work, running at the same time (Ctrl T)">
             <Button variant="ghost" onClick={handleNewTab} aria-label="New tab">
               + Tab
@@ -1049,7 +1111,26 @@ export function ChatScreen(props: {
           <ScrollArea className="inspector-scroll">
           {/* What it is doing right now, above what it intends to do next. Both were previously
               answerable only by reading the transcript, which is where the answer scrolls away. */}
-          <ActivityPanel entries={activity} busy={busy} />
+          <ActivityPanel entries={activity} busy={busy} progress={chat.progress} />
+
+          <ChangesPanel
+            diffStat={chat.diffStat}
+            paths={changedPaths}
+            busy={busy}
+            onReview={() => setShowDiff(true)}
+            onFiles={() => setShowFiles(true)}
+          />
+
+          <div className="panel capabilities-panel">
+            <div className="panel-header">Context</div>
+            <div className="panel-body">
+              <p className="panel-empty">See what Nova can call and the durable facts it shares with the CLI.</p>
+              <div className="btn-group">
+                <Button variant="ghost" size="sm" disabled={!root} onClick={() => setShowTools(true)}>Tools</Button>
+                <Button variant="ghost" size="sm" disabled={!root} onClick={() => setShowMemory(true)}>Memory</Button>
+              </div>
+            </div>
+          </div>
 
           {/* Todos are the agent's own plan — the answer to "what is it doing?" — so they belong in
               a fixed place you can watch, not appended to the bottom of a scrolling log where they
@@ -1152,10 +1233,11 @@ export function ChatScreen(props: {
 
       {/* The panels read the tab in front, so "what changed" and "which files" answer for the work
           being looked at rather than for whichever session opened last. */}
-      <DiffPanel open={showDiff} onClose={() => setShowDiff(false)} tabId={sidecarTabId(tabId)} />
+      <DiffPanel open={showDiff} onClose={() => setShowDiff(false)} tabId={sidecarTabId(tabId)} refreshKey={chat.workspaceRevision} />
       <ScanPanel open={showScan} onClose={() => setShowScan(false)} tabId={sidecarTabId(tabId)} />
       <FilePanel
         tabId={sidecarTabId(tabId)}
+        refreshKey={chat.workspaceRevision}
         open={showFiles}
         onClose={() => setShowFiles(false)}
         onPick={(path) => {
@@ -1167,6 +1249,9 @@ export function ChatScreen(props: {
         }}
       />
       <GuidePanel open={showGuide} onClose={() => setShowGuide(false)} />
+      <ToolsPanel open={showTools} onClose={() => setShowTools(false)} tabId={sidecarTabId(tabId)} />
+      <MemoryPanel open={showMemory} onClose={() => setShowMemory(false)} tabId={sidecarTabId(tabId)} />
+      <CommandPalette open={showPalette} onClose={() => setShowPalette(false)} commands={commands} />
       {approval ? <ApprovalModal approval={approval} onRespond={handleApproval} /> : null}
     </div>
   );

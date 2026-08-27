@@ -41,6 +41,17 @@ describe("the file explorer", () => {
     expect(await screen.findByText("hello from the file")).toBeTruthy();
   });
 
+  it("re-reads an open file when the agent changes the workspace", async () => {
+    readFile
+      .mockResolvedValueOnce({ file: { path: "README.md", content: "before", startLine: 1, totalLines: 1, truncated: false } })
+      .mockResolvedValueOnce({ file: { path: "README.md", content: "after", startLine: 1, totalLines: 1, truncated: false } });
+    const view = render(<FilePanel open onClose={() => {}} onPick={() => {}} tabId="tab_7" refreshKey={0} />);
+    fireEvent.click(await screen.findByTitle("Show README.md"));
+    expect(await screen.findByText("before")).toBeTruthy();
+    view.rerender(<FilePanel open onClose={() => {}} onPick={() => {}} tabId="tab_7" refreshKey={1} />);
+    expect(await screen.findByText("after")).toBeTruthy();
+  });
+
   it("asks the tab it belongs to for the file, not whichever session is in front", async () => {
     // A sandboxed tab's files do not exist on this machine, so an unaddressed read is not merely
     // untidy — it answers with a different file that happens to share a name.

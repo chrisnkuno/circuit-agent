@@ -3,6 +3,13 @@ import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 import { Tooltip } from "./ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import type { RestoreScope } from "../lib/settings";
 
 /**
  * The bar above the transcript: what Nova is allowed to do, and the handful of things you do *to* a
@@ -43,7 +50,7 @@ export function ModeBar(props: {
   mode: NovaMode;
   busy: boolean;
   onMode: (mode: NovaMode) => void;
-  onUndo: () => void;
+  onUndo: (scope?: RestoreScope) => void;
   onCancel: () => void;
   onShowDiff: () => void;
   onScan: () => void;
@@ -89,9 +96,18 @@ export function ModeBar(props: {
         <Separator orientation="vertical" className="mode-rule" />
 
         <div className="btn-group" role="group" aria-label="This turn">
-          <Tooltip label="Revert the last turn's file changes (Ctrl Z)">
-            <Button variant="ghost" disabled={props.busy} onClick={props.onUndo}>Undo</Button>
-          </Tooltip>
+          <DropdownMenu>
+            <Tooltip label="Revert the last turn — files and conversation by default (Ctrl Z)">
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" disabled={props.busy}>Undo ▾</Button>
+              </DropdownMenuTrigger>
+            </Tooltip>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => props.onUndo("both")}>Undo files and conversation</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => props.onUndo("code")}>Undo files only</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => props.onUndo("conversation")}>Undo conversation only</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* Red only while there is something to stop: a permanently red button in a toolbar stops
               meaning "careful" and starts meaning "decoration". */}
           <Tooltip label="Stop the turn in progress (Esc)">

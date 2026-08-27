@@ -8,7 +8,7 @@ import { getDiff } from "../lib/ipc";
  * it offered an Undo button and git checkpoints, but no way to see what you would be undoing. A
  * agent that edits your files and shows you nothing is asking for a lot of trust.
  */
-export function DiffPanel(props: { open: boolean; onClose: () => void; tabId?: string }) {
+export function DiffPanel(props: { open: boolean; onClose: () => void; tabId?: string; refreshKey?: number }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -23,7 +23,7 @@ export function DiffPanel(props: { open: boolean; onClose: () => void; tabId?: s
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [props.open, props.tabId]);
+  }, [props.open, props.tabId, props.refreshKey]);
 
   useEffect(() => {
     if (!props.open) return;
