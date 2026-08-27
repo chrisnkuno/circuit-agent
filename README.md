@@ -204,7 +204,7 @@ Releases:
 
 The workflow builds Windows and both macOS architectures, signs the updater artifacts, and
 uploads them to the GitHub Release along with `latest.json`. The app checks
-`https://github.com/chrisnkuno/nova-desktop/releases/latest/download/latest.json` on launch and
+`https://github.com/chrisnkuno/circuit-agent/releases/latest/download/latest.json` on launch and
 updates itself.
 
 Updater signing keys (public key is in `tauri.conf.json`):

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nova",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "identifier": "com.circuitnotion.nova",
   "build": {
     "beforeDevCommand": "npm run sidecar:binary && npm run dev",
@@ -51,7 +51,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/chrisnkuno/nova-desktop/releases/latest/download/latest.json"
+        "https://github.com/chrisnkuno/circuit-agent/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM2N0QzNjU3NTc5QUU2NTMKUldSVDVwcFhWelo5Tm9HTHhRVFpoeXBGR25sd0tPemdNNFVEQ0F4MllGNi9TOEhOd1UyMzhpb24K",
       "windows": {
