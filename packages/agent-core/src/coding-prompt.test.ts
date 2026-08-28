@@ -57,6 +57,21 @@ describe("coding planner prompt", () => {
     expect(wander.instructions).toContain("strong_plausible");
   });
 
+  it("requires a passing production build for application deliverables", () => {
+    const app = buildCodingPlannerPrompt({
+      objective: "Build a responsive field-service app",
+      repositoryContext: "A reviewed Next.js starter is present.",
+      workspaceRoot: "/workspace/repo",
+      maxCommands: 6,
+    });
+    expect(app.instructions).toContain("deployable without further code editing");
+    expect(app.instructions).toContain("Run the production build command");
+    expect(JSON.parse(app.input)).toMatchObject({ deployabilityRequired: true, requiredVerification: "production build" });
+
+    const fix = buildCodingPlannerPrompt({ objective: "Fix the parser", repositoryContext: "", workspaceRoot: "/workspace/repo", maxCommands: 6 });
+    expect(JSON.parse(fix.input).deployabilityRequired).toBeUndefined();
+  });
+
   it("rejects plans with unsupported commands or excessive work", () => {
     const base = { status: "ready", summary: "Plan", fileChanges: [], expectedArtifacts: ["model_plan"], blockers: [] };
     expect(() => CodingPlanSchema.parse({ ...base, commands: [{ program: "bash", args: [], cwd: "/workspace/repo", timeoutMs: 1_000, purpose: "escape" }] })).toThrow();

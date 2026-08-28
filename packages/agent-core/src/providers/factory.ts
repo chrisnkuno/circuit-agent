@@ -1,10 +1,12 @@
 import { E2BSandboxProvider } from "./e2b";
 import { DockerSandboxProvider } from "./docker";
 import { OpenAICodingModelProvider } from "./openai";
+import { OpenAIAgentTurnProvider } from "./openai-agent";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
 import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import { CircuitNotionPresetsProvider } from "./circuitnotion-presets";
 import type { CodingModelProvider } from "./model";
+import type { AgentTurnProvider } from "../agent-runtime";
 import type { InteractiveCodingSandboxProvider } from "./contracts";
 import { modelPricesFromEnvironment, type ModelPriceCatalog } from "../model-cost";
 
@@ -91,6 +93,22 @@ export function createCircuitNotionAgentProvider(environment: ProviderEnvironmen
   return new CircuitNotionAgentTurnProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined, relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined });
 }
 
+/** Uses the same explicit provider selection as coding, but exposes a tool-free conversational turn. */
+export function createAgentTurnProvider(environment: ProviderEnvironment, providerOverride?: "openai" | "circuitnotion", modelOverride?: string): AgentTurnProvider | undefined {
+  const selection = providerOverride ?? environment.CODING_MODEL_PROVIDER?.trim();
+  if (selection === "openai") {
+    const apiKey = environment.OPENAI_API_KEY?.trim();
+    const model = modelOverride?.trim() || environment.OPENAI_MODEL?.trim();
+    return apiKey && model ? new OpenAIAgentTurnProvider({ apiKey, model }) : undefined;
+  }
+  if (selection === "circuitnotion") {
+    const apiKey = environment.CIRCUITNOTION_API_KEY?.trim();
+    const model = modelOverride?.trim() || environment.CIRCUITNOTION_MODEL?.trim();
+    return apiKey && model ? new CircuitNotionAgentTurnProvider({ apiKey, model, baseURL: environment.CIRCUITNOTION_BASE_URL?.trim() || undefined, relaySecret: environment.CIRCUITNOTION_RELAY_SECRET?.trim() || undefined }) : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Deliberately a separate, unbilled model slot from the coding model above: dynamic terminal
  * presets are a cheap suggestion call, not agent work performed on the user's behalf, so they
@@ -120,4 +138,3 @@ export function createCodingModelProvider(environment: ProviderEnvironment): Cod
 export function createModelPriceCatalog(environment: ProviderEnvironment): ModelPriceCatalog | undefined {
   return modelPricesFromEnvironment(environment);
 }
-

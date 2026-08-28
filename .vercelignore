@@ -23,9 +23,11 @@ bench/
 docs/
 reliability/
 services/
-tooling/
 .env
 .env.*
 !.env.example
 *.tsbuildinfo
 *.log
+
+# The root build runs `build:packages`, whose builder lives in tooling/, so that directory
+# must be uploaded. Its dist/ output is still excluded and rebuilt on Vercel.

@@ -4,6 +4,7 @@ import { wanderRepositoryContext } from "./wander-research";
 import type { CodingPlanRequest } from "@circuit-nova/nova-core/providers/model";
 
 const REPOSITORY_CONTEXT = "No repository is connected yet. There is no existing codebase to inspect; work only within the provided workspace using the allowed commands.";
+const DEPLOYABLE_APP_CONTEXT = `A reviewed Next.js starter and its locked dependencies are already present in the workspace. Preserve a production-deployable result. The final source must include package.json and its lockfile, a working production build script, a start script, .env.example when configuration is needed, and DEPLOYMENT.md with exact build/start/environment instructions. Never include secret values. Run the production build before declaring the work complete.`;
 
 /**
  * Builds the model/sandbox request for a coding (or Wander) step. Session budgets come from
@@ -26,7 +27,7 @@ export function buildStepRequest(
     taskId,
     stepId,
     objective: `${taskTitle}. ${runObjective}`.slice(0, 4_000),
-    repositoryContext: wander ? wanderRepositoryContext(researchBrief) : REPOSITORY_CONTEXT,
+    repositoryContext: wander ? wanderRepositoryContext(researchBrief) : `${REPOSITORY_CONTEXT}${preset.id === "next-app" ? `\n${DEPLOYABLE_APP_CONTEXT}` : ""}`,
     // Seed the lab notebook so scientists can read the briefing as a file, not only in the prompt.
     ...(wander && researchBrief?.trim()
       ? { workspaceSeedFiles: [{ path: "wander/EVIDENCE.md", content: researchBrief }] }

@@ -80,9 +80,13 @@ export default defineSchema({
     // because every step of it must land in the same kind of workspace, and because the planner is
     // told what that workspace contains.
     workspacePresetId: v.optional(v.string()),
+    modelProvider: v.optional(v.union(v.literal("openai"), v.literal("circuitnotion"))),
+    modelId: v.optional(v.string()),
     // The sandbox this run is working in, carried across its steps. Recorded as soon as a worker
     // reports one so an abandoned sandbox is still known to the system that must destroy it.
     sandboxId: v.optional(v.string()),
+    /** A completed app workspace remains resumable for a bounded preview window. */
+    previewExpiresAt: v.optional(v.number()),
     // Billable sandbox runtime, accumulated from E2B's own lifecycle events: the sandbox is only
     // running between a create/resume and the next pause/kill, and only that time is charged.
     // Measured as wall clock between those events rather than taken from the provider's
@@ -285,6 +289,39 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_organization", ["organizationId"])
     .index("by_channel_user", ["channel", "channelUserId"]),
+  conversations: defineTable({
+    organizationId: v.id("organizations"),
+    title: v.string(),
+    kind: v.literal("nova"),
+    status: v.union(v.literal("active"), v.literal("archived")),
+    lastMessagePreview: v.optional(v.string()),
+    lastMessageAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_organization_updated", ["organizationId", "updatedAt"]),
+  conversationMessages: defineTable({
+    organizationId: v.id("organizations"),
+    conversationId: v.id("conversations"),
+    sender: v.union(v.literal("user"), v.literal("nova"), v.literal("system")),
+    content: v.string(),
+    status: v.union(v.literal("sent"), v.literal("generating"), v.literal("failed")),
+    clientMessageId: v.optional(v.string()),
+    replyToMessageId: v.optional(v.id("conversationMessages")),
+    provider: v.optional(v.string()),
+    model: v.optional(v.string()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_conversation_created", ["conversationId", "createdAt"])
+    .index("by_conversation_client", ["conversationId", "clientMessageId"]),
+  novaPreferences: defineTable({
+    organizationId: v.id("organizations"),
+    provider: v.union(v.literal("deployment"), v.literal("openai"), v.literal("circuitnotion")),
+    modelId: v.optional(v.string()),
+    mode: v.union(v.literal("ask"), v.literal("plan"), v.literal("build")),
+    memoryEnabled: v.boolean(),
+    updatedAt: v.number(),
+  }).index("by_organization", ["organizationId"]),
   connectorVaultEntries: defineTable({
     organizationId: v.id("organizations"),
     kind: v.union(v.literal("oauth_tokens"), v.literal("oauth_pkce"), v.literal("action_payload")),

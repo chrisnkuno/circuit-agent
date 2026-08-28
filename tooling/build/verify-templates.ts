@@ -13,8 +13,11 @@ const apiKey = process.env.E2B_API_KEY;
 if (!apiKey) throw new Error("E2B_API_KEY is required to verify templates");
 
 let failures = 0;
+const requested = new Set(process.argv.slice(2));
+const targets = WORKSPACE_PRESETS.filter((preset) => requested.size === 0 || requested.has(preset.id));
+if (targets.length !== (requested.size || WORKSPACE_PRESETS.length)) throw new Error("Unknown workspace preset requested");
 
-for (const preset of WORKSPACE_PRESETS) {
+for (const preset of targets) {
   const expected = presetPrograms(preset);
   const provider = new E2BSandboxProvider({ apiKey, templates: { coding: preset.templateAlias }, allowInternetAccess: false });
   process.stdout.write(`\n=== ${preset.id} (${preset.templateAlias}) ===\n`);
@@ -39,6 +42,14 @@ for (const preset of WORKSPACE_PRESETS) {
     const writable = await provider.runCommand(session.sandboxId, { program: "pwd", args: [], cwd: "/workspace/repo", timeoutMs: 30_000 });
     console.log(`  workspace: ${writable.exitCode === 0 ? "ready" : "NOT USABLE"}`);
     if (writable.exitCode !== 0) failures += 1;
+    if (preset.id === "next-app") {
+      const build = await provider.runCommand(session.sandboxId, { program: "npm", args: ["run", "build"], cwd: "/workspace/repo", timeoutMs: 120_000 });
+      console.log(`  production build: ${build.exitCode === 0 ? "passed" : "FAILED"}`);
+      if (build.exitCode !== 0) {
+        failures += 1;
+        console.error(build.stderr.slice(-2_000));
+      }
+    }
   } finally {
     await provider.stopSandbox(session.sandboxId);
   }

@@ -4,6 +4,8 @@ import { api, internal } from "./_generated/api";
 import { buildTaskPlan } from "../lib/agent-orchestration";
 import { estimateTaskCost } from "../lib/task-cost";
 import { isWanderObjective } from "@circuit-nova/nova-core/wander";
+import { inferWorkspacePresetId } from "@circuit-nova/nova-core/sandbox-templates";
+import { createCodingModelProvider } from "@circuit-nova/nova-core/providers/factory";
 import type { Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 
@@ -45,6 +47,16 @@ export async function startCodingRun(
   if (!objective || objective.length > 500) throw new Error("objective must contain 1 to 500 characters");
 
   const useInternal = args.authorization === "trusted-organization";
+  const workspacePresetId = args.workspacePresetId ?? inferWorkspacePresetId(objective);
+  const preferences = await ctx.runQuery(internal.settings.getNovaPreferencesInternal, { organizationId: args.organizationId });
+  const modelProvider = preferences?.provider === "deployment" || !preferences?.provider ? undefined : preferences.provider;
+  const modelId = preferences?.modelId?.trim() || undefined;
+  if (modelProvider) {
+    const env: Record<string, string | undefined> = { ...(process.env as Record<string, string | undefined>), CODING_MODEL_PROVIDER: modelProvider };
+    if (modelId && modelProvider === "openai") env.OPENAI_MODEL = modelId;
+    if (modelId && modelProvider === "circuitnotion") env.CIRCUITNOTION_MODEL = modelId;
+    if (!createCodingModelProvider(env)) throw new Error(`The selected ${modelProvider} provider/model is not configured on this deployment.`);
+  }
   const quote = estimateTaskCost({ kind: "coding", quality: "fast", attachmentCount: 0, requiresBrowser: false, requiresSandbox: true });
   const taskId: Id<"tasks"> = await ctx.runMutation(useInternal ? internal.tasks.createQuotedTaskInternal : api.tasks.createQuotedTask, {
     organizationId: args.organizationId,
@@ -87,7 +99,7 @@ export async function startCodingRun(
       capabilityIds: step.capabilityIds,
     }));
   const runId: Id<"agentRuns"> = await ctx.runMutation(useInternal ? internal.agentRuns.createTaskRunInternal : api.agentRuns.createTaskRun, {
-    taskId, kind: "coding", maxParallelism: plan.maxParallelism, objective, steps, workspacePresetId: args.workspacePresetId,
+    taskId, kind: "coding", maxParallelism: plan.maxParallelism, objective, steps, workspacePresetId, modelProvider, modelId,
   });
 
   const runQuote: RunQuote = {

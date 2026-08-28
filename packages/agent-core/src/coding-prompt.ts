@@ -45,6 +45,7 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
   if (!Number.isInteger(input.maxCommands) || input.maxCommands < 1 || input.maxCommands > 12) throw new Error("maxCommands must be between 1 and 12");
 
   const wander = isWanderObjective(input.objective);
+  const deployableApp = !wander && /\b(build|create|make|develop|design|scaffold|launch)\b/i.test(input.objective) && /\b(app|application|website|dashboard|portal|platform|web ?app|saas)\b/i.test(input.objective);
   const instructions = [
     wander
       ? "You plan one bounded Wander scientific-lab step inside an isolated workspace."
@@ -67,6 +68,11 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     "Every absolute path in a command argument must stay inside /workspace.",
     "Evidence is captured for you: your plan and every command's output are recorded automatically, and a patch is taken by diffing the workspace when there is a repository. Never block a step over evidence — you are not required to produce a patch, a diff, or a git repository, and their absence is not a blocker.",
     "Do not merge, deploy, push, send messages, access secrets, install remote packages, or make external changes.",
+    ...(deployableApp ? [
+      "This objective requests an application. The workspace output must be deployable without further code editing: preserve a dependency manifest and lockfile, production build and start scripts, responsive application source, .env.example for named configuration with no secrets, and DEPLOYMENT.md with exact deployment instructions.",
+      "Run the production build command as verification. A syntax-only check is insufficient for an application deliverable. If the production build cannot pass inside this prepared workspace, return blocked with the exact failure rather than calling the app deployable.",
+      "Do not publish the app yourself. Deployment changes an external system and remains a separate approval-gated action; your responsibility is a verified deployable artifact.",
+    ] : []),
     "If required context is absent or the work is unsafe, return blocked or needs_clarification with no file changes or commands.",
     ...(wander ? wanderPlannerInstructions() : []),
     // A repair attempt continues in the same workspace, so the plan must account for what the
@@ -97,6 +103,7 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     // that list as "required" made a planner block an otherwise achievable step, reasoning that it
     // owed a patch it could not produce without the `git init` it had just been forbidden.
     evidenceCapturedForYou: ["model_plan", "command_log", "patch when a repository exists", "test_log"],
+    ...(deployableApp ? { deployabilityRequired: true, requiredDeployableFiles: ["package.json", "lockfile", "DEPLOYMENT.md"], requiredVerification: "production build" } : {}),
     ...(input.previousFailure ? { previousFailure: input.previousFailure } : {}),
   };
   return { instructions, input: JSON.stringify(payload) };

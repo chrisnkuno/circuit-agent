@@ -135,6 +135,8 @@ export const executeClaimedStep = internalAction({
     attempts: v.number(),
     reuseSandboxId: v.optional(v.string()),
     workspacePresetId: v.optional(v.string()),
+    modelProvider: v.optional(v.union(v.literal("openai"), v.literal("circuitnotion"))),
+    modelId: v.optional(v.string()),
     taskId: v.id("tasks"),
     taskTitle: v.string(),
     runObjective: v.string(),
@@ -142,7 +144,11 @@ export const executeClaimedStep = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args): Promise<null> => {
-    const env = process.env as Record<string, string | undefined>;
+    const baseEnv = process.env as Record<string, string | undefined>;
+    const env = { ...baseEnv };
+    if (args.modelProvider) env.CODING_MODEL_PROVIDER = args.modelProvider;
+    if (args.modelId && args.modelProvider === "openai") env.OPENAI_MODEL = args.modelId;
+    if (args.modelId && args.modelProvider === "circuitnotion") env.CIRCUITNOTION_MODEL = args.modelId;
     const prices = createModelPriceCatalog(env);
     const model = createCodingModelProvider(env);
     const sandbox = createE2BProvider(env, findWorkspacePreset(args.workspacePresetId).templateAlias);

@@ -46,6 +46,13 @@ export const WORKSPACE_PRESETS: readonly WorkspacePreset[] = [
     templateAlias: "circuit-node-web",
     programs: ["npm", "bun", "node", "git", "rg", "ls", "pwd", "find"],
   },
+  {
+    id: "next-app",
+    label: "Deployable Next.js app",
+    description: "A production Next.js starter with dependencies installed for verified mobile web-app builds.",
+    templateAlias: "circuit-next-web",
+    programs: ["npm", "bun", "node", "git", "rg", "ls", "pwd", "find"],
+  },
 ];
 
 export const DEFAULT_WORKSPACE_PRESET_ID = "general";
@@ -62,4 +69,12 @@ export function findWorkspacePreset(id: string | undefined): WorkspacePreset {
 export function presetPrograms(preset: WorkspacePreset): AllowedSandboxProgram[] {
   const permitted = new Set<string>(ALLOWED_SANDBOX_PROGRAMS);
   return preset.programs.filter((program) => permitted.has(program));
+}
+
+/** Selects the deployable app image from intent, while leaving ordinary coding work lightweight. */
+export function inferWorkspacePresetId(objective: string): string | undefined {
+  const normalized = objective.toLowerCase();
+  const asksToCreate = /\b(build|create|make|develop|design|scaffold|launch)\b/.test(normalized);
+  const namesAnApp = /\b(app|application|website|dashboard|portal|platform|web ?app|saas)\b/.test(normalized);
+  return asksToCreate && namesAnApp ? "next-app" : undefined;
 }

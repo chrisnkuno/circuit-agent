@@ -22,11 +22,12 @@ const MAX_RUN_ARTIFACTS = 200;
 
 const taskRunArgs = {
   taskId: v.id("tasks"), kind: v.optional(taskKind), maxParallelism: v.number(), objective: v.string(), workspacePresetId: v.optional(v.string()),
+  modelProvider: v.optional(v.union(v.literal("openai"), v.literal("circuitnotion"))), modelId: v.optional(v.string()),
   steps: v.array(v.object({ stepKey: v.string(), title: v.string(), role, dependsOn: v.array(v.string()), requiresApproval: v.boolean(), sandboxTemplate: v.optional(template), capabilityIds: v.optional(v.array(v.string())) })),
 };
 
 type TaskRunArgs = {
-  taskId: Id<"tasks">; kind?: "coding" | "research" | "writing" | "operations"; maxParallelism: number; objective: string; workspacePresetId?: string;
+  taskId: Id<"tasks">; kind?: "coding" | "research" | "writing" | "operations"; maxParallelism: number; objective: string; workspacePresetId?: string; modelProvider?: "openai" | "circuitnotion"; modelId?: string;
   steps: Array<{ stepKey: string; title: string; role: "planner" | "coding" | "reviewer" | "research" | "operator"; dependsOn: string[]; requiresApproval: boolean; sandboxTemplate?: "coding" | "browser" | "data"; capabilityIds?: string[] }>;
 };
 
@@ -60,7 +61,7 @@ export async function insertTaskRun(ctx: MutationCtx, task: Doc<"tasks">, args: 
     if (requiresCapabilityApproval && !step.requiresApproval) throw new Error(`Step ${step.stepKey} must require approval for its capabilities`);
   }
   const now = Date.now();
-  const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, workspacePresetId: args.workspacePresetId, createdAt: now });
+  const runId = await ctx.db.insert("agentRuns", { taskId: args.taskId, kind, role: leadRole[kind], status: "queued", objective: args.objective, capabilityIds, maxParallelism: args.maxParallelism, workspacePresetId: args.workspacePresetId, modelProvider: args.modelProvider, modelId: args.modelId, createdAt: now });
   for (const step of args.steps) {
     const stepId = await ctx.db.insert("agentSteps", { ...step, runId, status: "pending", approvalStatus: step.requiresApproval ? "pending" : "not_required", attempts: 0, createdAt: now });
     if (step.requiresApproval) {
@@ -354,6 +355,8 @@ export const claimStep = internalMutation({
         attempts: step.attempts + 1,
         reuseSandboxId: run.sandboxId,
         workspacePresetId: run.workspacePresetId,
+        modelProvider: run.modelProvider,
+        modelId: run.modelId,
         taskId: task._id,
         taskTitle: task.title,
         runObjective: run.objective,
@@ -545,7 +548,14 @@ export const recordStepOutcome = internalMutation({
             ? "awaiting_approval"
             : "queued";
       await ctx.db.patch(run._id, runIsComplete ? { status: nextRunStatus, completedAt: now } : { status: nextRunStatus });
-      if (runIsComplete) await releaseRunSandbox(ctx, run);
+      if (runIsComplete && run.sandboxId) {
+        // A finished app remains available as a suspended, resumable preview for 24 hours. E2B
+        // does not bill suspended time; the delayed destroy bounds retention and the reaper treats
+        // this explicit window as live.
+        const previewExpiresAt = now + 24 * 60 * 60_000;
+        await ctx.db.patch(run._id, { previewExpiresAt });
+        await ctx.scheduler.runAfter(24 * 60 * 60_000, internal.sandboxCleanup.destroySandbox, { sandboxId: run.sandboxId, runId: run._id });
+      }
       // The step that just finished is usually what unblocks the next one, so release it now
       // instead of leaving it to the one-minute cron. Waiting for the cron added up to a minute
       // of dead time between every pair of steps — the dominant cost of a short run, which spent

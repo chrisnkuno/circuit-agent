@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALLOWED_SANDBOX_PROGRAMS } from "./sandbox-policy";
-import { DEFAULT_WORKSPACE_PRESET_ID, WORKSPACE_PRESETS, findWorkspacePreset, presetPrograms } from "./sandbox-templates";
+import { DEFAULT_WORKSPACE_PRESET_ID, WORKSPACE_PRESETS, findWorkspacePreset, inferWorkspacePresetId, presetPrograms } from "./sandbox-templates";
 
 /**
  * Workspace presets, and the boundary they must never widen.
@@ -47,5 +47,11 @@ describe("workspace presets", () => {
       expect(findWorkspacePreset(id).id, String(id)).toBe(WORKSPACE_PRESETS[0].id);
     }
     expect(findWorkspacePreset("python-data").id).toBe("python-data");
+  });
+
+  it("routes app-building objectives to the deployable Next.js image", () => {
+    expect(inferWorkspacePresetId("Build me a responsive logistics dashboard")).toBe("next-app");
+    expect(inferWorkspacePresetId("Create a web app for field teams")).toBe("next-app");
+    expect(inferWorkspacePresetId("Fix the parser regression")).toBeUndefined();
   });
 });

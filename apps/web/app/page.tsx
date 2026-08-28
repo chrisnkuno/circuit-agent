@@ -238,7 +238,7 @@ export default function Home() {
       <nav className="nav-links">
         {chapters.map((chapter) => <a className="nav-link" key={chapter.id} href={`#${chapter.id}`}><span>{chapter.b}</span><span className="alt">{chapter.num} — {chapter.b}</span></a>)}
       </nav>
-      <div className="nav-auth"><Link href="/growing-nova" className="nav-link">Growing Nova ↗</Link><ThemeToggle /><AuthPanel /></div>
+      <div className="nav-auth"><Link href="/messages" className="nav-link">Nova Cloud ↗</Link><Link href="/growing-nova" className="nav-link">Growing Nova ↗</Link><ThemeToggle /><AuthPanel /></div>
       <button className="nav-burger" aria-label="Open menu"><i /><i /></button>
     </header>
 

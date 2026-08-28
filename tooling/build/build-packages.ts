@@ -59,8 +59,12 @@ async function addExtensions(directory: string): Promise<number> {
   return fixed;
 }
 
+// The hosted control plane imports the core package but never the CLI, and its deploy upload
+// deliberately omits the CLI's data inputs. `core` builds just what that deploy needs.
+const coreOnly = process.argv.slice(2).includes("core");
+
 await fs.rm(path.join(CORE, "dist"), { recursive: true, force: true });
-await fs.rm(path.join(CLI, "dist"), { recursive: true, force: true });
+if (!coreOnly) await fs.rm(path.join(CLI, "dist"), { recursive: true, force: true });
 
 // 1. Core: JavaScript and declarations, mirroring the source layout.
 // Invoking the JavaScript entry through the current Bun executable works on Windows too; the
@@ -71,6 +75,7 @@ await fs.cp(DEFENDER_KNOWLEDGE, path.join(CORE, "dist", "nova-cli", "defender-kn
 console.log(`agent-core: emitted modules and types, rewrote ${rewritten} import specifiers`);
 
 // 2. CLI: one self-contained executable.
+if (coreOnly) process.exit(0);
 const built = await Bun.build({
   entrypoints: [path.join(CLI, "src", "nova.ts")],
   target: "node",

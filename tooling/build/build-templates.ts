@@ -46,9 +46,34 @@ const definitions: Record<string, () => Parameters<typeof Template.build>[0]> = 
       .setUser(SANDBOX_USER)
       .setWorkdir(WORKSPACE)
       .setStartCmd("true", waitForTimeout(1_000)),
+  "circuit-next-web": () =>
+    Template()
+      .fromNodeImage("22")
+      .setUser("root")
+      .aptInstall(["git", "ripgrep"])
+      .runCmd("npm install -g bun")
+      // Dependencies are resolved once while the reviewed image is built, never by an agent at
+      // task time. Every app run starts from the same lockfile-backed, production-buildable base.
+      .runCmd("npx create-next-app@16.2.12 /opt/circuit-next --ts --app --use-npm --eslint --no-tailwind --no-src-dir --import-alias '@/*' --yes")
+      // The generated default imports Google fonts at build time. User tasks run with network
+      // access disabled, so the reviewed starter is rewritten to a self-contained layout that
+      // builds offline and reproducibly. A deterministic rewrite beats editing the generated file.
+      .runCmd("printf '%s\\n' \"import type { Metadata } from 'next';\" \"import './globals.css';\" \"\" \"export const metadata: Metadata = { title: 'App', description: 'Generated application' };\" \"\" \"export default function RootLayout({ children }: { children: React.ReactNode }) {\" \"  return (<html lang=\\\"en\\\"><body>{children}</body></html>);\" \"}\" > /opt/circuit-next/app/layout.tsx")
+      // E2B's filesystem transfer can omit dependency trees when copying directory layers. A tar
+      // payload is an ordinary image file, so extracting it at startup preserves node_modules and
+      // still performs zero network installs during a user task.
+      .runCmd("tar -czf /opt/circuit-next.tgz -C /opt/circuit-next .")
+      .runCmd(`mkdir -p ${WORKSPACE} && chown -R ${SANDBOX_USER}:${SANDBOX_USER} /workspace /opt/circuit-next`)
+      .setUser(SANDBOX_USER)
+      .setWorkdir(WORKSPACE)
+      .setStartCmd(`tar -xzf /opt/circuit-next.tgz -C ${WORKSPACE}`, waitForTimeout(3_000)),
 };
 
-const targets = WORKSPACE_PRESETS.filter((preset) => definitions[preset.templateAlias]);
+const requested = new Set(process.argv.slice(2));
+const targets = WORKSPACE_PRESETS.filter((preset) => definitions[preset.templateAlias] && (requested.size === 0 || requested.has(preset.id)));
+if (requested.size > 0 && targets.length !== requested.size) {
+  throw new Error(`Unknown or non-buildable preset: ${[...requested].filter((id) => !targets.some((preset) => preset.id === id)).join(", ")}`);
+}
 console.log(`Building ${targets.length} workspace presets…`);
 
 for (const preset of targets) {

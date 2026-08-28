@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { E2BSandboxProvider } from "./e2b";
 import { DockerSandboxProvider } from "./docker";
 import { OpenAICodingModelProvider } from "./openai";
+import { OpenAIAgentTurnProvider } from "./openai-agent";
 import { CircuitNotionCodingModelProvider } from "./circuitnotion";
+import { CircuitNotionAgentTurnProvider } from "./circuitnotion-agent";
 import { CircuitNotionPresetsProvider } from "./circuitnotion-presets";
-import { createCircuitNotionAgentProvider, createCircuitNotionProvider, createCodingModelProvider, createCodingSandboxProvider, createDockerProvider, createDynamicPresetsProvider, createE2BProvider, createModelPriceCatalog, createOpenAIProvider } from "./factory";
+import { createAgentTurnProvider, createCircuitNotionAgentProvider, createCircuitNotionProvider, createCodingModelProvider, createCodingSandboxProvider, createDockerProvider, createDynamicPresetsProvider, createE2BProvider, createModelPriceCatalog, createOpenAIProvider } from "./factory";
 
 describe("provider factory", () => {
   it("keeps E2B disabled until both credential and approved template exist", () => {
@@ -29,6 +31,16 @@ describe("provider factory", () => {
   it("creates the CircuitNotion multi-turn agent provider from the same explicit identity", () => {
     expect(createCircuitNotionAgentProvider({ CIRCUITNOTION_API_KEY: "cn_test", CIRCUITNOTION_MODEL: "gpt-5.6-luna" })).toBeDefined();
     expect(createCircuitNotionAgentProvider({ CIRCUITNOTION_API_KEY: "cn_test" })).toBeUndefined();
+  });
+
+  it("selects Nova messaging's turn provider explicitly", () => {
+    expect(createAgentTurnProvider({ OPENAI_API_KEY: "openai_test", OPENAI_MODEL: "gpt-5.6-terra" })).toBeUndefined();
+    expect(createAgentTurnProvider({
+      CODING_MODEL_PROVIDER: "openai", OPENAI_API_KEY: "openai_test", OPENAI_MODEL: "gpt-5.6-terra",
+    })).toBeInstanceOf(OpenAIAgentTurnProvider);
+    expect(createAgentTurnProvider({
+      CODING_MODEL_PROVIDER: "circuitnotion", CIRCUITNOTION_API_KEY: "cn_test", CIRCUITNOTION_MODEL: "circuit-3",
+    })).toBeInstanceOf(CircuitNotionAgentTurnProvider);
   });
 
   it("selects the coding model provider explicitly, never by whichever credential is present", () => {

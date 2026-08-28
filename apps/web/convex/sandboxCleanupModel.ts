@@ -13,6 +13,6 @@ export const isSandboxLive = internalQuery({
   handler: async (ctx, { sandboxId }) => {
     const run = await ctx.db.query("agentRuns").withIndex("by_sandbox", (q) => q.eq("sandboxId", sandboxId)).first();
     if (!run) return false;
-    return !["completed", "failed", "cancelled"].includes(run.status);
+    return !["completed", "failed", "cancelled"].includes(run.status) || (run.previewExpiresAt ?? 0) > Date.now();
   },
 });

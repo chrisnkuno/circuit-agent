@@ -39,4 +39,11 @@ describe("coding step request session budgets", () => {
     expect(CODING_SESSION.sandboxRuntimeSeconds).toBe(300);
     expect(WANDER_SESSION.claimLeaseMs).toBeLessThanOrEqual(10 * 60_000);
   });
+
+  it("adds a concrete deployability contract for the prepared Next.js workspace", () => {
+    const request = buildStepRequest("Build an app", "Build a responsive inventory app", "task_3", "step_3", "next-app");
+    expect(request.repositoryContext).toContain("production-deployable");
+    expect(request.repositoryContext).toContain("DEPLOYMENT.md");
+    expect(request.templatePrograms).toContain("npm");
+  });
 });
