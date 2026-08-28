@@ -1,6 +1,6 @@
 import { CodingPlanSchema } from "@circuit-nova/nova-core/coding-prompt";
 import { estimateModelCost, priceActualModelUsage, type ModelCostEstimate, type ModelPriceCatalog } from "@circuit-nova/nova-core/model-cost";
-import { buildCodingPlannerPrompt } from "@circuit-nova/nova-core/coding-prompt";
+import { buildCodingPlannerPrompt, missingDeployableArtifacts, requiresDeployableApp } from "@circuit-nova/nova-core/coding-prompt";
 import { truncateEvidence, type ArtifactReference, type ArtifactStore, type ArtifactWrite } from "./artifacts";
 import { summarizeCommandFailure } from "./worker-runtime";
 import type { InteractiveCodingSandboxProvider, SandboxCommandResult, SandboxSession } from "@circuit-nova/nova-core/providers/contracts";
@@ -296,6 +296,7 @@ export class CodingAgentWorker {
     let failed = false;
 
     let repairs = 0;
+    let deployabilityGap: string[] = [];
 
     try {
       // Control-plane briefings (e.g. Wander Exa literature) land before the planner's writes so
@@ -421,6 +422,18 @@ export class CodingAgentWorker {
         evidence.push(await this.dependencies.artifacts.put(artifact(request, file)));
       }
 
+      // The deployability contract, checked against what the workspace actually contains.
+      //
+      // The planner is *told* to produce a manifest, a lockfile, and DEPLOYMENT.md for an
+      // application objective, and until now nothing verified that it had. A run could finish,
+      // report "completed", and hand back a folder nobody could deploy — which is exactly what a
+      // live run did: it produced the starter's files and no DEPLOYMENT.md, and the system called
+      // that success. Saying so is the point; a deliverable that fails its own contract is
+      // blocked, not complete.
+      if (!cancelled && !failed && requiresDeployableApp(request.objective)) {
+        deployabilityGap = missingDeployableArtifacts(captured.map((file) => file.path ?? ""));
+      }
+
       // Wander harvest: assemble a print-ready HTML report from the lab notebook once the step
       // succeeds. Built on the control plane (not by the model) so the deliverable is reliable.
       if (!cancelled && !failed && isWanderObjective(request.objective)) {
@@ -449,7 +462,7 @@ export class CodingAgentWorker {
     }
 
     return {
-      status: cancelled ? "cancelled" : failed ? "failed" : "completed",
+      status: cancelled ? "cancelled" : failed ? "failed" : deployabilityGap.length > 0 ? "blocked" : "completed",
       stoppedForTime,
       summary: cancelled
         ? "Run cancelled at a safe checkpoint."
@@ -459,7 +472,9 @@ export class CodingAgentWorker {
           ? summarizeCommandFailure({ ...failure.command, purpose: failure.purpose, exitCode: failure.exitCode, stdout: failure.stdout, stderr: failure.stderr })
           : failed
             ? "A verification command failed."
-            : plan.summary,
+            : deployabilityGap.length > 0
+              ? `The application is not deployable as delivered: ${deployabilityGap.join(", ")} ${deployabilityGap.length === 1 ? "is" : "are"} missing from the workspace. Everything produced is captured; re-run to complete the deliverable.`
+              : plan.summary,
       artifactReferences: evidence,
       modelUsage: usage,
       actualModelRwf,

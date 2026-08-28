@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { authClient } from "@/lib/auth-client";
-import { MoneyPreferencesButton } from "@/components/money-preferences";
 
 export function useCurrentOrganization() {
   const membership = useQuery(api.organizations.getCurrentMembership);
@@ -38,7 +37,6 @@ export function AuthPanel() {
         <span className={`auth-workspace-dot${membership ? " auth-workspace-ready" : ""}`} />
         {session.data.user.email}
       </b>
-      <MoneyPreferencesButton />
       <button className="outline" onClick={() => authClient.signOut()}>Sign out</button>
     </div>;
   }

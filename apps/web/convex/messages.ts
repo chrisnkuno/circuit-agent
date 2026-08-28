@@ -51,7 +51,10 @@ export const ensureNovaConversation = mutation({
     const conversationId = await ctx.db.insert("conversations", {
       organizationId, title: "Nova", kind: "nova", status: "active", createdAt: now, updatedAt: now,
     });
-    const welcome = "I’m Nova. We can talk here while your cloud tasks continue independently. I’ll show real task and sandbox state beside this conversation; starting paid work still requires your approval.";
+    // Says what actually happens now: within the workspace's automation ceiling a sandbox starts on
+    // its own, and only a quote above it stops to ask. The old wording promised an approval for
+    // every paid task, which stopped being true when the ceiling was introduced.
+    const welcome = "I’m Nova. Tell me what to build and I’ll start a cloud sandbox for it straight away — you’ll see it working beside this conversation, and several can run at once. Anything quoted above your automation ceiling stops and asks first.";
     await ctx.db.insert("conversationMessages", {
       organizationId, conversationId, sender: "nova", content: welcome, status: "sent", createdAt: now,
     });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALLOWED_GIT_SUBCOMMANDS, ALLOWED_SANDBOX_PROGRAMS, availableSandboxPrograms, BASE_TEMPLATE_PROGRAMS, INLINE_EVAL_FLAGS, SCRIPT_RUNNER_SUBCOMMANDS, validateSandboxCommand } from "./sandbox-policy";
-import { buildCodingPlannerPrompt, CodingPlanSchema } from "./coding-prompt";
+import { buildCodingPlannerPrompt, CodingPlanSchema, missingDeployableArtifacts, requiresDeployableApp } from "./coding-prompt";
 import { buildWanderObjective } from "./wander";
 
 describe("coding planner prompt", () => {
@@ -179,5 +179,54 @@ describe("evidence is not a demand the planner must satisfy", () => {
 
   it("still tells the planner what is being recorded on its behalf", () => {
     expect(JSON.parse(prompt.input).evidenceCapturedForYou).toContain("command_log");
+  });
+});
+
+describe("the deployability contract", () => {
+  it("applies to objectives asking for an application, and not to other work", () => {
+    expect(requiresDeployableApp("Build a responsive launch status web app")).toBe(true);
+    expect(requiresDeployableApp("create a dashboard for release checks")).toBe(true);
+    expect(requiresDeployableApp("Scaffold a SaaS portal")).toBe(true);
+    // A verb without an artifact, or an artifact without a verb, is not an app request.
+    expect(requiresDeployableApp("Build a parser for our log format")).toBe(false);
+    expect(requiresDeployableApp("Summarise the dashboard metrics for me")).toBe(false);
+  });
+
+  it("is the same predicate the prompt uses, so the two cannot drift", () => {
+    // The prompt states the contract only when it applies; the check must agree exactly.
+    const objective = "Build a small responsive uptime summary web app";
+    const { instructions } = buildCodingPlannerPrompt({ objective, workspaceRoot: "/workspace/repo", maxCommands: 6, repositoryContext: "" });
+    expect(instructions).toContain("DEPLOYMENT.md");
+    expect(requiresDeployableApp(objective)).toBe(true);
+
+    const research = "Research the tradeoffs between two queueing strategies";
+    const plain = buildCodingPlannerPrompt({ objective: research, workspaceRoot: "/workspace/repo", maxCommands: 6, repositoryContext: "" });
+    expect(plain.instructions).not.toContain("DEPLOYMENT.md");
+    expect(requiresDeployableApp(research)).toBe(false);
+  });
+
+  it("names exactly what a finished workspace failed to deliver", () => {
+    // This is the real capture from a live run that was reported as completed: the starter's own
+    // files, a lockfile, and no DEPLOYMENT.md anywhere.
+    const shipped = ["package.json", "package-lock.json", "app/page.tsx", "README.md", "next.config.ts"];
+    expect(missingDeployableArtifacts(shipped)).toEqual(["DEPLOYMENT.md"]);
+    expect(missingDeployableArtifacts([...shipped, "DEPLOYMENT.md"])).toEqual([]);
+  });
+
+  it("accepts any package manager's lockfile, and reports its absence by name", () => {
+    for (const lock of ["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]) {
+      expect(missingDeployableArtifacts(["package.json", "DEPLOYMENT.md", lock])).toEqual([]);
+    }
+    expect(missingDeployableArtifacts(["package.json", "DEPLOYMENT.md"])).toEqual(["lockfile"]);
+  });
+
+  it("matches on the file name, not on where in the tree it sits", () => {
+    expect(missingDeployableArtifacts(["/workspace/repo/package.json", "/workspace/repo/DEPLOYMENT.md", "/workspace/repo/yarn.lock"])).toEqual([]);
+    // A file whose name merely ends in the required one does not satisfy the contract.
+    expect(missingDeployableArtifacts(["my-package.json", "OLD-DEPLOYMENT.md", "lock"])).toEqual(["package.json", "DEPLOYMENT.md", "lockfile"]);
+  });
+
+  it("reports an empty workspace as missing everything rather than passing vacuously", () => {
+    expect(missingDeployableArtifacts([])).toEqual(["package.json", "DEPLOYMENT.md", "lockfile"]);
   });
 });

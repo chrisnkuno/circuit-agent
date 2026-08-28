@@ -320,6 +320,12 @@ export default defineSchema({
     modelId: v.optional(v.string()),
     mode: v.union(v.literal("ask"), v.literal("plan"), v.literal("build")),
     memoryEnabled: v.boolean(),
+    /**
+     * The most this workspace will spend on one sandbox without stopping to ask. Optional because
+     * it postdates the table: an absent value means the default ceiling, never "never automate"
+     * (see lib/automation-budget.ts).
+     */
+    autoApproveUnderRwf: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_organization", ["organizationId"]),
   connectorVaultEntries: defineTable({

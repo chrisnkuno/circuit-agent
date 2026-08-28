@@ -39,13 +39,45 @@ export type CodingPromptInput = {
   previousFailure?: { intent: string; command: string; exitCode: number; output: string };
 };
 
+/**
+ * Whether an objective is asking for an application, which is what makes the deployability
+ * contract apply: a dependency manifest and lockfile, a production build, .env.example, and
+ * DEPLOYMENT.md.
+ *
+ * Exported so the prompt that *states* the contract and the check that *enforces* it read the
+ * same predicate. When they were two expressions they could disagree, and a run could be told to
+ * produce DEPLOYMENT.md by one of them while the other never looked for it.
+ */
+export function requiresDeployableApp(objective: string): boolean {
+  if (isWanderObjective(objective)) return false;
+  return /\b(build|create|make|develop|design|scaffold|launch)\b/i.test(objective)
+    && /\b(app|application|website|dashboard|portal|platform|web ?app|saas)\b/i.test(objective);
+}
+
+/**
+ * The files an application deliverable must contain before it can be called deployable. A
+ * lockfile is matched by shape rather than by name because the starter's package manager is not
+ * fixed. `.env.example` is deliberately absent: it is required only when the app names
+ * configuration, which the workspace cannot tell us.
+ */
+export const REQUIRED_DEPLOYABLE_FILES = ["package.json", "DEPLOYMENT.md"] as const;
+const LOCKFILE = /(^|\/)(package-lock\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock)$/;
+
+/** Which parts of the contract a finished workspace failed to deliver. Empty means it holds. */
+export function missingDeployableArtifacts(paths: readonly string[]): string[] {
+  const names = paths.map((path) => path.replace(/^.*\//, ""));
+  const missing: string[] = REQUIRED_DEPLOYABLE_FILES.filter((required) => !names.includes(required));
+  if (!paths.some((path) => LOCKFILE.test(path))) missing.push("lockfile");
+  return missing;
+}
+
 export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructions: string; input: string } {
   if (!input.objective.trim()) throw new Error("Coding objective is required");
   if (!input.workspaceRoot.startsWith("/workspace/")) throw new Error("workspaceRoot must be inside /workspace");
   if (!Number.isInteger(input.maxCommands) || input.maxCommands < 1 || input.maxCommands > 12) throw new Error("maxCommands must be between 1 and 12");
 
   const wander = isWanderObjective(input.objective);
-  const deployableApp = !wander && /\b(build|create|make|develop|design|scaffold|launch)\b/i.test(input.objective) && /\b(app|application|website|dashboard|portal|platform|web ?app|saas)\b/i.test(input.objective);
+  const deployableApp = requiresDeployableApp(input.objective);
   const instructions = [
     wander
       ? "You plan one bounded Wander scientific-lab step inside an isolated workspace."
@@ -103,7 +135,7 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     // that list as "required" made a planner block an otherwise achievable step, reasoning that it
     // owed a patch it could not produce without the `git init` it had just been forbidden.
     evidenceCapturedForYou: ["model_plan", "command_log", "patch when a repository exists", "test_log"],
-    ...(deployableApp ? { deployabilityRequired: true, requiredDeployableFiles: ["package.json", "lockfile", "DEPLOYMENT.md"], requiredVerification: "production build" } : {}),
+    ...(deployableApp ? { deployabilityRequired: true, requiredDeployableFiles: [...REQUIRED_DEPLOYABLE_FILES, "lockfile"], requiredVerification: "production build" } : {}),
     ...(input.previousFailure ? { previousFailure: input.previousFailure } : {}),
   };
   return { instructions, input: JSON.stringify(payload) };

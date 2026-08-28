@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireOrganizationPermission } from "./lib/authz";
 import { formatRwf } from "../lib/task-cost";
+import { decideAutomation } from "../lib/automation-budget";
 import { isWanderObjective } from "@circuit-nova/nova-core/wander";
 import { internal } from "./_generated/api";
 import { approvedRunEffect, type PaymentAuthorization } from "../lib/approval-decision";
@@ -109,8 +110,31 @@ export const requestTaskStartApproval = internalMutation({
     // claimed, bounces off the unauthorized payment hold, and logs a payment warning that
     // duplicates the quote the person is already looking at.
     await ctx.db.patch(runId, { status: "awaiting_approval" });
-    await ctx.db.insert("agentRunEvents", { runId, type: "quote_pending", message: `Quoted at up to ${formatRwf(Number(requestedRwf))}. Nothing runs until the quote is accepted.`, createdAt: now });
-    return createApproval(ctx, { taskId, runId, kind: "task_start", requestedRwf });
+
+    const task = await ctx.db.get(taskId);
+    const preferences = task
+      ? await ctx.db.query("novaPreferences").withIndex("by_organization", (q) => q.eq("organizationId", task.organizationId)).unique()
+      : null;
+    const automation = decideAutomation({ kind: "task_start", quotedRwf: Number(requestedRwf), configuredCapRwf: preferences?.autoApproveUnderRwf });
+
+    await ctx.db.insert("agentRunEvents", {
+      runId,
+      type: "quote_pending",
+      message: automation.automatic
+        ? `Quoted at up to ${formatRwf(Number(requestedRwf))} and started automatically — ${automation.reason}.`
+        : `Quoted at up to ${formatRwf(Number(requestedRwf))}. Nothing runs until the quote is accepted: ${automation.reason}.`,
+      createdAt: now,
+    });
+    const approvalId = await createApproval(ctx, { taskId, runId, kind: "task_start", requestedRwf });
+
+    // Within the ceiling, the quote is settled on the spot. Asking a person to confirm a price
+    // they have already set a limit for is friction, not consent — the limit *is* the consent, and
+    // anything above it still stops here.
+    if (automation.automatic && task) {
+      const approval = await ctx.db.get(approvalId);
+      if (approval) await settleApproval(ctx, approval, "approved", "automation", task);
+    }
+    return approvalId;
   },
 });
 
@@ -161,19 +185,23 @@ async function applyApprovedOverage(ctx: MutationCtx, task: Doc<"tasks">, reques
   }
 }
 
-export const decide = mutation({
-  args: { approvalId: v.id("approvals"), decision: v.union(v.literal("approved"), v.literal("rejected")) },
-  returns: v.object({ outcome: v.union(v.literal("started"), v.literal("approved"), v.literal("rejected"), v.literal("payment_authorization_required")) }),
-  handler: async (ctx, { approvalId, decision }) => {
-    const approval = await ctx.db.get(approvalId);
-    if (!approval || approval.status !== "pending") throw new Error("Pending approval not found");
-    const task = await ctx.db.get(approval.taskId);
-    if (!task) throw new Error("Task not found");
-    // Cancellation withdraws pending approvals, but a client that was already showing one can
-    // still submit it. Approving here would authorize money against a task nobody expects to
-    // run, so a terminal task refuses the decision outright rather than trusting the caller's view.
-    if (["completed", "cancelled"].includes(task.status)) throw new Error("This task is no longer active");
-    const { identity } = await requireOrganizationPermission(ctx, task.organizationId, "approval:decide");
+/**
+ * Everything that happens once an approval is settled, whichever way it was settled and whoever
+ * settled it.
+ *
+ * Lifted out of `decide` so an automatic approval takes the identical path a person's click takes
+ * — the payment authorization, the run and task transitions, the events, and the immediate
+ * dispatch nudge. Two code paths that both "approve a quote" would drift, and the one that drifted
+ * would be the one nobody was watching.
+ */
+async function settleApproval(
+  ctx: MutationCtx,
+  approval: Doc<"approvals">,
+  decision: "approved" | "rejected",
+  decidedBy: string,
+  task: Doc<"tasks">,
+): Promise<{ outcome: "started" | "approved" | "rejected" | "payment_authorization_required" }> {
+  const approvalId = approval._id;
     const now = Date.now();
     let paymentAuthorization: PaymentAuthorization = "authorized";
     if (decision === "approved" && approval.kind === "task_start") {
@@ -182,7 +210,7 @@ export const decide = mutation({
     if (decision === "approved" && approval.kind === "budget_overage" && approval.requestedRwf && approval.requestedRwf > task.maxRwf) {
       paymentAuthorization = await applyApprovedOverage(ctx, task, approval.requestedRwf, now);
     }
-    await ctx.db.patch(approvalId, { status: decision, decidedAt: now, decidedBy: identity.subject });
+    await ctx.db.patch(approvalId, { status: decision, decidedAt: now, decidedBy });
     // A declined quote is not a failure to investigate — the work simply never started, so the
     // task is cancelled rather than blocked. Every other rejection stops work that was already
     // under way, which is a blocked task someone may want to look at.
@@ -235,5 +263,21 @@ export const decide = mutation({
         ? "rejected" as const
         : approval.runId ? runEffect.outcome : "approved" as const,
     };
+}
+
+export const decide = mutation({
+  args: { approvalId: v.id("approvals"), decision: v.union(v.literal("approved"), v.literal("rejected")) },
+  returns: v.object({ outcome: v.union(v.literal("started"), v.literal("approved"), v.literal("rejected"), v.literal("payment_authorization_required")) }),
+  handler: async (ctx, { approvalId, decision }) => {
+    const approval = await ctx.db.get(approvalId);
+    if (!approval || approval.status !== "pending") throw new Error("Pending approval not found");
+    const task = await ctx.db.get(approval.taskId);
+    if (!task) throw new Error("Task not found");
+    // Cancellation withdraws pending approvals, but a client that was already showing one can
+    // still submit it. Approving here would authorize money against a task nobody expects to
+    // run, so a terminal task refuses the decision outright rather than trusting the caller's view.
+    if (["completed", "cancelled"].includes(task.status)) throw new Error("This task is no longer active");
+    const { identity } = await requireOrganizationPermission(ctx, task.organizationId, "approval:decide");
+    return settleApproval(ctx, approval, decision, identity.subject, task);
   },
 });

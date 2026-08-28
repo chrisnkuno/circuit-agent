@@ -61,3 +61,19 @@ describe("chat markdown", () => {
     expect(parseMarkdown("")).toEqual([]);
   });
 });
+
+describe("headings deeper than the bubble can style", () => {
+  it("still reads as a heading rather than printing its hashes", () => {
+    // A model writing #### means a heading; rendering "#### Notes" verbatim is the bug.
+    for (const [hashes, expected] of [["#", 1], ["##", 2], ["###", 3], ["####", 3], ["######", 3]] as const) {
+      const blocks = parseMarkdown(`${hashes} Notes`);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]).toMatchObject({ type: "heading", level: expected });
+      expect(blocks[0]).toMatchObject({ spans: [{ type: "text", text: "Notes" }] });
+    }
+  });
+
+  it("leaves a bare hash with no text as ordinary prose", () => {
+    expect(parseMarkdown("#hashtag")[0]).toMatchObject({ type: "paragraph" });
+  });
+});

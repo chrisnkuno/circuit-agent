@@ -74,10 +74,14 @@ export function parseMarkdown(source: string): Block[] {
     if (/^\s*$/.test(line)) { flushParagraph(); continue; }
     if (/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(line)) { flushParagraph(); blocks.push({ type: "rule" }); continue; }
 
-    const heading = /^(#{1,3})\s+(.*)$/.exec(line);
+    // All six ATX levels are accepted, then clamped to three. A model writing #### expects a
+    // heading, not four literal hashes in the text — and a chat bubble has no room to render six
+    // distinct heading sizes, so anything deeper than the third simply lands on the smallest.
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
       flushParagraph();
-      blocks.push({ type: "heading", level: heading[1].length as 1 | 2 | 3, spans: parseInline(heading[2].trim()) });
+      const level = Math.min(3, heading[1].length) as 1 | 2 | 3;
+      blocks.push({ type: "heading", level, spans: parseInline(heading[2].trim()) });
       continue;
     }
     const quote = /^\s*>\s?(.*)$/.exec(line);
