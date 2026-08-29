@@ -54,8 +54,20 @@ export async function insertQuotedTask(ctx: MutationCtx, args: QuotedTaskArgs): 
   }
   const taskId = await ctx.db.insert("tasks", { organizationId: args.organizationId, title: args.title, kind: args.kind, quality: args.quality, maxRwf: args.maxRwf, spentRwf: 0n, reservedRwf: 0n, expectedOutput: args.expectedOutput, status: "awaiting_approval", createdAt: now });
   await ctx.db.insert("taskQuotes", { taskId, version: 1, estimateLowRwf: args.estimateLowRwf, estimateHighRwf: args.estimateHighRwf, maxRwf: args.maxRwf, confidence: args.confidence, assumptions: args.assumptions, estimatorVersion: "rules-v1", createdAt: now });
-  await ctx.db.insert("paymentHolds", { taskId, amountRwf: args.maxRwf, provider: "circuit_pay", status: "pending", idempotencyKey: scopedIdempotencyKey, createdAt: now });
-  await ctx.db.insert("taskEvents", { taskId, type: "quote_created", message: "Task quote created. Payment authorization is required before execution.", createdAt: now });
+  // The product currently uses RWF as an execution budget, not as a Circuit Pay checkout.
+  // Keep the existing hold row as the idempotent budget reservation record, but authorize it
+  // locally so a requested task cannot deadlock behind a payment provider that is not part of
+  // this workflow. Approval policy and the task cap still decide whether work may start.
+  await ctx.db.insert("paymentHolds", {
+    taskId,
+    amountRwf: args.maxRwf,
+    provider: "circuit_pay",
+    providerReference: `execution-budget-${now}`,
+    status: "authorized",
+    idempotencyKey: scopedIdempotencyKey,
+    createdAt: now,
+  });
+  await ctx.db.insert("taskEvents", { taskId, type: "quote_created", message: "Task quote created with an internal execution budget. No payment authorization is required.", createdAt: now });
   return taskId;
 }
 

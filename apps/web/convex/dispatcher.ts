@@ -16,6 +16,7 @@ import type { ModelPriceCatalog } from "@circuit-nova/nova-core/model-cost";
 import { createConvexArtifactStore } from "./lib/artifactStore";
 import { createWorkerControl } from "./lib/workerControl";
 import { classifyWorkerFailure, maxAttemptsForFailure, retryDelayForFailure, summarizeWorkerError } from "../lib/worker-runtime";
+import { applyCodingModelEnv } from "../lib/coding-model-env";
 import { findWorkspacePreset } from "@circuit-nova/nova-core/sandbox-templates";
 import { isWanderObjective, resolveExecutionSession } from "@circuit-nova/nova-core/wander";
 import { buildStepRequest } from "../lib/coding-step-request";
@@ -145,10 +146,7 @@ export const executeClaimedStep = internalAction({
   returns: v.null(),
   handler: async (ctx, args): Promise<null> => {
     const baseEnv = process.env as Record<string, string | undefined>;
-    const env = { ...baseEnv };
-    if (args.modelProvider) env.CODING_MODEL_PROVIDER = args.modelProvider;
-    if (args.modelId && args.modelProvider === "openai") env.OPENAI_MODEL = args.modelId;
-    if (args.modelId && args.modelProvider === "circuitnotion") env.CIRCUITNOTION_MODEL = args.modelId;
+    const env = applyCodingModelEnv(baseEnv, { provider: args.modelProvider, modelId: args.modelId });
     const prices = createModelPriceCatalog(env);
     const model = createCodingModelProvider(env);
     const sandbox = createE2BProvider(env, findWorkspacePreset(args.workspacePresetId).templateAlias);

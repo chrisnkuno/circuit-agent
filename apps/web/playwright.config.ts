@@ -18,6 +18,12 @@ export default defineConfig({
   },
   webServer: {
     command: "bun run dev --hostname 127.0.0.1 --port 3179",
+    // Node resolves AAAA before A. On a host whose IPv6 egress is black-holed, every server-side
+    // fetch — the auth route's calls to Convex above all — fails with an ETIMEDOUT AggregateError
+    // after exhausting the v6 addresses, while curl on the same box succeeds. The symptom is
+    // "Authentication failed" at sign-up and a suite that looks broken for reasons that are not
+    // in the app.
+    env: { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --dns-result-order=ipv4first`.trim() },
     url: "http://127.0.0.1:3179/api/health",
     reuseExistingServer: true,
     timeout: 120_000,

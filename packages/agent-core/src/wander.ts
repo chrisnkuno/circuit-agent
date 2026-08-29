@@ -88,23 +88,61 @@ export const WANDER_SESSION = {
   modelTimeoutMs: 120_000,
   /** Tokens must keep arriving; this much silence means the call is gone, not slow. */
   modelIdleTimeoutMs: 45_000,
-  maxOutputTokens: 10_000,
+  // DeepSeek V4 Flash shares reasoning and visible JSON in one output budget. Ten thousand can
+  // expire while it is still thinking, before a valid plan exists for the sandbox to execute.
+  maxOutputTokens: 24_000,
   maxCommands: 8,
   // "medium" routinely overruns the relay ceiling on lab-sized JSON plans; structure carries the quality.
   reasoningEffort: "low" as const,
 } as const;
 
-/** Everyday coding-step budgets (unchanged). */
+/**
+ * Everyday coding-step budgets.
+ *
+ * The clock here is sized around `maxOutputTokens`, not the other way round: plan and build run
+ * serially inside one Convex action that dies at ten minutes, so the allowance a plan can actually
+ * spend is whatever streams before the sandbox still gets its bench time.
+ */
 export const CODING_SESSION = {
-  sandboxRuntimeSeconds: 300,
-  claimLeaseMs: 180_000,
-  stepDeadlineMs: 165_000,
-  modelTimeoutMs: 90_000,
+  /** Sandbox lifetime, sized so model backstop + bench time still fit `stepDeadlineMs`. */
+  sandboxRuntimeSeconds: 240,
+  claimLeaseMs: 600_000,
+  /** Self-enforced stop, safely inside the 10-minute Convex action that runs the whole step. */
+  stepDeadlineMs: 540_000,
+  /**
+   * Backstop for the whole call, not a target: a small plan still returns in seconds.
+   *
+   * This must be large enough to actually stream `maxOutputTokens` at a pessimistic rate,
+   * otherwise the token budget is unreachable and every large plan fails on the clock instead of
+   * on its merits. `modelIdleTimeoutMs` — not this — is what detects a genuinely dead stream.
+   */
+  modelTimeoutMs: 300_000,
+  /** Tokens must keep arriving; this much silence means the call is gone, not slow. */
   modelIdleTimeoutMs: 45_000,
-  maxOutputTokens: 8_000,
+  // Reasoning models spend from this allowance before emitting the plan JSON. The former 8K cap
+  // truncated a small REST API plan, and 16K still truncated a detailed webhook API plan on
+  // DeepSeek V4 Flash, so neither request ever reached its sandbox.
+  maxOutputTokens: 32_000,
   maxCommands: 6,
   reasoningEffort: "low" as const,
 } as const;
+
+/**
+ * Pessimistic streaming rate used to check a session's token budget against its own clock.
+ *
+ * Well below observed relay throughput on purpose: this exists to catch a budget raised without
+ * the timeout that would let it finish, which is exactly how a 32K allowance behind a 90s
+ * backstop silently became "every detailed plan times out and burns its lease".
+ */
+export const MIN_PLAN_STREAM_TOKENS_PER_SECOND = 120;
+
+/** True when a session can actually stream its whole output allowance before the backstop fires. */
+export function tokenBudgetFitsModelTimeout(session: {
+  maxOutputTokens: number;
+  modelTimeoutMs: number;
+}): boolean {
+  return session.maxOutputTokens / MIN_PLAN_STREAM_TOKENS_PER_SECOND <= session.modelTimeoutMs / 1_000;
+}
 
 export type ExecutionSessionBudgets = {
   sandboxRuntimeSeconds: number;

@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireOrganizationPermission } from "./lib/authz";
-import { detectBuildIntent } from "../lib/build-intent";
+import { resolveBuildRequest } from "../lib/build-intent";
 
 const MAX_MESSAGE_LENGTH = 8_000;
 const MESSAGE_WINDOW = 120;
@@ -100,6 +100,15 @@ export const sendToNova = mutation({
       if (!reply) throw new Error("Message is already being accepted");
       return { userMessageId: replay._id, novaMessageId: reply._id };
     }
+    // What Nova last said is half the request. "go ahead and start" means nothing on its own, and
+    // means exactly one thing after Nova has proposed a build — see lib/build-intent.ts.
+    const priorNovaMessage = (await ctx.db
+      .query("conversationMessages")
+      .withIndex("by_conversation_created", (q) => q.eq("conversationId", conversation._id))
+      .order("desc")
+      .take(8))
+      .find((message) => message.sender === "nova" && message.status === "sent" && message.content.trim().length > 0)?.content;
+
     const now = Date.now();
     const userMessageId = await ctx.db.insert("conversationMessages", {
       organizationId: conversation.organizationId,
@@ -121,13 +130,16 @@ export const sendToNova = mutation({
     });
     await ctx.db.patch(conversation._id, { lastMessagePreview: preview(content), lastMessageAt: now, updatedAt: now });
     await ctx.scheduler.runAfter(0, internal.messagesActions.generateNovaReply, { conversationId: conversation._id, novaMessageId });
-    // Asking Nova to build something *is* the request. Quote it now so the person approves a real
-    // price instead of being told to press a button; nothing runs until that approval.
-    if (detectBuildIntent(content)) {
+    // Asking Nova to build something *is* the request — whether it is asked outright or by
+    // agreeing to what Nova just offered. Quote it here, because Nova has no way to start a run
+    // itself: when this does not fire, it has nothing to point at and starts explaining why it
+    // cannot do the thing it was asked to do.
+    const build = resolveBuildRequest({ message: content, priorNovaMessage });
+    if (build) {
       await ctx.scheduler.runAfter(0, internal.messagesActions.quoteBuildRequest, {
         conversationId: conversation._id,
         organizationId: conversation.organizationId,
-        objective: content,
+        objective: build.objective,
         idempotencyKey: `conversation:${args.clientMessageId}`,
       });
     }

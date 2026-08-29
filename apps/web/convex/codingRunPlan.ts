@@ -6,6 +6,7 @@ import { estimateTaskCost } from "../lib/task-cost";
 import { isWanderObjective } from "@circuit-nova/nova-core/wander";
 import { inferWorkspacePresetId } from "@circuit-nova/nova-core/sandbox-templates";
 import { createCodingModelProvider } from "@circuit-nova/nova-core/providers/factory";
+import { applyCodingModelEnv } from "../lib/coding-model-env";
 import type { Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 
@@ -30,7 +31,7 @@ export async function startCodingRun(
     authorization: "session" | "trusted-organization";
     /**
      * "required" quotes the work and stops: the task, its quote, and its run are persisted, but
-     * the payment hold stays pending, so nothing can dispatch until a person accepts the price
+     * the run stays approval-gated, so nothing can dispatch until a person accepts the price
      * (convex/approvals.ts, kind "task_start"). "pre-authorized" is for entry points where the
      * person already agreed to the work at setup time and has no surface to accept a quote in
      * — a recurring schedule they created, a linked Telegram channel.
@@ -52,9 +53,9 @@ export async function startCodingRun(
   const modelProvider = preferences?.provider === "deployment" || !preferences?.provider ? undefined : preferences.provider;
   const modelId = preferences?.modelId?.trim() || undefined;
   if (modelProvider) {
-    const env: Record<string, string | undefined> = { ...(process.env as Record<string, string | undefined>), CODING_MODEL_PROVIDER: modelProvider };
-    if (modelId && modelProvider === "openai") env.OPENAI_MODEL = modelId;
-    if (modelId && modelProvider === "circuitnotion") env.CIRCUITNOTION_MODEL = modelId;
+    // Validated against the same resolution the dispatcher will use, so a run is never accepted
+    // on one model and then executed on another.
+    const env = applyCodingModelEnv(process.env as Record<string, string | undefined>, { provider: modelProvider, modelId });
     if (!createCodingModelProvider(env)) throw new Error(`The selected ${modelProvider} provider/model is not configured on this deployment.`);
   }
   const quote = estimateTaskCost({ kind: "coding", quality: "fast", attachmentCount: 0, requiresBrowser: false, requiresSandbox: true });
@@ -71,8 +72,8 @@ export async function startCodingRun(
     idempotencyKey: args.idempotencyKey,
   });
 
-  // Authorizing here is what commits the money. Under "required" it is deliberately deferred to
-  // the person accepting the quote, so a run can be created and inspected without any spend.
+  // Pre-authorized entry points record the internal execution budget immediately. Under
+  // "required", dispatch is deliberately deferred until the person accepts the quote.
   if (args.costApproval === "pre-authorized") {
     await ctx.runMutation(useInternal ? internal.devPayment.authorizeDevelopmentPaymentInternal : api.devPayment.authorizeDevelopmentPayment, { taskId });
   }
@@ -112,7 +113,7 @@ export async function startCodingRun(
 
   if (args.costApproval === "required") {
     // The durable record of "this costs X — may I?". Until it is decided, the run sits queued
-    // behind an unauthorized payment hold and no worker, model, or sandbox is ever touched.
+    // behind its approval gate and no worker, model, or sandbox is ever touched.
     // Wander Exa prefetch waits for approval so a declined quote never spends a search.
     await ctx.runMutation(internal.approvals.requestTaskStartApproval, { taskId, runId, requestedRwf: BigInt(quote.maxRwf) });
     return { taskId, runId, quote: runQuote, awaitingCostApproval: true };

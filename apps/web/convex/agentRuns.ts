@@ -315,8 +315,8 @@ export const claimStep = internalMutation({
     const paymentHold = await ctx.db.query("paymentHolds").withIndex("by_task", (q) => q.eq("taskId", task._id)).order("desc").first();
     if (!paymentHold || paymentHold.status !== "authorized" || paymentHold.amountRwf < task.maxRwf) {
       await ctx.db.patch(run._id, { status: "awaiting_approval" });
-      await ctx.db.insert("agentRunEvents", { runId: run._id, type: "payment_authorization_required", message: "Execution is blocked until the authorized Circuit Pay hold covers the approved task cap.", createdAt: Date.now() });
-      return { status: "payment_authorization_required" as const };
+      await ctx.db.insert("agentRunEvents", { runId: run._id, type: "execution_budget_required", message: "Execution is blocked until an internal budget reservation covers the approved task cap.", createdAt: Date.now() });
+      return { status: "execution_budget_required" as const };
     }
     if (task.spentRwf + task.reservedRwf + args.estimatedRwf > task.maxRwf) {
       const requestedTotalCapRwf = task.spentRwf + task.reservedRwf + args.estimatedRwf;

@@ -4,10 +4,40 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { defenderFeedPayload, type DefenderFeedManifest } from "@circuit-nova/nova-core/nova-cli/defender-feed";
 
-const CORPUS = path.join(process.cwd(), "packages", "nova-state", "defender-knowledge", "knowledge-v1.jsonl");
+const CORPUS_RELATIVE = path.join("packages", "nova-state", "defender-knowledge", "knowledge-v1.jsonl");
+
+/**
+ * Finds the corpus without assuming where the process was started.
+ *
+ * This was `path.join(process.cwd(), ...)`, which quietly made the feed a function of the launch
+ * directory: it resolved from the repo root and broke from `apps/web` — which is exactly where the
+ * Next server runs. The failure surfaced as a bare ENOENT, so it read as a missing file rather
+ * than a wrong assumption, and it hid a real assertion in the test suite behind it.
+ *
+ * Walking up from the working directory covers every layout the app is actually started in — repo
+ * root, `apps/web`, or a nested worktree — and the error names the path it wanted when it runs out
+ * of parents, rather than leaving a bare ENOENT to be interpreted.
+ */
+export async function resolveCorpus(from: string = process.cwd()): Promise<string> {
+  const tried: string[] = [];
+  let directory = from;
+  for (let depth = 0; depth < 6; depth += 1) {
+    const candidate = path.join(directory, CORPUS_RELATIVE);
+    tried.push(candidate);
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  throw new Error(`Defender corpus not found. Looked for ${CORPUS_RELATIVE} in:\n${tried.join("\n")}`);
+}
 
 export async function defenderCorpus(): Promise<{ bytes: Buffer; digest: string; records: number }> {
-  const bytes = await fs.readFile(CORPUS);
+  const bytes = await fs.readFile(await resolveCorpus());
   return {
     bytes,
     digest: createHash("sha256").update(bytes).digest("hex"),

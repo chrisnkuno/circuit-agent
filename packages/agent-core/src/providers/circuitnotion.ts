@@ -4,6 +4,7 @@ import { buildCodingPlannerPrompt, CodingPlanSchema } from "../coding-prompt";
 import { buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
 import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
 import { PROTOCOL_MAX_OUTPUT_TOKENS } from "./model-capabilities";
+import { estimateTextTokens } from "../model-cost";
 
 export { CIRCUITNOTION_DEFAULT_BASE_URL, buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
 
@@ -120,8 +121,23 @@ export async function collectCompletionStream(
   };
 }
 
-function normalizeUsage(response: ChatCompletionResponse): ModelUsage {
-  if (!response.usage) throw new Error("Model response did not include usage accounting");
+function normalizeUsage(response: ChatCompletionResponse, fallback: { input: string; maxOutputTokens: number }): ModelUsage {
+  // Some CircuitNotion-compatible upstreams omit the final usage-only SSE chunk under concurrent
+  // load even when include_usage was requested. A complete, schema-valid plan should not be thrown
+  // away for that transport omission. Charge the entire requested output allowance (which includes
+  // hidden reasoning) plus a conservative local input estimate, so the fallback can only
+  // over-account, never silently make unmetered work free.
+  if (!response.usage) {
+    const inputTokens = estimateTextTokens(fallback.input) + 64;
+    return {
+      inputTokens,
+      outputTokens: fallback.maxOutputTokens,
+      totalTokens: inputTokens + fallback.maxOutputTokens,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+    };
+  }
   const usage = {
     inputTokens: response.usage.prompt_tokens,
     outputTokens: response.usage.completion_tokens,
@@ -170,12 +186,17 @@ function parsePlan(content: string | null) {
  *
  * A plan is a single JSON object, so unlike a conversational turn there is nothing to salvage from
  * a truncated one — half an object is not a smaller plan. What the caller can act on is *which*
- * limit was hit, and the raw `finish_reason` does not say: "length" reads like a network word,
- * while the actual fix is a larger output budget or a smaller objective.
+ * limit was hit, and the raw `finish_reason` does not say: "length" reads like a network word.
+ *
+ * The obvious advice — "raise the budget" — is mostly a dead end, and saying so is the point of
+ * this message. The step plans and builds serially inside one Convex action that is killed at ten
+ * minutes, so the allowance is bounded by the time left after the sandbox gets its bench: roughly
+ * 36K tokens. Chasing 8K -> 16K -> 32K already consumed that headroom. Past this point the plan
+ * has to get smaller, not the budget bigger.
  */
 function planEndingError(reason: string | null, maxOutputTokens: number): string {
   return reason === "length" || reason === "max_tokens"
-    ? `Model ran out of output budget (${maxOutputTokens} tokens) before finishing the plan JSON. Raise maxOutputTokens or narrow the objective.`
+    ? `Model ran out of output budget (${maxOutputTokens} tokens) before finishing the plan JSON. This objective is too large to plan in one step — narrow it or split it, rather than raising maxOutputTokens, which is already near the ceiling the step deadline allows.`
     : `Model response ended with finish reason ${reason}`;
 }
 
@@ -250,7 +271,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
     };
 
     let response = await attempt();
-    let usage = normalizeUsage(response);
+    let usage = normalizeUsage(response, { input: `${systemPrompt}\n\n${prompt.input}`, maxOutputTokens: request.maxOutputTokens });
     let choice = response.choices[0];
     if (!choice) throw new Error("Model response contained no choices");
     if (choice.message.refusal) return { status: "refused", refusal: choice.message.refusal, responseId: response.id, model: response.model, usage };
@@ -261,7 +282,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
     let plan = parsePlan(choice.message.content);
     if (!plan) {
       response = await attempt(RETRY_INSTRUCTION);
-      usage = sumUsage(usage, normalizeUsage(response));
+      usage = sumUsage(usage, normalizeUsage(response, { input: `${systemPrompt}\n\n${prompt.input}\n\n${RETRY_INSTRUCTION}`, maxOutputTokens: request.maxOutputTokens }));
       choice = response.choices[0];
       if (!choice) throw new Error("Model response contained no choices");
       if (choice.message.refusal) return { status: "refused", refusal: choice.message.refusal, responseId: response.id, model: response.model, usage };

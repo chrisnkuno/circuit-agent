@@ -71,10 +71,25 @@ export function presetPrograms(preset: WorkspacePreset): AllowedSandboxProgram[]
   return preset.programs.filter((program) => permitted.has(program));
 }
 
-/** Selects the deployable app image from intent, while leaving ordinary coding work lightweight. */
+/**
+ * Selects the deployable app image from intent, while leaving ordinary coding work lightweight.
+ *
+ * Two vocabularies, because one was not enough. `namesAnApp` is the explicit list — if someone says
+ * "app" or "dashboard" they get the app image whatever else the sentence contains. `namesAWebSurface`
+ * exists because people mostly do not say "app": they ask for a "page" or a "site", and those asks
+ * were falling through to the plain image, which produced a bare index.html with nothing serving
+ * port 3000, so the live preview answered 502. That is a silent downgrade of exactly the request
+ * the app image is for.
+ *
+ * The surface words alone would over-match, though — "convert a Markdown file to an HTML page" is a
+ * CLI, not a website — so a stated non-web artifact vetoes them. An explicit app word still wins,
+ * which keeps "dashboard app with an API" on the app image.
+ */
 export function inferWorkspacePresetId(objective: string): string | undefined {
   const normalized = objective.toLowerCase();
   const asksToCreate = /\b(build|create|make|develop|design|scaffold|launch)\b/.test(normalized);
   const namesAnApp = /\b(app|application|website|dashboard|portal|platform|web ?app|saas)\b/.test(normalized);
-  return asksToCreate && namesAnApp ? "next-app" : undefined;
+  const namesAWebSurface = /\b(page|site|landing|storefront|front-?end|ui|web interface)\b/.test(normalized);
+  const namesANonWebArtifact = /\b(command-?line|cli|library|module|package|script|api|endpoint|microservice|daemon|parser|converter)\b/.test(normalized);
+  return asksToCreate && (namesAnApp || (namesAWebSurface && !namesANonWebArtifact)) ? "next-app" : undefined;
 }

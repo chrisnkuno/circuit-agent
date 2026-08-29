@@ -139,50 +139,31 @@ export const requestTaskStartApproval = internalMutation({
 });
 
 /**
- * Commits the money for an accepted quote. This is the moment a person's "yes, that price is
- * fine" becomes an authorized hold — before it, the task is priced but nothing can be spent.
+ * Converts legacy pending hold rows into internal execution budgets when a quote is accepted.
  */
 async function authorizeAcceptedQuote(ctx: MutationCtx, task: Doc<"tasks">, now: number): Promise<PaymentAuthorization> {
   const hold = await ctx.db.query("paymentHolds").withIndex("by_task", (q) => q.eq("taskId", task._id)).order("desc").first();
   if (!hold) throw new Error("No payment hold found for this task");
   if (hold.status === "authorized" || hold.status === "captured") return "authorized";
   if (hold.status !== "pending") throw new Error(`Payment hold cannot be authorized from status ${hold.status}`);
-  // Same honesty as an approved overage: Circuit Pay's real authorization contract is not
-  // verified yet (docs/planning/gap-register.md), so outside the development bypass the hold stays
-  // pending and the run stays blocked rather than pretending money was reserved.
-  if (process.env.ALLOW_DEV_PAYMENT_BYPASS === "true") {
-    await ctx.db.patch(hold._id, { status: "authorized", providerReference: `dev-bypass-${now}` });
-    await ctx.db.insert("taskEvents", { taskId: task._id, type: "quote_accepted", message: `The quote was accepted and a hold of ${formatRwf(Number(hold.amountRwf))} was authorized.`, createdAt: now });
-    return "authorized";
-  } else {
-    await ctx.db.insert("taskEvents", { taskId: task._id, type: "payment_authorization_required", message: "The quote was accepted. Execution waits for a Circuit Pay authorization covering the task cap.", createdAt: now });
-    return "payment_authorization_required";
-  }
+  await ctx.db.patch(hold._id, { status: "authorized", providerReference: `execution-budget-${now}` });
+  await ctx.db.insert("taskEvents", { taskId: task._id, type: "quote_accepted", message: `The quote was accepted with an internal execution budget of ${formatRwf(Number(hold.amountRwf))}.`, createdAt: now });
+  return "authorized";
 }
 
 /**
  * Raises the task cap an approved overage asked for, and keeps the payment hold consistent
  * with it. Without this the run deadlocks: claimStep refuses to dispatch while the authorized
- * hold is smaller than the cap, so a cap raised on its own leaves the run blocked behind a
- * payment gate that has no approval record left to decide.
+ * hold is smaller than the cap, so a cap raised on its own leaves the run blocked behind an
+ * undersized execution budget that has no approval record left to decide.
  */
 async function applyApprovedOverage(ctx: MutationCtx, task: Doc<"tasks">, requestedRwf: bigint, now: number): Promise<PaymentAuthorization> {
   const hold = await ctx.db.query("paymentHolds").withIndex("by_task", (q) => q.eq("taskId", task._id)).order("desc").first();
   if (!hold) throw new Error("No payment hold found for this task");
   await ctx.db.patch(task._id, { maxRwf: requestedRwf });
   await ctx.db.insert("taskEvents", { taskId: task._id, type: "budget_cap_approved", message: `A new total task cap of ${formatRwf(Number(requestedRwf))} was approved.`, createdAt: now });
-  // Circuit Pay's real re-authorization contract is not verified yet (see docs/planning/gap-register.md).
-  // With the development bypass on, the expanded hold is authorized directly so the pipeline can
-  // be exercised end to end; without it the hold returns to pending and execution stays blocked
-  // until a real authorization covers the new cap — never silently authorized.
-  if (process.env.ALLOW_DEV_PAYMENT_BYPASS === "true") {
-    await ctx.db.patch(hold._id, { amountRwf: requestedRwf, status: "authorized", providerReference: `dev-bypass-${now}` });
-    return "authorized";
-  } else {
-    await ctx.db.patch(hold._id, { amountRwf: requestedRwf, status: "pending" });
-    await ctx.db.insert("taskEvents", { taskId: task._id, type: "payment_authorization_required", message: "The approved cap needs a Circuit Pay authorization covering the new amount before execution resumes.", createdAt: now });
-    return "payment_authorization_required";
-  }
+  await ctx.db.patch(hold._id, { amountRwf: requestedRwf, status: "authorized", providerReference: `execution-budget-${now}` });
+  return "authorized";
 }
 
 /**
@@ -190,7 +171,7 @@ async function applyApprovedOverage(ctx: MutationCtx, task: Doc<"tasks">, reques
  * settled it.
  *
  * Lifted out of `decide` so an automatic approval takes the identical path a person's click takes
- * — the payment authorization, the run and task transitions, the events, and the immediate
+ * — the budget authorization, the run and task transitions, the events, and the immediate
  * dispatch nudge. Two code paths that both "approve a quote" would drift, and the one that drifted
  * would be the one nobody was watching.
  */

@@ -83,7 +83,10 @@ describe("Wander objectives", () => {
   it("resolves an 8-minute Wander session while leaving coding budgets alone", () => {
     expect(resolveExecutionSession("add a README")).toEqual(CODING_SESSION);
     expect(resolveExecutionSession(buildWanderObjective("sleep"))).toEqual(WANDER_SESSION);
-    expect(WANDER_SESSION.claimLeaseMs).toBeGreaterThan(CODING_SESSION.claimLeaseMs);
+    // Both sessions now sit at Convex's 10-minute action ceiling, so the lease no longer
+    // distinguishes them. Bench time is what Wander actually gets more of.
+    expect(WANDER_SESSION.claimLeaseMs).toBe(CODING_SESSION.claimLeaseMs);
+    expect(WANDER_SESSION.sandboxRuntimeSeconds).toBeGreaterThan(CODING_SESSION.sandboxRuntimeSeconds);
     expect(WANDER_SESSION.claimLeaseMs).toBeLessThanOrEqual(10 * 60_000);
   });
 });
