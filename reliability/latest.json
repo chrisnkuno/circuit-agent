@@ -1,17 +1,17 @@
 {
-  "generatedAt": "2026-08-28T15:27:27.856Z",
+  "generatedAt": "2026-08-29T10:09:44.359Z",
   "provider": "openai",
   "model": "cohere/north-mini-code:free",
-  "score": 90,
+  "score": 92,
   "grade": "excellent",
   "components": {
     "completion": 16,
     "verification": 9,
     "outputQuality": 7,
-    "toolReliability": 9.2,
+    "toolReliability": 9.6,
     "speed": 7,
-    "economy": 6.6,
-    "prediction": 3.7,
+    "economy": 7,
+    "prediction": 4.6,
     "scope": 7,
     "memoryResume": 7,
     "security": 6,
@@ -23,20 +23,20 @@
   },
   "cases": 6,
   "passed": 6,
-  "actualTokens": 93581,
-  "predictionCoverage": 17,
-  "toolFailureRate": 8.3,
+  "actualTokens": 85819,
+  "predictionCoverage": 33,
+  "toolFailureRate": 4.2,
   "providerFailureRate": 0,
   "completionRate": 100,
   "verificationRate": 100,
   "outputQualityRate": 100,
-  "medianLatencyMs": 11465,
+  "medianLatencyMs": 5871,
   "auditPlatforms": [
     "darwin",
     "linux",
     "win32"
   ],
-  "auditTests": 3117,
+  "auditTests": 3129,
   "auditFailures": 0,
   "exaScore": null,
   "observations": [
@@ -46,104 +46,136 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 22387,
+      "actualTokens": 30768,
       "economicalTokenTarget": 45000,
       "predictedTokensLow": 31561,
       "predictedTokensHigh": 83993,
-      "failedToolCalls": 0,
+      "failedToolCalls": 1,
       "unavailableToolCalls": 0,
-      "toolCalls": 5,
+      "toolCalls": 7,
       "providerAttempts": 1,
-      "elapsedMs": 15740,
+      "elapsedMs": 18778,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
-      "failureReasons": [],
+      "failureReasons": [
+        "1 tool call(s) failed"
+      ],
       "events": [
         {
-          "at": "2026-08-28T15:26:29.077Z",
+          "at": "2026-08-29T10:08:42.785Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:29.078Z",
+          "at": "2026-08-29T10:08:42.787Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-28T15:26:29.080Z",
+          "at": "2026-08-29T10:08:42.789Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:31.406Z",
+          "at": "2026-08-29T10:08:44.572Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:31.406Z",
-          "type": "tool_call",
-          "tool": "list_files"
-        },
-        {
-          "at": "2026-08-28T15:26:31.407Z",
-          "type": "tool_result",
-          "tool": "list_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:26:33.139Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:26:33.142Z",
+          "at": "2026-08-29T10:08:44.575Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-08-28T15:26:33.460Z",
+          "at": "2026-08-29T10:08:44.699Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:38.872Z",
+          "at": "2026-08-29T10:08:47.200Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:38.873Z",
+          "at": "2026-08-29T10:08:47.202Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-08-28T15:26:38.875Z",
+          "at": "2026-08-29T10:08:47.204Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:39.417Z",
+          "at": "2026-08-29T10:08:47.931Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:39.418Z",
+          "at": "2026-08-29T10:08:47.931Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-28T15:26:39.513Z",
+          "at": "2026-08-29T10:08:48.027Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": true
+        },
+        {
+          "at": "2026-08-29T10:08:51.001Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-29T10:08:51.002Z",
+          "type": "tool_call",
+          "tool": "edit_file"
+        },
+        {
+          "at": "2026-08-29T10:08:51.006Z",
+          "type": "tool_result",
+          "tool": "edit_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:08:54.666Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-29T10:08:54.667Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-08-29T10:08:54.763Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:42.060Z",
+          "at": "2026-08-29T10:08:57.194Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:42.061Z",
+          "at": "2026-08-29T10:08:57.195Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-08-29T10:08:57.196Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:08:59.834Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-29T10:08:59.834Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -170,15 +202,15 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 16012,
+      "actualTokens": 24680,
       "economicalTokenTarget": 38000,
       "predictedTokensLow": 31316,
       "predictedTokensHigh": 83342,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 6,
+      "toolCalls": 10,
       "providerAttempts": 1,
-      "elapsedMs": 17028,
+      "elapsedMs": 25077,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 5,
       "outputQualityChecksTotal": 5,
@@ -188,89 +220,141 @@
       "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-28T15:26:44.950Z",
+          "at": "2026-08-29T10:09:02.500Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:44.952Z",
+          "at": "2026-08-29T10:09:02.502Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-28T15:26:44.952Z",
+          "at": "2026-08-29T10:09:02.503Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-28T15:26:44.955Z",
+          "at": "2026-08-29T10:09:02.506Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:44.956Z",
+          "at": "2026-08-29T10:09:02.507Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:57.306Z",
+          "at": "2026-08-29T10:09:04.447Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:57.309Z",
+          "at": "2026-08-29T10:09:04.448Z",
           "type": "tool_call",
-          "tool": "write_file"
+          "tool": "list_files"
         },
         {
-          "at": "2026-08-28T15:26:57.312Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-28T15:26:57.314Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-28T15:26:57.315Z",
+          "at": "2026-08-29T10:09:04.448Z",
           "type": "tool_result",
-          "tool": "write_file",
+          "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:57.317Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:26:57.318Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:26:57.793Z",
+          "at": "2026-08-29T10:09:05.337Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:57.794Z",
+          "at": "2026-08-29T10:09:05.337Z",
+          "type": "tool_call",
+          "tool": "glob_files"
+        },
+        {
+          "at": "2026-08-29T10:09:05.337Z",
+          "type": "tool_call",
+          "tool": "glob_files"
+        },
+        {
+          "at": "2026-08-29T10:09:05.337Z",
+          "type": "tool_call",
+          "tool": "glob_files"
+        },
+        {
+          "at": "2026-08-29T10:09:05.339Z",
+          "type": "tool_result",
+          "tool": "glob_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:09:05.339Z",
+          "type": "tool_result",
+          "tool": "glob_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:09:05.339Z",
+          "type": "tool_result",
+          "tool": "glob_files",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:09:21.349Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-29T10:09:21.353Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-29T10:09:21.356Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-29T10:09:21.357Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-08-29T10:09:21.358Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:09:21.361Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:09:21.363Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-08-29T10:09:22.519Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-08-29T10:09:22.519Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-28T15:26:57.877Z",
+          "at": "2026-08-29T10:09:22.618Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:26:59.817Z",
+          "at": "2026-08-29T10:09:25.742Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:26:59.817Z",
+          "at": "2026-08-29T10:09:25.742Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -301,192 +385,96 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 39047,
+      "actualTokens": 13873,
       "economicalTokenTarget": 25000,
       "predictedTokensLow": 8680,
       "predictedTokensHigh": 23100,
-      "failedToolCalls": 2,
+      "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 11,
+      "toolCalls": 5,
       "providerAttempts": 1,
-      "elapsedMs": 14891,
+      "elapsedMs": 4012,
       "latencyTargetMs": 360000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
-      "failureReasons": [
-        "2 tool call(s) failed"
-      ],
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-28T15:27:01.208Z",
+          "at": "2026-08-29T10:09:27.348Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:01.209Z",
+          "at": "2026-08-29T10:09:27.350Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-08-29T10:09:27.351Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-28T15:27:01.211Z",
-          "type": "tool_result",
-          "tool": "read_file",
-          "isError": true
-        },
-        {
-          "at": "2026-08-28T15:27:01.870Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:01.871Z",
-          "type": "tool_call",
-          "tool": "list_files"
-        },
-        {
-          "at": "2026-08-28T15:27:01.872Z",
-          "type": "tool_result",
-          "tool": "list_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:27:02.320Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:02.320Z",
-          "type": "tool_call",
-          "tool": "list_files"
-        },
-        {
-          "at": "2026-08-28T15:27:02.321Z",
-          "type": "tool_result",
-          "tool": "list_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:27:02.730Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:02.731Z",
-          "type": "tool_call",
-          "tool": "list_files"
-        },
-        {
-          "at": "2026-08-28T15:27:02.731Z",
-          "type": "tool_result",
-          "tool": "list_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:27:03.227Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:03.228Z",
-          "type": "tool_call",
-          "tool": "list_files"
-        },
-        {
-          "at": "2026-08-28T15:27:03.228Z",
-          "type": "tool_result",
-          "tool": "list_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:27:04.043Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:04.044Z",
+          "at": "2026-08-29T10:09:27.351Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-28T15:27:04.044Z",
-          "type": "tool_call",
-          "tool": "read_file"
+          "at": "2026-08-29T10:09:27.354Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
         },
         {
-          "at": "2026-08-28T15:27:04.045Z",
+          "at": "2026-08-29T10:09:27.354Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:27:04.045Z",
+          "at": "2026-08-29T10:09:27.354Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:27:07.212Z",
+          "at": "2026-08-29T10:09:28.803Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:07.214Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-08-28T15:27:07.222Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": false
-        },
-        {
-          "at": "2026-08-28T15:27:10.531Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:10.532Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-08-28T15:27:10.617Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": true
-        },
-        {
-          "at": "2026-08-28T15:27:13.353Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-28T15:27:13.354Z",
+          "at": "2026-08-29T10:09:28.805Z",
           "type": "tool_call",
           "tool": "edit_file"
         },
         {
-          "at": "2026-08-28T15:27:13.356Z",
+          "at": "2026-08-29T10:09:28.808Z",
           "type": "tool_result",
           "tool": "edit_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:27:14.270Z",
+          "at": "2026-08-29T10:09:29.558Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:14.270Z",
+          "at": "2026-08-29T10:09:29.559Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-28T15:27:14.349Z",
+          "at": "2026-08-29T10:09:29.607Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:27:15.225Z",
+          "at": "2026-08-29T10:09:30.372Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:15.225Z",
+          "at": "2026-08-29T10:09:30.372Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -513,7 +501,7 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 5236,
+      "actualTokens": 5390,
       "economicalTokenTarget": 8000,
       "predictedTokensLow": 6096,
       "predictedTokensHigh": 16223,
@@ -521,7 +509,7 @@
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 2329,
+      "elapsedMs": 3089,
       "latencyTargetMs": 180000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
@@ -531,26 +519,26 @@
       "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-28T15:27:16.832Z",
+          "at": "2026-08-29T10:09:32.419Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:16.834Z",
+          "at": "2026-08-29T10:09:32.421Z",
           "type": "tool_call",
           "tool": "grep_files"
         },
         {
-          "at": "2026-08-28T15:27:16.836Z",
+          "at": "2026-08-29T10:09:32.424Z",
           "type": "tool_result",
           "tool": "grep_files",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:27:18.222Z",
+          "at": "2026-08-29T10:09:34.227Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:18.223Z",
+          "at": "2026-08-29T10:09:34.228Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -573,7 +561,7 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 9042,
+      "actualTokens": 9225,
       "economicalTokenTarget": 12000,
       "predictedTokensLow": 11344,
       "predictedTokensHigh": 36592,
@@ -581,7 +569,7 @@
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 8039,
+      "elapsedMs": 7730,
       "latencyTargetMs": 300000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
@@ -591,26 +579,26 @@
       "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-28T15:27:19.725Z",
+          "at": "2026-08-29T10:09:35.964Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:19.727Z",
+          "at": "2026-08-29T10:09:35.966Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-28T15:27:19.729Z",
+          "at": "2026-08-29T10:09:35.968Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-28T15:27:26.861Z",
+          "at": "2026-08-29T10:09:42.562Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-28T15:27:26.861Z",
+          "at": "2026-08-29T10:09:42.562Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -633,11 +621,11 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 1857,
+      "actualTokens": 1883,
       "economicalTokenTarget": 8000,
       "predictedTokensLow": 1,
       "predictedTokensHigh": 8000,
-      "elapsedMs": 693,
+      "elapsedMs": 1449,
       "latencyTargetMs": 120000,
       "outputQualityChecksPassed": 2,
       "outputQualityChecksTotal": 2,
@@ -663,173 +651,173 @@
     {
       "platform": "darwin",
       "architecture": "arm64",
-      "generatedAt": "2026-08-28T15:24:47.078Z",
+      "generatedAt": "2026-08-29T10:07:21.200Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 300,
           "failed": 0,
-          "durationMs": 2586
+          "durationMs": 3280
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 200,
           "failed": 0,
-          "durationMs": 9187
+          "durationMs": 11782
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 7219
+          "durationMs": 9795
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 1787
+          "durationMs": 2534
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 107,
           "failed": 0,
-          "durationMs": 2048
+          "durationMs": 2926
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 1544
+          "durationMs": 1820
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 1745
+          "durationMs": 2126
         }
       ],
-      "historyStartupP50Ms": 75
+      "historyStartupP50Ms": 129
     },
     {
       "platform": "linux",
       "architecture": "x64",
-      "generatedAt": "2026-08-28T15:24:46.369Z",
+      "generatedAt": "2026-08-23T03:56:27.535Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
-          "tests": 300,
+          "tests": 317,
           "failed": 0,
-          "durationMs": 2319
+          "durationMs": 4657
         },
         {
           "name": "taskExecution",
           "passed": true,
-          "tests": 200,
+          "tests": 182,
           "failed": 0,
-          "durationMs": 6723
+          "durationMs": 7713
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 7993
+          "durationMs": 9764
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 1955
+          "durationMs": 2593
         },
         {
           "name": "approvals",
           "passed": true,
-          "tests": 107,
+          "tests": 127,
           "failed": 0,
-          "durationMs": 2619
+          "durationMs": 6389
         },
         {
           "name": "costAccuracy",
           "passed": true,
-          "tests": 98,
+          "tests": 95,
           "failed": 0,
-          "durationMs": 1610
+          "durationMs": 2131
         },
         {
           "name": "portability",
           "passed": true,
-          "tests": 109,
+          "tests": 105,
           "failed": 0,
-          "durationMs": 2016
+          "durationMs": 2862
         }
       ],
-      "historyStartupP50Ms": 119
+      "historyStartupP50Ms": 160
     },
     {
       "platform": "win32",
       "architecture": "x64",
-      "generatedAt": "2026-08-28T15:26:00.411Z",
+      "generatedAt": "2026-08-29T10:08:12.148Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 300,
           "failed": 0,
-          "durationMs": 3852
+          "durationMs": 3917
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 200,
           "failed": 0,
-          "durationMs": 6718
+          "durationMs": 6524
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 16091
+          "durationMs": 15444
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 3197
+          "durationMs": 6227
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 107,
           "failed": 0,
-          "durationMs": 3603
+          "durationMs": 3947
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 2147
+          "durationMs": 2229
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 2616
+          "durationMs": 2674
         }
       ],
-      "historyStartupP50Ms": 169
+      "historyStartupP50Ms": 163
     }
   ]
 }
