@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyWorkerFailure, recoverExpiredLease, retryDelayForFailure, retryDelayMs, summarizeCommandFailure, summarizeWorkerError, validateStepOutcome } from "./worker-runtime";
+import { classifyWorkerFailure, decideStepResume, MAX_STEP_RESUMES, recoverExpiredLease, retryDelayForFailure, retryDelayMs, summarizeCommandFailure, summarizeWorkerError, validateStepOutcome } from "./worker-runtime";
 
 describe("worker lease recovery", () => {
   it("releases the exact reservation before retrying expired work", () => {
@@ -26,6 +26,36 @@ describe("worker lease recovery", () => {
     expect(() => validateStepOutcome({ outcome: "completed", summary: "Done", artifactReferences: [], reservedRwf: 100, actualRwf: 50 })).toThrow("evidence");
     expect(() => validateStepOutcome({ outcome: "completed", summary: "Done", artifactReferences: ["artifact:test-log"], reservedRwf: 100, actualRwf: 101 })).toThrow("reservation");
     expect(() => validateStepOutcome({ outcome: "completed", summary: "Done", artifactReferences: ["artifact:test-log"], reservedRwf: 100, actualRwf: 50 })).not.toThrow();
+  });
+});
+
+describe("decideStepResume", () => {
+  const base = { resumes: 0, spentRwf: 200, reservedRwf: 0, maxRwf: 1_000, nextAttemptEstimateRwf: 300, runCancelled: false };
+
+  it("resumes a timed checkpoint while budget and the resume count both allow it", () => {
+    expect(decideStepResume(base)).toEqual({ action: "resume", reason: expect.stringContaining("resume 1/") });
+    expect(decideStepResume({ ...base, resumes: MAX_STEP_RESUMES - 1 }).action).toBe("resume");
+  });
+
+  it("finalizes once the resume ceiling is reached, rather than looping forever", () => {
+    const decision = decideStepResume({ ...base, resumes: MAX_STEP_RESUMES });
+    expect(decision.action).toBe("finalize");
+    expect(decision.reason).toContain(`${MAX_STEP_RESUMES}`);
+  });
+
+  it("finalizes when the next attempt would not fit under the approved cap", () => {
+    // 700 spent + 0 reserved + 400 estimate = 1100 > 1000 cap.
+    expect(decideStepResume({ ...base, spentRwf: 700, nextAttemptEstimateRwf: 400 }).action).toBe("finalize");
+    // Exactly fitting is allowed.
+    expect(decideStepResume({ ...base, spentRwf: 700, nextAttemptEstimateRwf: 300 }).action).toBe("resume");
+  });
+
+  it("never resumes a cancelled run", () => {
+    expect(decideStepResume({ ...base, runCancelled: true }).action).toBe("finalize");
+  });
+
+  it("rejects negative accounting", () => {
+    expect(() => decideStepResume({ ...base, spentRwf: -1 })).toThrow("spentRwf");
   });
 });
 

@@ -148,6 +148,18 @@ export default defineSchema({
     leaseExpiresAt: v.optional(v.number()),
     heartbeatAt: v.optional(v.number()),
     sandboxId: v.optional(v.string()),
+    // What a claimed step is doing right now, so the fleet panel can tell "the model is writing
+    // the plan" apart from "the sandbox is idle between commands" — before Change 1 the sandbox
+    // id only appeared once planning was done, so planning was invisible and read as slow E2B.
+    phase: v.optional(v.union(v.literal("planning"), v.literal("building"))),
+    /** Characters of plan JSON received so far, for a live "planning · N KB" readout. */
+    planBytes: v.optional(v.number()),
+    /**
+     * How many times this step ran out of its wall-clock budget mid-build and was checkpointed to
+     * continue in the same sandbox. Distinct from `attempts` (infrastructure failure retries):
+     * a timed resume is progress, not a failure, so it has its own bounded budget.
+     */
+    resumes: v.optional(v.number()),
     reservedRwf: v.optional(v.int64()),
     completedAt: v.optional(v.number()),
     summary: v.optional(v.string()),

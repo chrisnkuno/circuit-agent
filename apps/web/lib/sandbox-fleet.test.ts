@@ -8,6 +8,8 @@ function row(overrides: Partial<SandboxRow> = {}): SandboxRow {
     sandboxId: "sbx_1",
     runStatus: "running",
     activeStepTitle: "Install dependencies",
+    phase: "building",
+    planBytes: null,
     heartbeatAt: now - 2_000,
     startedAt: now - 65_000,
     sandboxMs: 12_000,
@@ -43,6 +45,33 @@ describe("sandboxState", () => {
     for (const status of ["completed", "failed", "blocked", "cancelled"]) {
       expect(sandboxState(row({ runStatus: status }), now)).toBe("stopped");
     }
+  });
+
+  it("reports a live machine whose step is still writing the plan as planning, not as a stuck run", () => {
+    // Change 1 creates the sandbox before the plan call, so a fresh heartbeat with an empty
+    // machine is now normal for minutes. Calling that "running" would show four zeroed meters.
+    expect(sandboxState(row({ phase: "planning" }), now)).toBe("planning");
+    // Once the plan is in hand and the build starts, it is an ordinary running sandbox again.
+    expect(sandboxState(row({ phase: "building" }), now)).toBe("running");
+    // Planning only holds while the worker is still checking in; a stalled one falls back to idle.
+    expect(sandboxState(row({ phase: "planning", heartbeatAt: now - HEARTBEAT_STALE_MS - 1 }), now)).toBe("idle");
+    // A paused run wins over planning: the deliberate state is not overridden by a stale phase.
+    expect(sandboxState(row({ phase: "planning", runStatus: "paused" }), now)).toBe("paused");
+    // No machine yet still reads as starting even if a phase was recorded.
+    expect(sandboxState(row({ phase: "planning", sandboxId: "" }), now)).toBe("starting");
+  });
+
+  it("shows how much of the plan has streamed in while planning", () => {
+    expect(describeSandbox(row({ phase: "planning", planBytes: null }), now).activity).toBe("planning the build");
+    expect(describeSandbox(row({ phase: "planning", planBytes: 0 }), now).activity).toBe("planning the build");
+    expect(describeSandbox(row({ phase: "planning", planBytes: 12_288 }), now).activity).toBe("planning the build · 12 KB");
+    // Any nonzero amount rounds up to at least 1 KB rather than showing "0 KB".
+    expect(describeSandbox(row({ phase: "planning", planBytes: 200 }), now).activity).toBe("planning the build · 1 KB");
+  });
+
+  it("counts a planning machine as running for the fleet cost summary", () => {
+    const summary = summarizeFleet([row({ phase: "planning" }), row({ phase: "building" })], now);
+    expect(summary.running).toBe(2);
   });
 });
 

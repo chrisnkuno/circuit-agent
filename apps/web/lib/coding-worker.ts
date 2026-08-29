@@ -14,6 +14,19 @@ export type CodingWorkerControl = {
    * live and, more importantly, still knows about it if this worker dies before releasing it.
    */
   heartbeat(stepId: string, sandboxId?: string): Promise<void>;
+  /**
+   * What the step is doing right now — the model writing the plan ("planning") or the sandbox
+   * running the plan's writes and commands ("building"). Lets the fleet panel tell a plan call
+   * that legitimately takes minutes apart from an idle or stuck sandbox. Best-effort telemetry:
+   * a failed report never changes the step's outcome.
+   */
+  reportPhase(stepId: string, phase: "planning" | "building", detail?: { planBytes?: number }): Promise<void>;
+  /**
+   * Appends one line to the run's live activity feed — "wrote 6 files", "npm run build → exit 0".
+   * Purely cosmetic: it is what makes output *appear* seconds after the plan lands instead of only
+   * when the whole step finishes. A failed report is swallowed and never affects the build.
+   */
+  reportActivity(stepId: string, type: string, message: string): Promise<void>;
   isCancellationRequested(runId: string): Promise<boolean>;
 };
 
@@ -45,6 +58,11 @@ export type CodingWorkerResult = {
   repairs?: number;
   /** True when the step stopped early to stay inside `stepDeadlineMs`, rather than finishing. */
   stoppedForTime?: boolean;
+  /**
+   * True when the step stopped only for time and left a usable partial workspace — the caller
+   * should checkpoint and resume it in the same sandbox rather than record a terminal outcome.
+   */
+  resumable?: boolean;
   /** The sandbox left suspended for the next step, so the caller can hand it back or destroy it. */
   sandboxId?: string;
 };
@@ -91,6 +109,17 @@ const POLICY_REFUSAL_PATTERNS = [
 function isPolicyRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return POLICY_REFUSAL_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/** Workspace-root-relative display path, e.g. "/workspace/repo/app/page.tsx" -> "app/page.tsx". */
+function relativeWorkspacePath(path: string, workspaceRoot: string): string {
+  return path.startsWith(workspaceRoot) ? path.slice(workspaceRoot.length).replace(/^\//, "") : path;
+}
+
+/** Short one-line label for a command, for the live activity feed. */
+function commandLabel(command: { program: string; args: string[]; purpose?: string }): string {
+  const invocation = [command.program, ...command.args].join(" ");
+  return command.purpose ? `${invocation} — ${command.purpose}` : invocation;
 }
 
 function commandRecord(index: number, command: { program: string; args: string[]; purpose: string }, result: SandboxCommandResult) {
@@ -175,28 +204,67 @@ export class CodingAgentWorker {
       });
       if (listing.exitCode !== 0) return captured;
       const paths = listing.stdout.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, MAX_CAPTURED_FILES);
-      for (const path of paths) {
+      // Read in bounded parallel rather than one blocking round-trip per file. Each read is a
+      // sandbox round-trip (~100-300ms on the shared handle); a 15-file result went from ~3s
+      // serial to well under one. The pool cap keeps a large workspace from opening 40 at once.
+      const readOne = async (path: string): Promise<ArtifactWrite | undefined> => {
         try {
           const content = await this.dependencies.sandbox.readFile(sandboxId, path);
           // Binary content would be unreadable in a viewer and pointless as text evidence.
-          if (content.includes("\u0000")) continue;
-          captured.push({
+          if (content.includes("\u0000")) return undefined;
+          return {
             taskId: request.taskId,
             runId: request.runId,
             stepId: request.stepId,
             kind: "workspace_file",
             mediaType: "text/plain",
             content: truncateEvidence(content, MAX_CAPTURED_FILE_BYTES),
-            path: path.startsWith(request.workspaceRoot) ? path.slice(request.workspaceRoot.length).replace(/^\//, "") : path,
-          });
+            path: relativeWorkspacePath(path, request.workspaceRoot),
+          };
         } catch {
           // One unreadable file must not cost the capture of the others.
+          return undefined;
         }
+      };
+      const CAPTURE_CONCURRENCY = 8;
+      for (let offset = 0; offset < paths.length; offset += CAPTURE_CONCURRENCY) {
+        const batch = await Promise.all(paths.slice(offset, offset + CAPTURE_CONCURRENCY).map(readOne));
+        for (const file of batch) if (file) captured.push(file);
       }
     } catch {
       // The workspace could not be listed; the step's other evidence still stands.
     }
     return captured;
+  }
+
+  /**
+   * The run's existing sandbox when a previous step left one and it is still reachable, otherwise a
+   * fresh one. A sandbox that expired, was reaped, or was killed out from under us is a reason to
+   * start clean — never a reason to fail work that has already been paid for.
+   *
+   * `runtimeSeconds` is a safety ceiling covering the whole step, not a bench-time budget: E2B
+   * bills only for the seconds a step actually holds the machine, and the sandbox is created
+   * before the plan call now, so a tighter ceiling would risk E2B killing it mid-build.
+   */
+  private async acquireSandbox(request: CodingWorkerRequest, runtimeSeconds: number): Promise<SandboxSession> {
+    if (request.reuseSandboxId) {
+      try {
+        await this.dependencies.sandbox.runCommand(request.reuseSandboxId, {
+          program: "pwd",
+          args: [],
+          cwd: request.workspaceRoot,
+          timeoutMs: 30_000,
+        });
+        return { sandboxId: request.reuseSandboxId, status: "running" };
+      } catch {
+        // The previous sandbox is gone; fall through and start clean.
+      }
+    }
+    return this.dependencies.sandbox.createSandbox({
+      taskId: request.taskId,
+      template: "coding",
+      maxRuntimeSeconds: runtimeSeconds,
+    });
   }
 
   async execute(request: CodingWorkerRequest): Promise<CodingWorkerResult> {
@@ -231,22 +299,76 @@ export class CodingAgentWorker {
       return priceActualModelUsage(usage.inputTokens, usage.outputTokens, this.dependencies.prices);
     };
 
-    const modelResult = await this.dependencies.model.generateCodingPlan(request);
+    // Change 1: the sandbox is acquired before the plan call, not after it. A detailed plan can
+    // stream for two or three minutes, and until now nothing existed for the fleet panel to show
+    // in that window, so the wait rendered as "provisioning" and read as a slow E2B. The machine
+    // now appears within a second and the model call runs against a sandbox that is already
+    // waiting. A sandbox the plan turns out not to need — a refusal, an unworkable objective, a
+    // cancelled run, a thrown error — is killed outright rather than suspended for a next step.
+    const sandboxRuntimeSeconds = Math.min(
+      3_600,
+      Math.max(request.sandboxRuntimeSeconds, Math.ceil(((request.stepDeadlineMs ?? 0) + 60_000) / 1_000)),
+    );
+    const session = await this.acquireSandbox(request, sandboxRuntimeSeconds);
+    await this.dependencies.control.heartbeat(request.stepId, session.sandboxId);
+    const abandonSandbox = () => this.dependencies.sandbox.stopSandbox(session.sandboxId).catch(() => {});
+    /** Runs a step that could throw before the build's own try/finally exists, killing the speculative sandbox if it does. */
+    const guard = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error) {
+        await abandonSandbox();
+        throw error;
+      }
+    };
+
+    await this.dependencies.control.reportPhase(request.stepId, "planning");
+    // Throttled: a fast stream must not become a mutation per chunk. The panel only needs a sense
+    // that the plan is still growing.
+    let lastPlanReportAt = 0;
+    let planChars = 0;
+    const onPlanProgress = ({ receivedChars }: { receivedChars: number }) => {
+      planChars = receivedChars;
+      const now = Date.now();
+      if (now - lastPlanReportAt < 750) return;
+      lastPlanReportAt = now;
+      void this.dependencies.control.reportPhase(request.stepId, "planning", { planBytes: receivedChars }).catch(() => {});
+    };
+    // A keepalive independent of the stream: a plan call can legitimately run for minutes, and a
+    // non-streaming adapter produces no progress events at all. Without this the step's heartbeat
+    // and lease would go stale mid-plan and the fleet panel would show the sandbox as idle.
+    const planKeepalive = setInterval(() => {
+      void this.dependencies.control.reportPhase(request.stepId, "planning", planChars > 0 ? { planBytes: planChars } : undefined).catch(() => {});
+    }, 20_000);
+    let modelResult;
+    try {
+      modelResult = await guard(() => this.dependencies.model.generateCodingPlan(request, { onProgress: onPlanProgress }));
+    } finally {
+      clearInterval(planKeepalive);
+    }
     let actualModelRwf = spend(modelResult.usage);
-    if (actualModelRwf > request.modelReservationRwf) throw new Error("Actual model usage exceeds the reserved model budget");
+    if (actualModelRwf > request.modelReservationRwf) {
+      await abandonSandbox();
+      throw new Error("Actual model usage exceeds the reserved model budget");
+    }
     if (modelResult.status === "refused") {
+      await abandonSandbox();
       const evidence = await this.dependencies.artifacts.put(artifact(request, {
         kind: "review_summary", mediaType: "text/plain", content: modelResult.refusal ?? "Model refused the coding request.",
       }));
       return { status: "blocked", summary: modelResult.refusal ?? "Model refused the coding request.", artifactReferences: [evidence], modelUsage: usage, actualModelRwf, commandsExecuted: 0 };
     }
 
-    let plan = CodingPlanSchema.parse(modelResult.plan);
-    if (plan.commands.length > request.maxCommands) throw new Error("Model plan exceeds the requested command limit");
+    let plan = await guard(() => CodingPlanSchema.parse(modelResult.plan));
+    if (plan.commands.length > request.maxCommands) {
+      await abandonSandbox();
+      throw new Error("Model plan exceeds the requested command limit");
+    }
     let planArtifact = await this.dependencies.artifacts.put(artifact(request, {
       kind: "model_plan", mediaType: "application/json", content: JSON.stringify({ responseId: modelResult.responseId, model: modelResult.model, plan }, null, 2),
     }));
     if (plan.status !== "ready") {
+      await abandonSandbox();
       return {
         status: plan.status === "blocked" ? "blocked" : "needs_clarification",
         summary: plan.summary,
@@ -257,37 +379,18 @@ export class CodingAgentWorker {
       };
     }
     if (await this.dependencies.control.isCancellationRequested(request.runId)) {
-      return { status: "cancelled", summary: "Run was cancelled before sandbox creation.", artifactReferences: [planArtifact], modelUsage: usage, actualModelRwf, commandsExecuted: 0 };
+      await abandonSandbox();
+      return { status: "cancelled", summary: "Run was cancelled before the build started.", artifactReferences: [planArtifact], modelUsage: usage, actualModelRwf, commandsExecuted: 0 };
     }
 
-    // Resume the run's existing sandbox when there is one, and fall back to a fresh sandbox if it
-    // has gone away. A sandbox that expired, was reaped, or was killed out from under us is a
-    // reason to start clean — never a reason to fail work that has already been paid for.
-    let session: SandboxSession;
-    if (request.reuseSandboxId) {
-      try {
-        session = { sandboxId: request.reuseSandboxId, status: "running" };
-        await this.dependencies.sandbox.runCommand(session.sandboxId, {
-          program: "pwd",
-          args: [],
-          cwd: request.workspaceRoot,
-          timeoutMs: 30_000,
-        });
-      } catch {
-        session = await this.dependencies.sandbox.createSandbox({
-          taskId: request.taskId,
-          template: "coding",
-          maxRuntimeSeconds: request.sandboxRuntimeSeconds,
-        });
-      }
-    } else {
-      session = await this.dependencies.sandbox.createSandbox({
-        taskId: request.taskId,
-        template: "coding",
-        maxRuntimeSeconds: request.sandboxRuntimeSeconds,
-      });
-    }
-    await this.dependencies.control.heartbeat(request.stepId, session.sandboxId);
+    // The plan is runnable and the sandbox is already up: the step is now building, not planning.
+    await this.dependencies.control.reportPhase(request.stepId, "building");
+    /** One line on the run's live feed. Never awaited on the hot path in a way that blocks work. */
+    const emit = (type: string, message: string): Promise<void> =>
+      this.dependencies.control.reportActivity(request.stepId, type, message.slice(0, 400)).catch(() => {});
+    await emit("build_started", plan.summary
+      ? `Building — ${plan.summary}`
+      : `Building: ${plan.fileChanges.length} file(s), ${plan.commands.length} command(s)`);
     const evidence: ArtifactReference[] = [planArtifact];
     const commandLog: ReturnType<typeof commandRecord>[] = [];
     let commandsExecuted = 0;
@@ -314,6 +417,11 @@ export class CodingAgentWorker {
         for (const change of plan.fileChanges) {
           await this.dependencies.sandbox.writeFile(session.sandboxId, change.path, change.content);
         }
+        if (plan.fileChanges.length > 0) {
+          const shown = plan.fileChanges.slice(0, 6).map((change) => relativeWorkspacePath(change.path, request.workspaceRoot));
+          const more = plan.fileChanges.length - shown.length;
+          await emit("files_written", `Wrote ${plan.fileChanges.length} file${plan.fileChanges.length === 1 ? "" : "s"}: ${shown.join(", ")}${more > 0 ? ` +${more} more` : ""}`);
+        }
         for (const [index, command] of plan.commands.entries()) {
           if (await this.dependencies.control.isCancellationRequested(request.runId)) {
             cancelled = true;
@@ -326,6 +434,7 @@ export class CodingAgentWorker {
             break;
           }
           await this.dependencies.control.heartbeat(request.stepId, session.sandboxId);
+          await emit("command_started", `$ ${commandLabel(command)}`);
           // A command the policy refuses is a mistake the planner can fix, not an infrastructure
           // failure. Refusals are thrown rather than returned, so without this they escape the
           // repair loop entirely and kill the run — which is exactly how a step died on
@@ -352,8 +461,10 @@ export class CodingAgentWorker {
             // Kept so the step summary can name what failed, and so the next attempt can be shown
             // the actual error rather than being asked to guess.
             failure = record;
+            await emit("command_failed", `${command.program} exited ${result.exitCode}${record.stderr?.trim() ? ` — ${record.stderr.trim().split("\n").at(-1)}` : ""}`);
             break;
           }
+          await emit("command_ok", `${command.program} ${command.args[0] ?? ""} → exit 0`);
         }
 
         if (!failed || cancelled || repairs >= MAX_REPAIR_ATTEMPTS) break;
@@ -371,6 +482,7 @@ export class CodingAgentWorker {
         if (actualModelRwf + estimate > request.modelReservationRwf) break;
 
         repairs += 1;
+        await emit("repair", `Command failed — asking the model to fix it (attempt ${repairs}/${MAX_REPAIR_ATTEMPTS})`);
         const repaired = await this.dependencies.model.generateCodingPlan({
           ...request,
           previousFailure: {
@@ -417,10 +529,12 @@ export class CodingAgentWorker {
       // The work itself, captured before the sandbox is suspended. Everything else here describes
       // what happened; this is what was actually produced, and it is the only evidence that would
       // otherwise exist solely inside a workspace nobody can open.
+      if (!cancelled) await emit("capturing", "Collecting the finished workspace…");
       const captured = await this.captureWorkspace(request, session.sandboxId);
       for (const file of captured) {
         evidence.push(await this.dependencies.artifacts.put(artifact(request, file)));
       }
+      if (!cancelled && captured.length > 0) await emit("captured", `Captured ${captured.length} file${captured.length === 1 ? "" : "s"} from the workspace`);
 
       // The deployability contract, checked against what the workspace actually contains.
       //
@@ -464,6 +578,9 @@ export class CodingAgentWorker {
     return {
       status: cancelled ? "cancelled" : failed ? "failed" : deployabilityGap.length > 0 ? "blocked" : "completed",
       stoppedForTime,
+      // Only for time, with commands still unrun and no hard failure: the workspace is a valid
+      // checkpoint the caller should resume rather than a terminal result.
+      resumable: stoppedForTime && !cancelled && !failed,
       summary: cancelled
         ? "Run cancelled at a safe checkpoint."
         : stoppedForTime && !failed

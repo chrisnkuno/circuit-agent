@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ArrowUpRight, FileText, LoaderCircle, Pause, Play, X } from "lucide-react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -50,6 +51,24 @@ export function SandboxDrawer({
   const latestRun = taskRuns?.reduce((latest, run) => !latest || run.createdAt > latest.createdAt ? run : latest, undefined as (typeof taskRuns)[number] | undefined);
   const detail = useQuery(api.agentRuns.getRunDetail, latestRun ? { runId: latestRun._id } : "skip");
 
+  // Whether the preview iframe actually rendered. A just-resumed sandbox running `next start` or
+  // `next dev` can legitimately take 10-20s to answer, so "not loaded yet" is shown as a patient
+  // spinner first. Only a load that has still not happened well past that is surfaced as "didn't
+  // load" — which usually means a browser extension, content blocker, or DNS filter is refusing
+  // the cross-origin frame (it fires no catchable error, it just stays blank).
+  const [frameState, setFrameState] = useState<"loading" | "slow" | "loaded" | "stuck">("loading");
+  const [frameAttempt, setFrameAttempt] = useState(0);
+  useEffect(() => {
+    if (!previewUrl) return;
+    setFrameState("loading");
+    const slow = setTimeout(() => setFrameState((state) => (state === "loaded" ? state : "slow")), 8_000);
+    const stuck = setTimeout(() => setFrameState((state) => (state === "loaded" ? state : "stuck")), 28_000);
+    return () => {
+      clearTimeout(slow);
+      clearTimeout(stuck);
+    };
+  }, [previewUrl, frameAttempt]);
+
   const panel = <section className={`output-panel${inline ? " inline" : ""}`} {...(inline ? { "aria-label": "Sandbox detail" } : { role: "dialog", "aria-modal": true, "aria-label": "Sandbox detail" })}>
       <header>
         <div>
@@ -79,13 +98,38 @@ export function SandboxDrawer({
         <small>Updates automatically while E2B continues.</small>
       </div>
 
-      {previewUrl && <section className="live-preview">
+      {previewUrl && <section className={`live-preview${frameState === "stuck" ? " frame-stuck" : ""}`}>
         <header>
           <span><b>INTERACTIVE SANDBOX PREVIEW</b><small>Ephemeral E2B port 3000 · isolated frame</small></span>
           <a href={previewUrl} target="_blank" rel="noreferrer">Open full screen <ArrowUpRight /></a>
         </header>
-        {/* No allow-same-origin: generated code runs in a foreign origin and must not reach this one. */}
-        <iframe src={previewUrl} title="Generated app preview" sandbox="allow-scripts allow-forms allow-modals allow-popups" referrerPolicy="no-referrer" />
+        {frameState === "slow" && <p className="frame-fallback">
+          <LoaderCircle className="spin" size={13} aria-hidden="true" /> Starting the app in the sandbox — this can take up to half a minute on the first load.
+        </p>}
+        {frameState === "stuck" && <p className="frame-fallback">
+          The app isn’t rendering in this frame, but it’s serving fine — this is a browser privacy feature (Firefox Enhanced Tracking Protection, Safari cross-site tracking prevention, or a content blocker) refusing the cross-origin frame for <code>{new URL(previewUrl).host}</code>. It is not blocked on our side.
+          {" "}<a href={previewUrl} target="_blank" rel="noreferrer">Open it full screen <ArrowUpRight /></a> — that always works.
+          {" · "}<button type="button" className="frame-retry" onClick={() => setFrameAttempt((n) => n + 1)}>retry in frame</button>
+        </p>}
+        {/*
+          No `sandbox` attribute. The preview is already a foreign origin (`3000-<id>.e2b.app`),
+          so the same-origin policy alone stops it reading our DOM, cookies or storage — that
+          isolation does not depend on `sandbox`. Adding `sandbox` only ever *subtracts*
+          capabilities from the framed document, and the subtractions bite unevenly across
+          browsers: without `allow-same-origin` the frame runs in an opaque origin and cannot load
+          its own `/_next/static` bundles (renders unstyled); *with* `allow-same-origin` some
+          browsers partition its storage so aggressively that the app's client JS throws on first
+          `localStorage` access and renders nothing at all. A plain cross-origin frame gets normal
+          (silently partitioned) storage and just works. The one thing we give up is blocking
+          top-window navigation from generated code — an annoyance, not a cross-origin breach.
+        */}
+        <iframe
+          key={`${previewUrl}#${frameAttempt}`}
+          src={previewUrl}
+          title="Generated app preview"
+          referrerPolicy="no-referrer"
+          onLoad={() => setFrameState("loaded")}
+        />
       </section>}
 
       <div className="output-grid">

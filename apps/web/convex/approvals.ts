@@ -103,7 +103,9 @@ export const backfillApprovalOrganizations = internalMutation({
  */
 export const requestTaskStartApproval = internalMutation({
   args: { taskId: v.id("tasks"), runId: v.id("agentRuns"), requestedRwf: v.int64() },
-  returns: v.id("approvals"),
+  // `autoApproved` lets the run-creation path fire an inline dispatch tick on the happy path
+  // instead of waiting for the one settleApproval schedules.
+  returns: v.object({ approvalId: v.id("approvals"), autoApproved: v.boolean() }),
   handler: async (ctx, { taskId, runId, requestedRwf }) => {
     const now = Date.now();
     // Held out of the dispatch snapshot entirely rather than left queued: a queued run gets
@@ -130,11 +132,12 @@ export const requestTaskStartApproval = internalMutation({
     // Within the ceiling, the quote is settled on the spot. Asking a person to confirm a price
     // they have already set a limit for is friction, not consent — the limit *is* the consent, and
     // anything above it still stops here.
-    if (automation.automatic && task) {
+    const autoApproved = Boolean(automation.automatic && task);
+    if (autoApproved && task) {
       const approval = await ctx.db.get(approvalId);
       if (approval) await settleApproval(ctx, approval, "approved", "automation", task);
     }
-    return approvalId;
+    return { approvalId, autoApproved };
   },
 });
 

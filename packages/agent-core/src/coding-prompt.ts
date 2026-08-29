@@ -37,6 +37,8 @@ export type CodingPromptInput = {
   /** Programs present in the sandbox image, when it is not the default one. */
   templatePrograms?: readonly string[];
   previousFailure?: { intent: string; command: string; exitCode: number; output: string };
+  /** An earlier attempt at this step ran out of time mid-build; the workspace holds partial work. */
+  resumeContext?: string;
 };
 
 /**
@@ -71,6 +73,30 @@ export function missingDeployableArtifacts(paths: readonly string[]): string[] {
   return missing;
 }
 
+/**
+ * Nudges the planner toward the fastest tool for each job — but only tools the image already
+ * ships, so it never advertises something that would exit 127. Startup time saved here is spent
+ * from the step's own wall-clock budget.
+ */
+function preferFastToolsInstruction(available: readonly string[]): string[] {
+  const has = (program: string) => available.includes(program);
+  const lines: string[] = [];
+  if (has("bun")) {
+    lines.push("Prefer bun over npm: `bun run <script>` and `bun test` start far faster than the npm equivalents. Use `npm run` only for a script that genuinely will not run under bun.");
+  }
+  if (has("uv")) {
+    lines.push("Prefer uv for Python: run scripts with `uv run <file.py>` and tests with `uv run pytest` rather than bare python/python3 — it resolves and starts much faster.");
+  } else if (has("pytest")) {
+    lines.push("pytest is installed directly — invoke it as `pytest`, not `python -m pytest`.");
+  }
+  if (has("rg")) {
+    lines.push("Use `rg` to search the workspace; never a find-and-read loop.");
+  }
+  return lines.length > 0
+    ? [`Speed matters — this step runs on a clock. ${lines.join(" ")}`]
+    : [];
+}
+
 export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructions: string; input: string } {
   if (!input.objective.trim()) throw new Error("Coding objective is required");
   if (!input.workspaceRoot.startsWith("/workspace/")) throw new Error("workspaceRoot must be inside /workspace");
@@ -90,6 +116,11 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
     // Advertising a program the image does not ship produces an exit 127 the planner could never
     // have predicted — observed live with `rg`, which the policy permits and `base` does not have.
     `Use only these programs, which are the ones installed in this sandbox: ${availableSandboxPrograms(input.templatePrograms).join(", ")}. Nothing else exists in the image; assume any other tool is absent rather than trying it. Commands receive argv directly; do not use shell syntax.`,
+    // Prefer the fastest runner the image actually ships — only ever tools present in the line
+    // above, so this can never cause a 127. Faster startup here is real wall-clock: it is spent
+    // inside the step's own time budget, and a step that finishes verification sooner is a step
+    // that completes rather than being checkpointed for time.
+    ...preferFastToolsInstruction(availableSandboxPrograms(input.templatePrograms)),
     // Rendered from the enforcing constants (lib/sandbox-policy.ts) rather than restated by hand,
     // so the rules the planner is given cannot drift from the rules it is judged by. Stating only
     // the allowed *programs* was not enough: a planner told "git is allowed" proposes `git init`,
@@ -114,6 +145,15 @@ export function buildCodingPlannerPrompt(input: CodingPromptInput): { instructio
           "A previous attempt at this step failed. Its command, exit code, and output are in previousFailure. Diagnose that specific failure and fix it.",
           "The workspace still contains whatever that attempt wrote. Read or overwrite those files as needed; do not assume you are starting from an empty directory.",
           "Do not simply repeat the failed command unchanged, and do not abandon the objective — if the failure is genuinely unfixable within these constraints, return blocked with the reason.",
+        ]
+      : []),
+    // A checkpointed resume: an earlier attempt got partway and stopped only because it ran out of
+    // wall-clock. The whole point is to finish, not to redo — so the plan must be small.
+    ...(input.resumeContext
+      ? [
+          `This is a timed resume of the same step. ${input.resumeContext} The workspace already holds that partial work.`,
+          "Continue from where it stopped. Assume the scaffolding and most feature files already exist; write only files that are still missing or wrong.",
+          "Prioritise running the remaining verification and production-build commands and fixing whatever they report. A resume that re-scaffolds from scratch will run out of time again.",
         ]
       : []),
   ].join("\n");

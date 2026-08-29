@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { buildCodingPlannerPrompt, CodingPlanSchema, type CodingPlan } from "../coding-prompt";
-import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
+import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, GenerateCodingPlanOptions, ModelUsage } from "./model";
 import { PROTOCOL_MAX_OUTPUT_TOKENS } from "./model-capabilities";
 
 type ParsedCodingResponse = {
@@ -72,7 +72,9 @@ export class OpenAICodingModelProvider implements CodingModelProvider {
     }
   }
 
-  async generateCodingPlan(request: CodingPlanRequest): Promise<CodingPlanResult> {
+  // The Responses API path resolves in one shot, so there is no stream to report progress from;
+  // `options` is accepted for contract parity and deliberately unused.
+  async generateCodingPlan(request: CodingPlanRequest, _options?: GenerateCodingPlanOptions): Promise<CodingPlanResult> {
     validateRequest(request);
     const prompt = buildCodingPlannerPrompt(request);
     const response = await this.call({

@@ -13,6 +13,10 @@ export type SandboxRow = {
   sandboxId: string;
   runStatus: string;
   activeStepTitle: string | null;
+  /** "planning" while the model writes the plan, "building" once it runs. Null when no step holds the box. */
+  phase: "planning" | "building" | null;
+  /** Characters of plan JSON received so far, for a live readout while planning. */
+  planBytes: number | null;
   heartbeatAt: number | null;
   startedAt: number;
   sandboxMs: number;
@@ -27,8 +31,10 @@ export type SandboxRow = {
  * Distinguishing idle from running matters because idle is free: a panel that called every
  * live sandbox "running" would make an ordinary run look like runaway spend. `starting` is the
  * gap between approval and E2B handing back an id — real, visible, and about half a minute long.
+ * `planning` is the window after that where the machine exists but the model is still writing the
+ * plan: a real, often multi-minute wait that must not read as a hung sandbox.
  */
-export type SandboxState = "starting" | "running" | "idle" | "paused" | "stopped";
+export type SandboxState = "starting" | "planning" | "running" | "idle" | "paused" | "stopped";
 
 /** A step that stopped checking in this long ago is no longer holding the sandbox. */
 export const HEARTBEAT_STALE_MS = 90_000;
@@ -39,6 +45,9 @@ export function sandboxState(row: SandboxRow, now: number): SandboxState {
   if (["completed", "failed", "blocked", "cancelled"].includes(row.runStatus)) return "stopped";
   if (!row.activeStepTitle) return "idle";
   if (row.heartbeatAt !== null && now - row.heartbeatAt > HEARTBEAT_STALE_MS) return "idle";
+  // A fresh heartbeat plus a planning phase: the model is writing the plan against a sandbox that
+  // is up but has run nothing yet. Meters would all read zero and look broken.
+  if (row.phase === "planning") return "planning";
   return "running";
 }
 
@@ -74,7 +83,11 @@ export function describeSandbox(row: SandboxRow, now: number): SandboxSummary {
     billed: formatDuration(row.sandboxMs),
     efficiency: billingEfficiency(row.sandboxMs, uptimeMs),
     template: row.workspacePresetId ?? "default",
-    activity: state === "running" && row.activeStepTitle ? row.activeStepTitle
+    activity: state === "planning"
+        ? row.planBytes && row.planBytes > 0
+          ? `planning the build · ${Math.max(1, Math.round(row.planBytes / 1024))} KB`
+          : "planning the build"
+      : state === "running" && row.activeStepTitle ? row.activeStepTitle
       : state === "starting" ? "asking E2B for a machine"
       : state === "paused" ? "suspended by you"
       : state === "stopped" ? "run finished"
@@ -94,7 +107,9 @@ export function summarizeFleet(rows: readonly SandboxRow[], now: number): FleetS
   for (const row of rows) {
     summary.billedMs += row.sandboxMs;
     const state = sandboxState(row, now);
-    if (state === "running") summary.running += 1;
+    // Planning holds a live, billed machine just as running does — counting it as anything else
+    // would under-report what the fleet is actually costing right now.
+    if (state === "running" || state === "planning") summary.running += 1;
     else if (state === "paused") summary.paused += 1;
     else if (state === "idle") summary.idle += 1;
   }

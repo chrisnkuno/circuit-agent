@@ -49,6 +49,10 @@ test("runs deployable app tasks in parallel in E2B and exposes each one's output
   const firstSandboxId = await fleet.first().locator("code").textContent();
   expect(firstSandboxId ?? "").toMatch(/^[a-z0-9]{8,}$/i);
 
+  // The sandbox is created before the plan call now, so it sits in "planning" while the model
+  // writes the plan — meters are deliberately withheld until a command actually runs.
+  await expect(fleet.first().locator(".run-state")).toHaveText("running", { timeout: 8 * 60_000 });
+
   // Live metrics: E2B publishes a sample every five seconds, so the meters must fill in on their
   // own without any interaction.
   await expect(fleet.first().locator(".meter").first()).toBeVisible({ timeout: 90_000 });

@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { buildCodingPlannerPrompt, CodingPlanSchema } from "../coding-prompt";
 import { buildCircuitNotionHeaders, circuitNotionBaseUrl } from "./circuitnotion-http";
-import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, ModelUsage } from "./model";
+import type { CodingModelProvider, CodingPlanRequest, CodingPlanResult, GenerateCodingPlanOptions, ModelUsage } from "./model";
 import { PROTOCOL_MAX_OUTPUT_TOKENS } from "./model-capabilities";
 import { estimateTextTokens } from "../model-cost";
 
@@ -82,6 +82,7 @@ export async function collectCompletionStream(
   stream: AsyncIterable<ChatCompletionChunk>,
   idleTimeoutMs: number,
   onStall: (elapsedMs: number) => void,
+  onDelta?: (receivedChars: number) => void,
 ): Promise<ChatCompletionResponse> {
   let id = "";
   let model = "";
@@ -105,7 +106,10 @@ export async function collectCompletionStream(
       if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices?.[0];
       if (!choice) continue;
-      if (choice.delta?.content) content += choice.delta.content;
+      if (choice.delta?.content) {
+        content += choice.delta.content;
+        onDelta?.(content.length);
+      }
       if (choice.delta?.refusal) refusal += choice.delta.refusal;
       if (choice.finish_reason) finishReason = choice.finish_reason;
     }
@@ -225,7 +229,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
     }
   }
 
-  async generateCodingPlan(request: CodingPlanRequest): Promise<CodingPlanResult> {
+  async generateCodingPlan(request: CodingPlanRequest, options?: GenerateCodingPlanOptions): Promise<CodingPlanResult> {
     validateRequest(request);
     const prompt = buildCodingPlannerPrompt(request);
     const jsonSchema = JSON.stringify(z.toJSONSchema(CodingPlanSchema));
@@ -263,7 +267,7 @@ export class CircuitNotionCodingModelProvider implements CodingModelProvider {
         return await collectCompletionStream(stream, idleTimeoutMs, (elapsedMs) => {
           stalledForMs = elapsedMs;
           stall.abort();
-        });
+        }, options?.onProgress ? (receivedChars) => options.onProgress?.({ receivedChars }) : undefined);
       } catch (error) {
         if (stalledForMs > 0) throw new Error(`Model stream produced no output for ${Math.round(stalledForMs / 1_000)}s and was abandoned`);
         throw error;

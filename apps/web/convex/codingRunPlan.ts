@@ -49,7 +49,12 @@ export async function startCodingRun(
 
   const useInternal = args.authorization === "trusted-organization";
   const workspacePresetId = args.workspacePresetId ?? inferWorkspacePresetId(objective);
-  const preferences = await ctx.runQuery(internal.settings.getNovaPreferencesInternal, { organizationId: args.organizationId });
+  // Both reads only feed decisions taken after the task is created, so run them together rather
+  // than paying two serial Convex round-trips on the query→sandbox hot path.
+  const [preferences, hasExistingCodebase] = await Promise.all([
+    ctx.runQuery(internal.settings.getNovaPreferencesInternal, { organizationId: args.organizationId }),
+    ctx.runQuery(internal.githubModel.hasConnectedRepository, { organizationId: args.organizationId }),
+  ]);
   const modelProvider = preferences?.provider === "deployment" || !preferences?.provider ? undefined : preferences.provider;
   const modelId = preferences?.modelId?.trim() || undefined;
   if (modelProvider) {
@@ -80,8 +85,8 @@ export async function startCodingRun(
 
   // The graph's shape follows the workspace: with no repository connected there is nothing to
   // inspect and no prior behaviour to reproduce, so those steps would each spend a full model call
-  // redoing the objective from scratch. Resolved here rather than taken on trust from the caller.
-  const hasExistingCodebase: boolean = await ctx.runQuery(internal.githubModel.hasConnectedRepository, { organizationId: args.organizationId });
+  // redoing the objective from scratch. Resolved above (in parallel with preferences) rather than
+  // taken on trust from the caller.
   const plan = buildTaskPlan({ runId: "run", title: `Coding: ${objective}`, kind: "coding", requiresBrowserVerification: false, hasExistingCodebase });
   // The dispatcher only has a live worker for the "coding" role today (see docs/planning/gap-register.md
   // — reviewer/research/operator workers are not built yet). The plan's trailing approval-gated
@@ -111,12 +116,30 @@ export async function startCodingRun(
     assumptions: quote.assumptions,
   };
 
+  // The run is already durably queued once its approval/prefetch below completes, and the cron
+  // ticks every minute, so a nudge that fails is a latency problem and never a correctness one.
+  // One retry because the scheduled tick from settleApproval is the true fallback and a single
+  // transient RPC failure should not cost ~60s of waiting for the cron. claimStep is safe to race.
+  const nudgeDispatch = async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await ctx.runAction(internal.dispatcher.dispatchTick, {});
+        return;
+      } catch {
+        // fall through to one retry, then leave it to the scheduled tick / cron
+      }
+    }
+  };
+
   if (args.costApproval === "required") {
     // The durable record of "this costs X — may I?". Until it is decided, the run sits queued
     // behind its approval gate and no worker, model, or sandbox is ever touched.
     // Wander Exa prefetch waits for approval so a declined quote never spends a search.
-    await ctx.runMutation(internal.approvals.requestTaskStartApproval, { taskId, runId, requestedRwf: BigInt(quote.maxRwf) });
-    return { taskId, runId, quote: runQuote, awaitingCostApproval: true };
+    const approval = await ctx.runMutation(internal.approvals.requestTaskStartApproval, { taskId, runId, requestedRwf: BigInt(quote.maxRwf) });
+    // Auto-approved within the ceiling: settleApproval already scheduled a dispatch tick, but run
+    // one inline as well so the happy path does not wait a scheduler hop to start.
+    if (approval.autoApproved && !isWanderObjective(objective)) await nudgeDispatch();
+    return { taskId, runId, quote: runQuote, awaitingCostApproval: !approval.autoApproved };
   }
 
   // Prefetch Wander evidence before the first coding step so the planner sees the dossier on
@@ -129,14 +152,7 @@ export async function startCodingRun(
       // Prefetch also schedules a dispatch nudge; the ensure path in executeClaimedStep is backup.
     }
   } else {
-    // The run is already durably queued, and the cron ticks every minute. A nudge that fails is
-    // therefore a latency problem, never a correctness one — letting it reject here would report
-    // a run that genuinely exists and will still execute as a failed start.
-    try {
-      await ctx.runAction(internal.dispatcher.dispatchTick, {});
-    } catch {
-      // Intentionally swallowed: the cron picks the run up on its next tick.
-    }
+    await nudgeDispatch();
   }
   return { taskId, runId, quote: runQuote, awaitingCostApproval: false };
 }

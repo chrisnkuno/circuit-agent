@@ -224,11 +224,14 @@ body { margin: 0; overflow: hidden; }
 .run-state.failed, .run-state.blocked { color: var(--sw-accent); }
 .run-state.paused { color: var(--sw-warn); }
 .run-state.completed, .run-state.stopped { color: var(--sw-info); }
+/* Planning is normal progress, not something asking for attention — kept distinct from warn. */
+.run-state.planning { color: var(--sw-info); }
 
 /* Status is carried by colour and by the word beside it, never by colour alone. */
 .task-dot { width: calc(var(--u) * 1.75); height: calc(var(--u) * 1.75); margin-top: calc(var(--u) * 0.75); flex: 0 0 auto; background: var(--sw-line-strong); }
 .task-dot.running { background: var(--sw-success); }
 .task-dot.awaiting_approval, .task-dot.quoted, .task-dot.paused, .task-dot.idle, .task-dot.starting { background: var(--sw-warn); }
+.task-dot.planning { background: var(--sw-info); }
 .task-dot.blocked, .task-dot.failed { background: var(--sw-accent); }
 .task-dot.completed, .task-dot.stopped { background: var(--sw-info); }
 
@@ -295,6 +298,7 @@ body { margin: 0; overflow: hidden; }
 .sandbox-card { margin-bottom: calc(var(--u) * 2.5); padding: calc(var(--u) * 3); border: 1px solid var(--sw-line); background: var(--sw-panel-strong); }
 .sandbox-card.running { border-left: 3px solid var(--sw-success); }
 .sandbox-card.paused, .sandbox-card.starting { border-left: 3px solid var(--sw-warn); }
+.sandbox-card.planning { border-left: 3px solid var(--sw-info); }
 .run-state.starting { color: var(--sw-warn); }
 .sandbox-card > header { display: flex; align-items: center; gap: calc(var(--u) * 2); }
 .sandbox-card code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sw-muted); font-family: var(--sw-mono); font-size: var(--t-mini); }
@@ -371,6 +375,15 @@ body { margin: 0; overflow: hidden; }
 .live-preview a { display: flex; align-items: center; gap: calc(var(--u) * 1.25); color: var(--sw-accent); font-size: var(--t-mini); text-decoration: none; }
 .live-preview a svg { width: calc(var(--u) * 3); }
 .live-preview iframe { width: 100%; height: min(58vh, calc(var(--u) * 140)); display: block; border: 0; background: #fff; }
+.frame-fallback { margin: 0; padding: calc(var(--u) * 3); border-bottom: 1px solid var(--sw-line); background: var(--sw-panel); color: var(--sw-muted); font-size: var(--t-mini); line-height: 1.6; }
+.frame-fallback code { font-family: var(--sw-mono); color: var(--sw-fg); }
+.frame-fallback a { display: inline; color: var(--sw-accent); text-decoration: none; }
+.frame-fallback svg { vertical-align: -2px; }
+.frame-fallback svg.spin { animation: msg-spin 1s linear infinite; }
+.frame-retry { border: 1px solid var(--sw-line-strong); background: none; color: var(--sw-fg); font: inherit; padding: 0 calc(var(--u) * 1.5); cursor: pointer; }
+.frame-retry:hover { border-color: var(--sw-accent); color: var(--sw-accent); }
+/* A frame the browser refused shows as a short strip, not a tall grey void. */
+.live-preview.frame-stuck iframe { height: calc(var(--u) * 16); opacity: .3; }
 
 .output-grid { display: grid; grid-template-columns: 1fr 1fr; }
 .output-grid > section { min-width: 0; padding: calc(var(--u) * 4.5) calc(var(--u) * 5.5) calc(var(--u) * 9); }

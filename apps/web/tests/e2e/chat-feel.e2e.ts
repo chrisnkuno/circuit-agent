@@ -54,9 +54,15 @@ test("what it is like to use", async ({ page }) => {
   await expect(fleet.first()).toBeVisible({ timeout: 60_000 });
   note(`fleet card appeared in state: ${JSON.stringify(await fleet.first().locator(".run-state").textContent())}`);
   note(`sandbox card: ${JSON.stringify(await fleet.first().locator("code").textContent())}`);
-  // Meters only exist once E2B has handed back a machine; before that the card says so.
-  await expect(fleet.first().locator(".run-state")).not.toHaveText("starting", { timeout: 5 * 60_000 });
-  note(`machine ready: ${JSON.stringify(await fleet.first().locator("code").textContent())}`);
+  // The machine is now created before the plan call, so "starting" clears in about a second and
+  // the card sits in "planning" — a real, often multi-minute wait — while the model writes the plan.
+  await expect(fleet.first().locator(".run-state")).not.toHaveText("starting", { timeout: 90_000 });
+  const machineAt = await fleet.first().locator("code").textContent();
+  note(`machine ready (state ${JSON.stringify(await fleet.first().locator(".run-state").textContent())}): ${JSON.stringify(machineAt)}`);
+  note(`while planning: ${JSON.stringify(await fleet.first().locator(".sandbox-step").textContent())}`);
+  // Meters only mean something once a command has run, so they appear when the build starts.
+  await expect(fleet.first().locator(".run-state")).toHaveText("running", { timeout: 5 * 60_000 });
+  note("plan is in — sandbox is building");
   await expect(fleet.first().locator(".meter").first()).toBeVisible({ timeout: 120_000 });
   note(`meters: ${JSON.stringify(await fleet.first().locator(".meter small").allTextContents())}`);
 

@@ -72,6 +72,8 @@ async function main(): Promise<void> {
     artifacts,
     control: {
       heartbeat: async () => undefined,
+      reportPhase: async (_stepId, phase, detail) => { console.log(`  phase: ${phase}${detail?.planBytes ? ` (${detail.planBytes} chars)` : ""}`); },
+      reportActivity: async (_stepId, _type, message) => { console.log(`  · ${message}`); },
       isCancellationRequested: async () => false,
     },
     prices,

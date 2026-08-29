@@ -395,10 +395,14 @@ export function CloudMessenger() {
   const openPreview = useCallback(async (runId: Id<"agentRuns">, taskId: Id<"tasks">) => {
     setPreviewLoading(true);
     setSelectedTaskId(taskId);
+    // Drop any earlier preview first: retrying after a sandbox has expired must not leave the
+    // previous frame pointing at a URL that no longer serves anything.
+    setPreviewUrl(null);
     try {
       const result = await startSandboxPreview({ runId });
       setPreviewUrl({ taskId, url: result.url });
     } catch (error) {
+      setPreviewUrl(null);
       setNotice(error instanceof Error ? error.message : "Preview could not start");
     } finally {
       setPreviewLoading(false);
@@ -643,9 +647,10 @@ export function CloudMessenger() {
               { label: "Rate", value: `${formatUsd(usdPerHour(shapeOf(samples[box.sandboxId])))}/h` },
               { label: "Efficiency", value: `${percent(detail.efficiency)}%` },
             ]} />
-            {detail.state !== "starting" && <Meters sample={samples[box.sandboxId]} />}
+            {/* Meters only mean something once a command has run — during "starting" and "planning" they would all read zero. */}
+            {detail.state !== "starting" && detail.state !== "planning" && <Meters sample={samples[box.sandboxId]} />}
             <div className="sandbox-actions">
-              <button onClick={() => openPreview(box.runId, box.taskId)} disabled={previewLoading || detail.state === "starting"}><ArrowUpRight /> Preview</button>
+              <button onClick={() => openPreview(box.runId, box.taskId)} disabled={previewLoading || detail.state === "starting" || detail.state === "planning"}><ArrowUpRight /> Preview</button>
               {detail.state === "paused"
                 ? <button onClick={() => resumeRun({ runId: box.runId })}><Play /> Resume</button>
                 : <button onClick={() => pauseRun({ runId: box.runId })}><Pause /> Pause</button>}

@@ -20,7 +20,7 @@ const REPOSITORY_CONTEXT = "No repository is connected yet. There is no existing
  * then dies with a truncated plan having built nothing. Deployability is a property the finished
  * workspace must have, not a list of files the plan has to reproduce.
  */
-const DEPLOYABLE_APP_CONTEXT = `A reviewed Next.js starter is already in the workspace, with package.json, its lockfile, dependencies, build and start scripts, and config files all present and working. Do not rewrite, regenerate or re-emit any of them, and never output a lockfile. Write only the files this feature actually needs — typically a page, its styles, and any sample data — plus DEPLOYMENT.md with exact build/start/environment instructions, and .env.example only if configuration is genuinely needed. Keep the result production-deployable and never include secret values. This is the Next.js App Router: every file is a Server Component unless its first line is the 'use client' directive. Any file using styled-jsx (<style jsx>), useState, useEffect, other React hooks, event handlers, or browser APIs must start with 'use client'. Prefer a CSS module or plain CSS file over styled-jsx. Run the production build before declaring the work complete, and fix any build failure rather than reporting success.`;
+const DEPLOYABLE_APP_CONTEXT = `A reviewed Next.js starter is already in the workspace, with package.json, its lockfile, dependencies, build and start scripts, and config files all present and working. Do not rewrite, regenerate or re-emit any of them, and never output a lockfile. Write only the files this feature actually needs — typically a page, its styles, and any sample data — plus DEPLOYMENT.md with exact build/start/environment instructions, and .env.example only if configuration is genuinely needed. Keep the result production-deployable and never include secret values. This is the Next.js App Router: every file is a Server Component unless its first line is the 'use client' directive. Any file using styled-jsx (<style jsx>), useState, useEffect, other React hooks, event handlers, or browser APIs must start with 'use client'. Prefer a CSS module or plain CSS file over styled-jsx. Run the production build with \`bun run build\` (bun is installed here and starts faster than npm) before declaring the work complete, and fix any build failure rather than reporting success.`;
 
 /**
  * Builds the model/sandbox request for a coding (or Wander) step. Session budgets come from
@@ -33,6 +33,7 @@ export function buildStepRequest(
   stepId: string,
   workspacePresetId?: string,
   researchBrief?: string | null,
+  resumeContext?: string | null,
 ): CodingPlanRequest {
   const preset = findWorkspacePreset(workspacePresetId);
   const wander = isWanderObjective(runObjective);
@@ -62,5 +63,6 @@ export function buildStepRequest(
     idleTimeoutMs: session.modelIdleTimeoutMs,
     reasoningEffort: session.reasoningEffort,
     safetyIdentifier: `org_${taskId}`.slice(0, 64),
+    ...(resumeContext?.trim() ? { resumeContext: resumeContext.trim().slice(0, 600) } : {}),
   };
 }

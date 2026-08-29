@@ -5,6 +5,7 @@ import { capabilityRegistry } from "../lib/capability-registry";
 import { requireOrganizationPermission } from "./lib/authz";
 import { internal } from "./_generated/api";
 import { formatRwf } from "../lib/task-cost";
+import { decideStepResume } from "../lib/step-resume";
 import { createApproval } from "./approvals";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -354,6 +355,8 @@ export const claimStep = internalMutation({
         reservationRwf: Number(args.estimatedRwf),
         attempts: step.attempts + 1,
         reuseSandboxId: run.sandboxId,
+        // A prior timed checkpoint of this step: the worker continues the partial workspace.
+        resumeAttempt: step.resumes ?? 0,
         workspacePresetId: run.workspacePresetId,
         modelProvider: run.modelProvider,
         modelId: run.modelId,
@@ -407,7 +410,18 @@ export const releaseStepForRetry = internalMutation({
 });
 
 export const heartbeatStep = internalMutation({
-  args: { runId: v.id("agentRuns"), stepId: v.id("agentSteps"), workerId: v.string(), sandboxId: v.optional(v.string()), leaseMs: v.number() },
+  args: {
+    runId: v.id("agentRuns"),
+    stepId: v.id("agentSteps"),
+    workerId: v.string(),
+    sandboxId: v.optional(v.string()),
+    leaseMs: v.number(),
+    // What the worker is doing right now, so the fleet panel can show "planning" during the
+    // minutes a plan call takes rather than a bare "provisioning". Advisory only — it never
+    // changes whether the step continues.
+    phase: v.optional(v.union(v.literal("planning"), v.literal("building"))),
+    planBytes: v.optional(v.number()),
+  },
   returns: v.object({ continueExecution: v.boolean(), leaseExpiresAt: v.number() }),
   handler: async (ctx, args) => {
     if (!Number.isInteger(args.leaseMs) || args.leaseMs < 5_000 || args.leaseMs > 10 * 60_000) {
@@ -421,11 +435,46 @@ export const heartbeatStep = internalMutation({
     if (!step.leaseExpiresAt || step.leaseExpiresAt <= now) throw new Error("Worker step lease has expired");
     const leaseExpiresAt = now + args.leaseMs;
     if (run.status === "cancelled") return { continueExecution: false, leaseExpiresAt: step.leaseExpiresAt };
-    await ctx.db.patch(step._id, { heartbeatAt: now, leaseExpiresAt, sandboxId: args.sandboxId ?? step.sandboxId });
+    await ctx.db.patch(step._id, {
+      heartbeatAt: now,
+      leaseExpiresAt,
+      sandboxId: args.sandboxId ?? step.sandboxId,
+      phase: args.phase ?? step.phase,
+      // Only track plan growth while planning; clear it once building so a stale number cannot linger.
+      planBytes: args.phase === "planning" ? args.planBytes ?? step.planBytes : args.phase === "building" ? undefined : step.planBytes,
+    });
     // The run, not just the step, remembers the sandbox: the step clears its own on completion,
     // and the run is what hands the workspace to the next step and destroys it at the end.
     if (args.sandboxId && run.sandboxId !== args.sandboxId) await ctx.db.patch(run._id, { sandboxId: args.sandboxId });
     return { continueExecution: true, leaseExpiresAt };
+  },
+});
+
+/**
+ * Appends one line to the run's live activity feed while a step is executing — "wrote 6 files",
+ * "npm run build → exit 0". This is what makes generated output *appear* on the surface within
+ * seconds of the plan landing rather than only when the whole step records its outcome.
+ *
+ * Cosmetic and defensive: a report from a worker that no longer owns the step is dropped, not
+ * an error, so a late or racing report can never fail a build.
+ */
+export const recordWorkerActivity = internalMutation({
+  args: {
+    runId: v.id("agentRuns"),
+    stepId: v.id("agentSteps"),
+    workerId: v.string(),
+    type: v.string(),
+    message: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const [run, step] = await Promise.all([ctx.db.get(args.runId), ctx.db.get(args.stepId)]);
+    if (!run || !step || step.runId !== run._id || step.status !== "running" || step.claimedBy !== args.workerId) return null;
+    if (run.status === "cancelled") return null;
+    const message = args.message.trim().slice(0, 400);
+    if (!message) return null;
+    await ctx.db.insert("agentRunEvents", { runId: run._id, type: args.type.slice(0, 40) || "activity", message, createdAt: Date.now() });
+    return null;
   },
 });
 
@@ -480,14 +529,20 @@ export const recordStepOutcome = internalMutation({
   args: {
     runId: v.id("agentRuns"), stepId: v.id("agentSteps"), workerId: v.string(),
     actualRwf: v.int64(), provider: v.string(), meter: v.string(), quantity: v.number(),
-    usageIdempotencyKey: v.string(), outcome: v.union(v.literal("completed"), v.literal("failed")),
+    usageIdempotencyKey: v.string(),
+    // "checkpoint" is a step that stopped only for time with a usable partial workspace: it is
+    // resumed in the same sandbox if the resume budget and the task cap both still allow it,
+    // otherwise it finalizes as a failure with an explanatory summary.
+    outcome: v.union(v.literal("completed"), v.literal("failed"), v.literal("checkpoint")),
+    /** A conservative reservation for one more attempt; used only to decide a checkpoint resume. */
+    nextAttemptEstimateRwf: v.optional(v.number()),
     summary: v.string(), artifactReferences: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     if (args.actualRwf < 0n) throw new Error("actualRwf must be a non-negative integer RWF amount");
     if (!Number.isFinite(args.quantity) || args.quantity < 0) throw new Error("quantity must be a non-negative finite number");
     if (!args.summary.trim()) throw new Error("A worker outcome requires a non-empty summary");
-    if (args.outcome === "completed" && args.artifactReferences.length === 0) throw new Error("Completed work requires at least one evidence reference");
+    if (args.outcome !== "failed" && args.artifactReferences.length === 0) throw new Error("A non-failure outcome requires at least one evidence reference");
     const run = await ctx.db.get(args.runId);
     const step = await ctx.db.get(args.stepId);
     if (!run || !step || step.runId !== args.runId) throw new Error("Run step not found");
@@ -513,19 +568,53 @@ export const recordStepOutcome = internalMutation({
     await ctx.db.patch(task._id, { reservedRwf: task.reservedRwf - reservationRwf, spentRwf: task.spentRwf + args.actualRwf });
     const artifacts = await ctx.db.query("agentArtifacts").withIndex("by_step", (q) => q.eq("stepId", step._id)).collect();
     const recordedReferences = new Set(artifacts.map((artifact) => artifact.reference));
-    if (args.outcome === "completed" && args.artifactReferences.some((reference) => !recordedReferences.has(reference))) {
-      throw new Error("Completed work references an artifact that was not recorded for this step");
+    if (args.outcome !== "failed" && args.artifactReferences.some((reference) => !recordedReferences.has(reference))) {
+      throw new Error("A non-failure outcome references an artifact that was not recorded for this step");
     }
-    await ctx.db.patch(step._id, { status: args.outcome, completedAt: now, summary: args.summary, artifactReferences: args.artifactReferences, leaseExpiresAt: undefined, heartbeatAt: undefined, sandboxId: undefined, reservedRwf: undefined });
+    // Spend is settled the same way for every outcome; only what happens to the step differs.
     await ctx.db.insert("usageLedger", { taskId: task._id, runId: run._id, stepId: step._id, provider: args.provider, meter: args.meter, quantity: args.quantity, amountRwf: args.actualRwf, idempotencyKey: args.usageIdempotencyKey, createdAt: now });
-    await ctx.db.insert("agentRunEvents", { runId: run._id, type: `step_${args.outcome}`, message: args.summary, createdAt: now });
-    if (args.outcome === "failed") {
+
+    // A timed checkpoint: continue the step in the same sandbox when the resume budget and the
+    // task cap both still allow it. Otherwise it falls through and finalizes as a failure below.
+    let finalizeReason: string | undefined;
+    if (args.outcome === "checkpoint") {
+      const resumes = step.resumes ?? 0;
+      const decision = decideStepResume({
+        resumes,
+        spentRwf: Number(task.spentRwf + args.actualRwf),
+        reservedRwf: Number(task.reservedRwf - reservationRwf),
+        maxRwf: Number(task.maxRwf),
+        nextAttemptEstimateRwf: args.nextAttemptEstimateRwf ?? Number(reservationRwf),
+        runCancelled: false,
+      });
+      if (decision.action === "resume") {
+        await ctx.db.patch(step._id, {
+          status: "ready", claimedBy: undefined, claimedAt: undefined, leaseExpiresAt: undefined,
+          heartbeatAt: undefined, sandboxId: undefined, reservedRwf: undefined, phase: undefined,
+          planBytes: undefined, resumes: resumes + 1, summary: args.summary,
+        });
+        const runSteps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
+        const othersRunning = runSteps.some((candidate) => candidate._id !== step._id && candidate.status === "running");
+        await ctx.db.patch(run._id, { status: othersRunning ? "running" : "queued" });
+        await ctx.db.insert("agentRunEvents", { runId: run._id, type: "step_checkpoint", message: `${step.title}: ${decision.reason}`, createdAt: now });
+        // Keep the run's sandbox: the resumed attempt reuses it to continue the partial workspace.
+        await ctx.scheduler.runAfter(0, internal.dispatcher.dispatchTick, {});
+        return;
+      }
+      finalizeReason = decision.reason;
+    }
+
+    const terminalOutcome = args.outcome === "completed" ? "completed" : "failed";
+    const summary = finalizeReason ? `${args.summary} — ${finalizeReason}` : args.summary;
+    await ctx.db.patch(step._id, { status: terminalOutcome, completedAt: now, summary, artifactReferences: args.artifactReferences, leaseExpiresAt: undefined, heartbeatAt: undefined, sandboxId: undefined, reservedRwf: undefined });
+    await ctx.db.insert("agentRunEvents", { runId: run._id, type: `step_${terminalOutcome}`, message: summary, createdAt: now });
+    if (terminalOutcome === "failed") {
       await ctx.db.patch(run._id, { status: "failed", completedAt: now });
       await releaseRunSandbox(ctx, run);
       await ctx.db.patch(task._id, { status: "blocked" });
       await ctx.scheduler.runAfter(0, internal.telegramActions.notifyLinkedChannels, {
         organizationId: task.organizationId,
-        message: `❌ "${task.title}" failed — spent ${formatRwf(Number(task.spentRwf + args.actualRwf))} of ${formatRwf(Number(task.maxRwf))} cap. ${args.summary}`,
+        message: `❌ "${task.title}" failed — spent ${formatRwf(Number(task.spentRwf + args.actualRwf))} of ${formatRwf(Number(task.maxRwf))} cap. ${summary}`,
       });
       await ctx.scheduler.runAfter(0, internal.emailActions.notifyRunLifecycle, {
         organizationId: task.organizationId,
@@ -534,7 +623,7 @@ export const recordStepOutcome = internalMutation({
         objective: run.objective,
         spentRwf: Number(task.spentRwf + args.actualRwf),
         maxRwf: Number(task.maxRwf),
-        detail: args.summary,
+        detail: summary,
       });
     } else {
       const steps = await ctx.db.query("agentSteps").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();

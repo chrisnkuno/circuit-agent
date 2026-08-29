@@ -98,6 +98,11 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
   // the lease is no longer "running", so there is nothing further to settle here.
   if (result.status === "cancelled") return;
 
+  // A step that stopped only for time, with a usable partial workspace, is checkpointed and
+  // continued in the same sandbox rather than recorded as done — this is what lets a build that
+  // needs more than one 10-minute action window actually finish. recordStepOutcome decides
+  // whether the resume budget and the task cap still allow another attempt.
+  const outcome = result.resumable ? "checkpoint" as const : result.status === "completed" ? "completed" as const : "failed" as const;
   await ctx.runMutation(internal.agentRuns.recordStepOutcome, {
     runId: params.runId,
     stepId: params.stepId,
@@ -107,7 +112,8 @@ async function runCodingStep(ctx: ActionCtx, params: StepRunParams): Promise<voi
     meter: "model_tokens",
     quantity: result.modelUsage.totalTokens,
     usageIdempotencyKey: `usage_${params.stepId}_${params.workerId}`,
-    outcome: result.status === "completed" ? "completed" : "failed",
+    outcome,
+    nextAttemptEstimateRwf: params.reservationRwf,
     summary: result.summary,
     artifactReferences: result.artifactReferences.map((artifact) => artifact.reference),
   });
@@ -135,6 +141,8 @@ export const executeClaimedStep = internalAction({
     reservationRwf: v.number(),
     attempts: v.number(),
     reuseSandboxId: v.optional(v.string()),
+    /** Timed checkpoints this step has already taken; > 0 means continue the partial workspace. */
+    resumeAttempt: v.optional(v.number()),
     workspacePresetId: v.optional(v.string()),
     modelProvider: v.optional(v.union(v.literal("openai"), v.literal("circuitnotion"))),
     modelId: v.optional(v.string()),
@@ -172,12 +180,15 @@ export const executeClaimedStep = internalAction({
       }
     }
     const session = resolveExecutionSession(args.runObjective);
+    const resumeContext = (args.resumeAttempt ?? 0) > 0
+      ? `An earlier attempt reached resume ${args.resumeAttempt} of this step before its time budget ran out.`
+      : null;
     await runCodingStep(ctx, {
       runId: args.runId,
       stepId: args.stepId,
       workerId: args.workerId,
       reservationRwf: args.reservationRwf,
-      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId, args.workspacePresetId, researchBrief),
+      request: buildStepRequest(args.taskTitle, args.runObjective, args.taskId, args.stepId, args.workspacePresetId, researchBrief, resumeContext),
       reuseSandboxId: args.reuseSandboxId,
       attempts: args.attempts,
       model,

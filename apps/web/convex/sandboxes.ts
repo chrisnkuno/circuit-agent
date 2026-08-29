@@ -36,6 +36,10 @@ export const listForOrganization = query({
           // Suspended between steps is the normal resting state, not an anomaly: a sandbox is only
           // executing while a step actually holds it.
           activeStepTitle: running?.title ?? null,
+          // "planning" while the model writes the plan, "building" once its writes and commands
+          // run — so the panel does not label a legitimate multi-minute plan call as a stuck box.
+          phase: running?.phase ?? null,
+          planBytes: running?.planBytes ?? null,
           heartbeatAt: running?.heartbeatAt ?? null,
           sandboxMs: run.sandboxMs ?? 0,
           startedAt: run.startedAt ?? run.createdAt,

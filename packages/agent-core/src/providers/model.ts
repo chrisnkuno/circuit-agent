@@ -44,6 +44,13 @@ export type CodingPlanRequest = {
    * usually reproduces the same mistake.
    */
   previousFailure?: PreviousAttemptFailure;
+  /**
+   * Set when an earlier attempt at this same step ran out of its time budget mid-build and was
+   * checkpointed. The workspace already holds partial work; the planner must continue it — run the
+   * remaining verification/build commands and fix failures — not re-scaffold from an empty tree.
+   * Carries a short note on how far the earlier attempt got.
+   */
+  resumeContext?: string;
 };
 
 export type PreviousAttemptFailure = {
@@ -63,6 +70,21 @@ export type CodingPlanResult = {
   usage: ModelUsage;
 };
 
+export type CodingPlanProgress = {
+  /** Characters of model output received so far. The plan is one JSON object, so this only ever grows. */
+  receivedChars: number;
+};
+
+export type GenerateCodingPlanOptions = {
+  /**
+   * Called as plan output streams in, so a caller can show that the model is working rather than
+   * a blank "provisioning" state for the minute-plus a detailed plan takes. Best-effort: adapters
+   * that cannot stream (the OpenAI Responses path) never call it, and a throwing callback is the
+   * caller's problem, not the request's.
+   */
+  onProgress?: (progress: CodingPlanProgress) => void;
+};
+
 export interface CodingModelProvider {
-  generateCodingPlan(request: CodingPlanRequest): Promise<CodingPlanResult>;
+  generateCodingPlan(request: CodingPlanRequest, options?: GenerateCodingPlanOptions): Promise<CodingPlanResult>;
 }

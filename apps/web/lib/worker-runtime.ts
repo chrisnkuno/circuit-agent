@@ -144,6 +144,10 @@ export function retryDelayMs(attempt: number, baseMs = 1_000, maximumMs = 60_000
   return Math.min(maximumMs, baseMs * 2 ** (attempt - 1));
 }
 
+// Timed-resume policy lives in its own dependency-free module so the plain-V8 Convex mutation
+// that settles step outcomes can import it without dragging node:crypto in through this file.
+export { decideStepResume, MAX_STEP_RESUMES, type StepResumeDecision } from "./step-resume";
+
 /** Determines how an expired worker lease is recovered without duplicating its reservation. */
 export function recoverExpiredLease(step: RecoverableStep, now: number, maxAttempts = 3): LeaseRecoveryDecision {
   if (!Number.isSafeInteger(step.reservedRwf) || step.reservedRwf < 0) throw new Error("reservedRwf must be a non-negative integer");

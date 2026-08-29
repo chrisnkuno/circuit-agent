@@ -36,6 +36,23 @@ describe("coding planner prompt", () => {
     expect(JSON.parse(withoutFailure.input)).not.toHaveProperty("previousFailure");
   });
 
+  it("tells a timed resume to continue the partial workspace instead of re-scaffolding", () => {
+    const resumed = buildCodingPlannerPrompt({
+      objective: "Build an expense tracker page",
+      repositoryContext: "",
+      workspaceRoot: "/workspace/repo",
+      maxCommands: 6,
+      resumeContext: "An earlier attempt reached resume 2 of this step before its time budget ran out.",
+    });
+    expect(resumed.instructions).toContain("timed resume of the same step");
+    expect(resumed.instructions).toContain("resume 2");
+    expect(resumed.instructions).toContain("Prioritise running the remaining verification and production-build commands");
+    expect(resumed.instructions).toContain("re-scaffolds from scratch will run out of time again");
+
+    const fresh = buildCodingPlannerPrompt({ objective: "Build an expense tracker page", repositoryContext: "", workspaceRoot: "/workspace/repo", maxCommands: 6 });
+    expect(fresh.instructions).not.toContain("timed resume");
+  });
+
   it("injects the Wander multi-pass protocol only for Wander objectives", () => {
     const coding = buildCodingPlannerPrompt({
       objective: "add a README",
@@ -158,6 +175,26 @@ describe("the planner is only offered tools that exist", () => {
     expect(offered).toContain("cargo");
     // A template claiming a program the policy forbids must not smuggle it through.
     expect(offered).not.toContain("definitely-not-permitted");
+  });
+
+  it("nudges toward the fastest runner the image actually ships, and stays silent otherwise", () => {
+    const base = buildCodingPlannerPrompt({ objective: "run a script", repositoryContext: "x", workspaceRoot: "/workspace/repo", maxCommands: 6 });
+    // The base image has neither bun nor uv nor rg, so no speed advice is given.
+    expect(base.instructions).not.toContain("Speed matters");
+
+    const node = buildCodingPlannerPrompt({ objective: "build a node api", repositoryContext: "x", workspaceRoot: "/workspace/repo", maxCommands: 6, templatePrograms: ["npm", "bun", "node", "git", "rg"] });
+    expect(node.instructions).toContain("Prefer bun over npm");
+    expect(node.instructions).toContain("Use `rg` to search");
+    expect(node.instructions).not.toContain("Prefer uv");
+
+    const py = buildCodingPlannerPrompt({ objective: "write a python cli with tests", repositoryContext: "x", workspaceRoot: "/workspace/repo", maxCommands: 6, templatePrograms: ["python3", "pytest", "uv", "rg", "git"] });
+    expect(py.instructions).toContain("Prefer uv for Python");
+    expect(py.instructions).toContain("uv run pytest");
+    // uv covers pytest, so the standalone pytest note is not also emitted.
+    expect(py.instructions).not.toContain("invoke it as `pytest`");
+
+    const pytestOnly = buildCodingPlannerPrompt({ objective: "write tests", repositoryContext: "x", workspaceRoot: "/workspace/repo", maxCommands: 6, templatePrograms: ["python3", "pytest", "git"] });
+    expect(pytestOnly.instructions).toContain("invoke it as `pytest`");
   });
 });
 

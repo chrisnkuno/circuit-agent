@@ -48,10 +48,13 @@ function setup(options: { slowCommandMs?: number; recordTimeouts?: number[]; com
   const modelRequests: CodingPlanRequest[] = [];
   let modelCalls = 0;
   const model: CodingModelProvider = {
-    generateCodingPlan: async (planRequest: CodingPlanRequest) => {
+    generateCodingPlan: async (planRequest: CodingPlanRequest, planOptions) => {
       calls.push("model");
       modelRequests.push(planRequest);
       modelCalls += 1;
+      // The real streaming adapter reports plan growth as it arrives; mirror one delta so the
+      // worker's throttled phase reporting is exercised.
+      planOptions?.onProgress?.({ receivedChars: 4_096 });
       if (modelCalls > 1 && options.repairStatus === "blocked") {
         return { ...result, plan: { ...result.plan!, status: "blocked" as const } };
       }
@@ -108,14 +111,24 @@ function setup(options: { slowCommandMs?: number; recordTimeouts?: number[]; com
   const artifacts: ArtifactStore = {
     put: async (value) => { writes.push(value); return describeArtifact(value, "test-artifact"); },
   };
+  const phases: Array<{ phase: string; planBytes?: number }> = [];
+  const activity: Array<{ type: string; message: string }> = [];
   const control = {
     heartbeat: async () => { calls.push("heartbeat"); },
+    reportPhase: async (_stepId: string, phase: "planning" | "building", detail?: { planBytes?: number }) => {
+      calls.push(`phase:${phase}`);
+      phases.push({ phase, planBytes: detail?.planBytes });
+    },
+    reportActivity: async (_stepId: string, type: string, message: string) => {
+      calls.push(`activity:${type}`);
+      activity.push({ type, message });
+    },
     isCancellationRequested: async () => {
       cancellationChecks += 1;
       return options.cancelledAfterChecks !== undefined && cancellationChecks >= options.cancelledAfterChecks;
     },
   };
-  return { worker: new CodingAgentWorker({ model, sandbox, artifacts, control, prices }), sandbox, artifacts, control, calls, writes, modelRequests };
+  return { worker: new CodingAgentWorker({ model, sandbox, artifacts, control, prices }), sandbox, artifacts, control, calls, writes, modelRequests, phases, activity };
 }
 
 describe("coding agent worker", () => {
@@ -133,6 +146,64 @@ describe("coding agent worker", () => {
     expect(report?.mediaType).toBe("text/html");
     expect(report?.content).toContain("Wander lab report");
     expect(report?.content).toContain("Consensus");
+  });
+
+  it("acquires the sandbox before the plan call so its id is known while the model is still planning", async () => {
+    const test = setup();
+    await test.worker.execute(baseRequest);
+    const created = test.calls.indexOf("create");
+    const planned = test.calls.indexOf("model");
+    // The whole point of Change 1: the machine exists before the (slow) plan call, not after it.
+    expect(created).toBeGreaterThanOrEqual(0);
+    expect(created).toBeLessThan(planned);
+    // The phase is reported as "planning" before the model call and "building" only once a
+    // runnable plan is in hand — and building never precedes any sandbox write or command.
+    expect(test.calls.indexOf("phase:planning")).toBeLessThan(planned);
+    expect(test.calls.indexOf("phase:building")).toBeGreaterThan(planned);
+    expect(test.calls.indexOf("phase:building")).toBeLessThan(test.calls.indexOf("write"));
+    expect(test.calls.indexOf("phase:building")).toBeLessThan(test.calls.findIndex((call) => call.startsWith("run:")));
+  });
+
+  it("streams a live activity line for the build start, the file writes, and every command", async () => {
+    const test = setup();
+    await test.worker.execute(baseRequest);
+    const types = test.activity.map((entry) => entry.type);
+    // Build start and the file-write summary land before any command output.
+    expect(types.indexOf("build_started")).toBe(0);
+    expect(types).toContain("files_written");
+    // One start + one ok per command in the base plan (two commands, both succeed).
+    expect(types.filter((type) => type === "command_started")).toHaveLength(2);
+    expect(types.filter((type) => type === "command_ok")).toHaveLength(2);
+    expect(types.indexOf("files_written")).toBeLessThan(types.indexOf("command_started"));
+    // The file summary names the file the plan wrote.
+    expect(test.activity.find((entry) => entry.type === "files_written")?.message).toContain("src/value.ts");
+    // Finalising is reported too.
+    expect(types).toContain("captured");
+  });
+
+  it("reports a failing command on the live feed and marks the repair", async () => {
+    const test = setup({ commandExitCode: 1 });
+    await test.worker.execute(baseRequest);
+    const types = test.activity.map((entry) => entry.type);
+    expect(types).toContain("command_failed");
+    expect(types.filter((type) => type === "repair")).toHaveLength(MAX_REPAIR_ATTEMPTS);
+    expect(test.activity.find((entry) => entry.type === "command_failed")?.message).toContain("exited 1");
+  });
+
+  it("a failed activity report never breaks the build", async () => {
+    const test = setup();
+    test.control.reportActivity = async () => { throw new Error("feed unavailable"); };
+    const result = await test.worker.execute(baseRequest);
+    expect(result.status).toBe("completed");
+  });
+
+  it("reports plan growth from the model stream while it is still planning", async () => {
+    const test = setup();
+    await test.worker.execute(baseRequest);
+    // An explicit "planning" with no byte count, then a streamed update carrying one, then "building".
+    expect(test.phases.map((entry) => entry.phase)).toEqual(["planning", "planning", "building"]);
+    expect(test.phases[0].planBytes).toBeUndefined();
+    expect(test.phases[1].planBytes).toBe(4_096);
   });
 
   it("writes model changes, runs bounded checks, captures evidence, and always releases the sandbox", async () => {
@@ -169,6 +240,9 @@ describe("coding agent worker", () => {
     const test = setup();
     const result = await test.worker.execute({ ...baseRequest, reuseSandboxId: "sandbox_prev" });
     expect(test.calls).not.toContain("create");
+    // A reused sandbox belongs to the run: it is suspended for the next step, never torn down.
+    expect(test.calls).not.toContain("stop");
+    expect(test.calls.at(-1)).toBe("suspend");
     expect(result.sandboxId).toBe("sandbox_prev");
   });
 
@@ -180,13 +254,17 @@ describe("coding agent worker", () => {
     expect(result.status).toBe("completed");
   });
 
-  it("blocks execution when actual model usage exceeds its reservation", async () => {
+  it("kills the speculative sandbox when actual model usage exceeds its reservation", async () => {
+    // Change 1 provisions before the plan call, so a plan that then busts its budget leaves a
+    // sandbox behind. It did no work and no step will reuse it, so it is stopped, not suspended.
     const test = setup({ usageOverride: { ...usage, outputTokens: 50_000, totalTokens: 51_000 } });
     await expect(test.worker.execute({ ...baseRequest, modelReservationRwf: 1 })).rejects.toThrow("reserved model budget");
-    expect(test.calls).not.toContain("create");
+    expect(test.calls).toContain("create");
+    expect(test.calls).toContain("stop");
+    expect(test.calls).not.toContain("suspend");
   });
 
-  it("turns model refusals into evidence-backed blockers without creating E2B", async () => {
+  it("turns model refusals into evidence-backed blockers and kills the speculative sandbox", async () => {
     const test = setup();
     const refusingModel: CodingModelProvider = {
       generateCodingPlan: async () => ({ status: "refused", refusal: "Repository access is not authorized.", responseId: "resp_refused", model: "gpt-5.6-terra", usage }),
@@ -194,7 +272,10 @@ describe("coding agent worker", () => {
     const worker = new CodingAgentWorker({ model: refusingModel, sandbox: test.sandbox, artifacts: test.artifacts, control: test.control, prices });
     const result = await worker.execute(baseRequest);
     expect(result).toMatchObject({ status: "blocked", commandsExecuted: 0 });
-    expect(test.calls).not.toContain("create");
+    // The sandbox was created up front; a refusal means it is torn down, never left suspended.
+    expect(test.calls).toContain("create");
+    expect(test.calls).toContain("stop");
+    expect(test.calls).not.toContain("suspend");
   });
 
   it("produces a conservative preflight model reservation", () => {
@@ -285,9 +366,29 @@ describe("capturing what a step produced", () => {
     expect(result.status).toBe("completed");
     expect(result.commandsExecuted).toBe(1);
     expect(result.summary).toContain("time budget");
+    // A time-only stop with commands still unrun is a checkpoint the caller should resume.
+    expect(result.resumable).toBe(true);
     // The point of stopping early: evidence still exists.
     expect(writes.some((write) => write.kind === "workspace_file")).toBe(true);
     expect(calls).toContain("suspend");
+  });
+
+  it("does not mark a genuine failure or a clean finish as resumable", async () => {
+    const failed = await setup({ commandExitCode: 1 }).worker.execute(baseRequest);
+    expect(failed.status).toBe("failed");
+    expect(failed.resumable).toBeFalsy();
+
+    const done = await setup({}).worker.execute(baseRequest);
+    expect(done.status).toBe("completed");
+    expect(done.stoppedForTime).toBe(false);
+    expect(done.resumable).toBeFalsy();
+  });
+
+  it("carries a resume note through to the model request unchanged", async () => {
+    const test = setup();
+    const note = "An earlier attempt reached resume 2 of this step before its time budget ran out.";
+    await test.worker.execute({ ...baseRequest, resumeContext: note });
+    expect(test.modelRequests[0].resumeContext).toBe(note);
   });
 
   it("clamps a command that asks for longer than the step has left", async () => {
