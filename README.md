@@ -13,7 +13,7 @@ approved spend **before** it executes.
 <!-- nova-reliability:start -->
 ## Nova scheduled reliability
 
-**90/100 (excellent)** · 6/6 live journeys · 3,129 control tests · 0 failures
+**90/100 (excellent)** · 6/6 live journeys · 3,117 control tests · 0 failures
 
 Latest run: 2026-08-31 on `cohere/north-mini-code:free`. 11.1% tool failure rate · 0% provider failure rate · 100% output-quality checks · 157,159 tokens · 3/3 operating systems. Daily benchmark: code build, responsive web build, debug, scoped search, Defender review, cross-process resume, UI, memory, security, approvals, cost accounting, Exa research, and portability. [Machine-readable evidence](reliability/latest.json).
 <!-- nova-reliability:end -->
