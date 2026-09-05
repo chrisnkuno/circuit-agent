@@ -1,17 +1,17 @@
 {
-  "generatedAt": "2026-09-04T08:05:44.073Z",
+  "generatedAt": "2026-09-05T07:45:52.796Z",
   "provider": "openai",
   "model": "cohere/north-mini-code:free",
-  "score": 90,
+  "score": 91,
   "grade": "excellent",
   "components": {
     "completion": 16,
     "verification": 9,
     "outputQuality": 7,
-    "toolReliability": 8.1,
+    "toolReliability": 9.3,
     "speed": 7,
-    "economy": 6.9,
-    "prediction": 4.3,
+    "economy": 6.8,
+    "prediction": 4.7,
     "scope": 7,
     "memoryResume": 7,
     "security": 6,
@@ -23,20 +23,20 @@
   },
   "cases": 6,
   "passed": 6,
-  "actualTokens": 100337,
-  "predictionCoverage": 50,
-  "toolFailureRate": 19.2,
+  "actualTokens": 123931,
+  "predictionCoverage": 67,
+  "toolFailureRate": 6.9,
   "providerFailureRate": 0,
   "completionRate": 100,
   "verificationRate": 100,
   "outputQualityRate": 100,
-  "medianLatencyMs": 19764,
+  "medianLatencyMs": 11836,
   "auditPlatforms": [
     "darwin",
     "linux",
     "win32"
   ],
-  "auditTests": 3129,
+  "auditTests": 3117,
   "auditFailures": 0,
   "exaScore": null,
   "observations": [
@@ -46,15 +46,15 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 49246,
+      "actualTokens": 56237,
       "economicalTokenTarget": 45000,
       "predictedTokensLow": 31561,
       "predictedTokensHigh": 83993,
-      "failedToolCalls": 4,
+      "failedToolCalls": 2,
       "unavailableToolCalls": 0,
       "toolCalls": 14,
       "providerAttempts": 1,
-      "elapsedMs": 85976,
+      "elapsedMs": 58140,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
@@ -62,213 +62,221 @@
       "misleadingSuccess": false,
       "permissionEscalation": false,
       "failureReasons": [
-        "4 tool call(s) failed"
+        "2 tool call(s) failed"
       ],
       "events": [
         {
-          "at": "2026-09-04T08:02:12.935Z",
+          "at": "2026-09-05T07:43:57.198Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:12.937Z",
-          "type": "tool_call",
-          "tool": "read_file"
-        },
-        {
-          "at": "2026-09-04T08:02:12.938Z",
-          "type": "tool_call",
-          "tool": "glob_files"
-        },
-        {
-          "at": "2026-09-04T08:02:12.940Z",
-          "type": "tool_result",
-          "tool": "read_file",
-          "isError": true
-        },
-        {
-          "at": "2026-09-04T08:02:12.940Z",
-          "type": "tool_result",
-          "tool": "glob_files",
-          "isError": false
-        },
-        {
-          "at": "2026-09-04T08:02:14.224Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-09-04T08:02:14.224Z",
+          "at": "2026-09-05T07:43:57.200Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-09-04T08:02:14.225Z",
+          "at": "2026-09-05T07:43:57.202Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:02:15.456Z",
+          "at": "2026-09-05T07:43:58.599Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:15.457Z",
-          "type": "tool_call",
-          "tool": "read_file"
-        },
-        {
-          "at": "2026-09-04T08:02:15.457Z",
+          "at": "2026-09-05T07:43:58.600Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-09-04T08:02:15.458Z",
-          "type": "tool_result",
-          "tool": "read_file",
-          "isError": true
-        },
-        {
-          "at": "2026-09-04T08:02:15.458Z",
+          "at": "2026-09-05T07:43:58.600Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:02:18.510Z",
+          "at": "2026-09-05T07:44:04.663Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:18.511Z",
-          "type": "tool_call",
-          "tool": "glob_files"
-        },
-        {
-          "at": "2026-09-04T08:02:18.511Z",
-          "type": "tool_call",
-          "tool": "glob_files"
-        },
-        {
-          "at": "2026-09-04T08:02:18.512Z",
-          "type": "tool_result",
-          "tool": "glob_files",
-          "isError": false
-        },
-        {
-          "at": "2026-09-04T08:02:18.513Z",
-          "type": "tool_result",
-          "tool": "glob_files",
-          "isError": false
-        },
-        {
-          "at": "2026-09-04T08:02:30.488Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-09-04T08:02:30.491Z",
+          "at": "2026-09-05T07:44:04.666Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-09-04T08:02:30.497Z",
+          "at": "2026-09-05T07:44:04.672Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": true
+        },
+        {
+          "at": "2026-09-05T07:44:05.295Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:05.295Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-09-05T07:44:05.296Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:09.186Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:09.187Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:09.188Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": true
+        },
+        {
+          "at": "2026-09-05T07:44:09.696Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:09.697Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:44:09.705Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:13.223Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:13.224Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:44:13.226Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:02:37.611Z",
+          "at": "2026-09-05T07:44:18.339Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:37.613Z",
+          "at": "2026-09-05T07:44:18.340Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-09-04T08:02:37.616Z",
+          "at": "2026-09-05T07:44:18.341Z",
           "type": "tool_result",
           "tool": "write_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:02:49.546Z",
+          "at": "2026-09-05T07:44:19.954Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:49.546Z",
+          "at": "2026-09-05T07:44:19.955Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-09-04T08:02:49.639Z",
+          "at": "2026-09-05T07:44:19.961Z",
           "type": "tool_result",
           "tool": "run_command",
-          "isError": true
+          "isError": false
         },
         {
-          "at": "2026-09-04T08:02:52.542Z",
+          "at": "2026-09-05T07:44:22.332Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:52.543Z",
+          "at": "2026-09-05T07:44:22.332Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:44:22.434Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:33.102Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:33.102Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:33.102Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:33.104Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:33.104Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:41.086Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:41.087Z",
           "type": "tool_call",
           "tool": "edit_file"
         },
         {
-          "at": "2026-09-04T08:02:52.546Z",
+          "at": "2026-09-05T07:44:41.090Z",
           "type": "tool_result",
           "tool": "edit_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:02:53.400Z",
+          "at": "2026-09-05T07:44:46.239Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:02:53.401Z",
+          "at": "2026-09-05T07:44:46.239Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-09-04T08:02:53.512Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": true
-        },
-        {
-          "at": "2026-09-04T08:03:11.827Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-09-04T08:03:11.828Z",
-          "type": "tool_call",
-          "tool": "edit_file"
-        },
-        {
-          "at": "2026-09-04T08:03:11.830Z",
-          "type": "tool_result",
-          "tool": "edit_file",
-          "isError": false
-        },
-        {
-          "at": "2026-09-04T08:03:17.478Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-09-04T08:03:17.479Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-09-04T08:03:17.582Z",
+          "at": "2026-09-05T07:44:46.340Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:03:27.929Z",
+          "at": "2026-09-05T07:44:50.736Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:03:27.930Z",
+          "at": "2026-09-05T07:44:50.736Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -295,15 +303,15 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 16530,
+      "actualTokens": 37532,
       "economicalTokenTarget": 38000,
       "predictedTokensLow": 31316,
       "predictedTokensHigh": 83342,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 5,
+      "toolCalls": 9,
       "providerAttempts": 1,
-      "elapsedMs": 81422,
+      "elapsedMs": 27584,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 5,
       "outputQualityChecksTotal": 5,
@@ -313,78 +321,146 @@
       "failureReasons": [],
       "events": [
         {
-          "at": "2026-09-04T08:03:32.434Z",
+          "at": "2026-09-05T07:44:54.009Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:03:32.436Z",
+          "at": "2026-09-05T07:44:54.011Z",
           "type": "tool_call",
-          "tool": "read_file"
+          "tool": "list_files"
         },
         {
-          "at": "2026-09-04T08:03:32.440Z",
+          "at": "2026-09-05T07:44:54.013Z",
           "type": "tool_result",
-          "tool": "read_file",
+          "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:04:38.950Z",
+          "at": "2026-09-05T07:44:55.521Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:04:38.954Z",
+          "at": "2026-09-05T07:44:55.522Z",
           "type": "tool_call",
-          "tool": "write_file"
+          "tool": "glob_files"
         },
         {
-          "at": "2026-09-04T08:04:38.956Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-09-04T08:04:38.958Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-09-04T08:04:38.959Z",
+          "at": "2026-09-05T07:44:55.523Z",
           "type": "tool_result",
-          "tool": "write_file",
+          "tool": "glob_files",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:04:38.962Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-09-04T08:04:38.963Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-09-04T08:04:39.907Z",
+          "at": "2026-09-05T07:44:56.735Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:04:39.908Z",
+          "at": "2026-09-05T07:44:56.735Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-09-05T07:44:56.736Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:57.281Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:57.284Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-09-04T08:04:40.008Z",
+          "at": "2026-09-05T07:44:57.292Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:04:50.235Z",
+          "at": "2026-09-05T07:44:58.368Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:04:50.236Z",
+          "at": "2026-09-05T07:44:58.368Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:58.370Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:00.994Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:00.996Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:45:00.999Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:05.005Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:05.005Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:45:05.007Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:12.406Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:12.407Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:45:12.409Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:13.189Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:13.190Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:45:13.288Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:19.184Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:19.185Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -415,102 +491,85 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 18162,
+      "actualTokens": 13915,
       "economicalTokenTarget": 25000,
       "predictedTokensLow": 8680,
       "predictedTokensHigh": 23100,
-      "failedToolCalls": 1,
+      "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 5,
+      "toolCalls": 4,
       "providerAttempts": 1,
-      "elapsedMs": 14098,
+      "elapsedMs": 13377,
       "latencyTargetMs": 360000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
-      "failureReasons": [
-        "1 tool call(s) failed"
-      ],
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-09-04T08:04:53.809Z",
+          "at": "2026-09-05T07:45:21.721Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:04:53.811Z",
+          "at": "2026-09-05T07:45:21.723Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-09-04T08:04:53.812Z",
+          "at": "2026-09-05T07:45:21.724Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-09-04T08:04:53.814Z",
+          "at": "2026-09-05T07:45:21.726Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:04:53.815Z",
+          "at": "2026-09-05T07:45:21.727Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:04:57.493Z",
+          "at": "2026-09-05T07:45:24.616Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:04:57.496Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-09-04T08:04:57.553Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": true
-        },
-        {
-          "at": "2026-09-04T08:05:01.380Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-09-04T08:05:01.382Z",
+          "at": "2026-09-05T07:45:24.619Z",
           "type": "tool_call",
           "tool": "edit_file"
         },
         {
-          "at": "2026-09-04T08:05:01.385Z",
+          "at": "2026-09-05T07:45:24.622Z",
           "type": "tool_result",
           "tool": "edit_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:05:02.503Z",
+          "at": "2026-09-05T07:45:26.267Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:05:02.504Z",
+          "at": "2026-09-05T07:45:26.268Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-09-04T08:05:02.556Z",
+          "at": "2026-09-05T07:45:26.320Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:05:05.075Z",
+          "at": "2026-09-05T07:45:33.215Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:05:05.076Z",
+          "at": "2026-09-05T07:45:33.215Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -537,7 +596,7 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 5328,
+      "actualTokens": 5368,
       "economicalTokenTarget": 8000,
       "predictedTokensLow": 6096,
       "predictedTokensHigh": 16223,
@@ -545,7 +604,7 @@
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 9245,
+      "elapsedMs": 5371,
       "latencyTargetMs": 180000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
@@ -555,26 +614,26 @@
       "failureReasons": [],
       "events": [
         {
-          "at": "2026-09-04T08:05:12.439Z",
+          "at": "2026-09-05T07:45:37.559Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:05:12.441Z",
+          "at": "2026-09-05T07:45:37.561Z",
           "type": "tool_call",
           "tool": "grep_files"
         },
         {
-          "at": "2026-09-04T08:05:12.444Z",
+          "at": "2026-09-05T07:45:37.564Z",
           "type": "tool_result",
           "tool": "grep_files",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:05:15.140Z",
+          "at": "2026-09-05T07:45:39.384Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:05:15.141Z",
+          "at": "2026-09-05T07:45:39.385Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -597,7 +656,7 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 9181,
+      "actualTokens": 9023,
       "economicalTokenTarget": 12000,
       "predictedTokensLow": 11344,
       "predictedTokensHigh": 36592,
@@ -605,7 +664,7 @@
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 25430,
+      "elapsedMs": 10295,
       "latencyTargetMs": 300000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
@@ -615,26 +674,26 @@
       "failureReasons": [],
       "events": [
         {
-          "at": "2026-09-04T08:05:17.207Z",
+          "at": "2026-09-05T07:45:41.095Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:05:17.209Z",
+          "at": "2026-09-05T07:45:41.097Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-09-04T08:05:17.211Z",
+          "at": "2026-09-05T07:45:41.100Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-09-04T08:05:41.230Z",
+          "at": "2026-09-05T07:45:50.312Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-09-04T08:05:41.231Z",
+          "at": "2026-09-05T07:45:50.312Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -657,11 +716,11 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 1890,
+      "actualTokens": 1856,
       "economicalTokenTarget": 8000,
       "predictedTokensLow": 1,
       "predictedTokensHigh": 8000,
-      "elapsedMs": 2495,
+      "elapsedMs": 2109,
       "latencyTargetMs": 120000,
       "outputQualityChecksPassed": 2,
       "outputQualityChecksTotal": 2,
@@ -687,173 +746,173 @@
     {
       "platform": "win32",
       "architecture": "x64",
-      "generatedAt": "2026-09-04T08:01:30.480Z",
+      "generatedAt": "2026-09-05T07:43:18.282Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 300,
           "failed": 0,
-          "durationMs": 3166
+          "durationMs": 3992
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 200,
           "failed": 0,
-          "durationMs": 5766
+          "durationMs": 6954
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 15056
+          "durationMs": 15246
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 3317
+          "durationMs": 3281
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 107,
           "failed": 0,
-          "durationMs": 3592
+          "durationMs": 3632
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 2210
+          "durationMs": 2221
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 2727
+          "durationMs": 2742
         }
       ],
-      "historyStartupP50Ms": 155
+      "historyStartupP50Ms": 156
     },
     {
       "platform": "darwin",
       "architecture": "arm64",
-      "generatedAt": "2026-09-04T08:00:29.289Z",
+      "generatedAt": "2026-09-05T07:42:02.240Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
           "tests": 300,
           "failed": 0,
-          "durationMs": 3392
+          "durationMs": 2090
         },
         {
           "name": "taskExecution",
           "passed": true,
           "tests": 200,
           "failed": 0,
-          "durationMs": 9395
+          "durationMs": 6753
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 10194
+          "durationMs": 6041
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 1768
+          "durationMs": 1250
         },
         {
           "name": "approvals",
           "passed": true,
           "tests": 107,
           "failed": 0,
-          "durationMs": 2042
+          "durationMs": 1579
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 1538
+          "durationMs": 1074
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 2159
+          "durationMs": 1433
         }
       ],
-      "historyStartupP50Ms": 97
+      "historyStartupP50Ms": 96
     },
     {
       "platform": "linux",
       "architecture": "x64",
-      "generatedAt": "2026-08-23T03:56:27.535Z",
+      "generatedAt": "2026-09-05T07:42:04.636Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
-          "tests": 317,
+          "tests": 300,
           "failed": 0,
-          "durationMs": 4657
+          "durationMs": 2388
         },
         {
           "name": "taskExecution",
           "passed": true,
-          "tests": 182,
+          "tests": 200,
           "failed": 0,
-          "durationMs": 7713
+          "durationMs": 6699
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 9764
+          "durationMs": 8157
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 2593
+          "durationMs": 1955
         },
         {
           "name": "approvals",
           "passed": true,
-          "tests": 127,
+          "tests": 107,
           "failed": 0,
-          "durationMs": 6389
+          "durationMs": 2635
         },
         {
           "name": "costAccuracy",
           "passed": true,
-          "tests": 95,
+          "tests": 98,
           "failed": 0,
-          "durationMs": 2131
+          "durationMs": 1689
         },
         {
           "name": "portability",
           "passed": true,
-          "tests": 105,
+          "tests": 109,
           "failed": 0,
-          "durationMs": 2862
+          "durationMs": 2051
         }
       ],
-      "historyStartupP50Ms": 160
+      "historyStartupP50Ms": 112
     }
   ]
 }
