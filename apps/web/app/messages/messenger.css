@@ -368,15 +368,15 @@ body { margin: 0; overflow: hidden; }
 .output-actions small { margin-left: auto; color: var(--sw-muted); font-size: var(--t-small); }
 
 .live-preview { margin: calc(var(--u) * 4.5) calc(var(--u) * 5.5) 0; border: 1px solid var(--sw-line-strong); background: var(--sw-panel-strong); }
-.live-preview header { min-height: calc(var(--u) * 11.5); padding: calc(var(--u) * 2) calc(var(--u) * 3); display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 3); border-bottom: 1px solid var(--sw-line); }
+.live-preview header { min-height: calc(var(--u) * 11.5); padding: calc(var(--u) * 2) calc(var(--u) * 3); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--u) * 1) calc(var(--u) * 3); border-bottom: 1px solid var(--sw-line); }
 .live-preview b, .live-preview small { display: block; }
 .live-preview b { font-size: var(--t-mini); letter-spacing: .1em; }
 .live-preview small { margin-top: calc(var(--u) * 0.75); color: var(--sw-muted); font-size: var(--t-micro); }
 .live-preview a { display: flex; align-items: center; gap: calc(var(--u) * 1.25); color: var(--sw-accent); font-size: var(--t-mini); text-decoration: none; }
 .live-preview a svg { width: calc(var(--u) * 3); }
 .live-preview iframe { width: 100%; height: min(58vh, calc(var(--u) * 140)); display: block; border: 0; background: #fff; }
-.frame-fallback { margin: 0; padding: calc(var(--u) * 3); border-bottom: 1px solid var(--sw-line); background: var(--sw-panel); color: var(--sw-muted); font-size: var(--t-mini); line-height: 1.6; }
-.frame-fallback code { font-family: var(--sw-mono); color: var(--sw-fg); }
+.frame-fallback { margin: 0; padding: calc(var(--u) * 3); border-bottom: 1px solid var(--sw-line); background: var(--sw-panel); color: var(--sw-muted); font-size: var(--t-mini); line-height: 1.6; overflow-wrap: anywhere; }
+.frame-fallback code { font-family: var(--sw-mono); color: var(--sw-fg); overflow-wrap: anywhere; }
 .frame-fallback a { display: inline; color: var(--sw-accent); text-decoration: none; }
 .frame-fallback svg { vertical-align: -2px; }
 .frame-fallback svg.spin { animation: msg-spin 1s linear infinite; }
