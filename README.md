@@ -1,5 +1,10 @@
 # Circuit-Nova
 
+> [!WARNING]
+> **Deprecated.** This repository is no longer developed. Work continues in
+> [chrisnkuno/archymedes-cli](https://github.com/chrisnkuno/archymedes-cli).
+> See [DEPRECATED.md](DEPRECATED.md) for the migration map.
+
 A task-priced, multi-interface AI agent system: one agent core, driven from a terminal, a desktop
 window, and a hosted control plane, where every run states its expected cost in RWF and its maximum
 approved spend **before** it executes.

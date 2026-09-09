@@ -1,6 +1,7 @@
 {
   "name": "@circuit-nova/nova-core",
   "version": "0.12.1",
+  "deprecated": "Deprecated: Circuit-Nova is no longer developed. Use archymedes-cli (https://github.com/chrisnkuno/archymedes-cli) instead.",
   "description": "Provider-neutral coding-agent core: a bounded tool-use runtime, local and sandboxed workspace backends, model adapters for Anthropic/OpenAI-compatible providers, and multi-currency cost accounting.",
   "keywords": [
     "agent",
