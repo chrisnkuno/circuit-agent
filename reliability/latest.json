@@ -1,18 +1,18 @@
 {
-  "generatedAt": "2026-08-23T03:26:12.671Z",
-  "rescoredAt": "2026-08-25T04:03:32.231Z",
-  "provider": "circuitnotion",
-  "model": "circuit-2-turbo",
+  "generatedAt": "2026-09-05T07:45:52.796Z",
+  "rescoredAt": "2026-09-09T08:12:17.889Z",
+  "provider": "openai",
+  "model": "cohere/north-mini-code:free",
   "score": 91,
   "grade": "excellent",
   "components": {
     "completion": 16,
     "verification": 9,
     "outputQuality": 7,
-    "toolReliability": 10,
+    "toolReliability": 9.3,
     "speed": 7,
-    "economy": 6.3,
-    "prediction": 4.2,
+    "economy": 6.8,
+    "prediction": 4.7,
     "scope": 7,
     "memoryResume": 7,
     "security": 6,
@@ -24,20 +24,20 @@
   },
   "cases": 6,
   "passed": 6,
-  "actualTokens": 160028,
+  "actualTokens": 123931,
   "predictionCoverage": 67,
-  "toolFailureRate": 0,
+  "toolFailureRate": 6.9,
   "providerFailureRate": 0,
   "completionRate": 100,
   "verificationRate": 100,
   "outputQualityRate": 100,
-  "medianLatencyMs": 13593,
+  "medianLatencyMs": 11836,
   "auditPlatforms": [
     "darwin",
     "linux",
     "win32"
   ],
-  "auditTests": 3205,
+  "auditTests": 3129,
   "auditFailures": 0,
   "exaScore": null,
   "observations": [
@@ -47,95 +47,237 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 24770,
+      "actualTokens": 56237,
       "economicalTokenTarget": 45000,
-      "predictedTokensLow": 31980,
-      "predictedTokensHigh": 85107,
-      "failedToolCalls": 0,
+      "predictedTokensLow": 31561,
+      "predictedTokensHigh": 83993,
+      "failedToolCalls": 2,
       "unavailableToolCalls": 0,
-      "toolCalls": 5,
+      "toolCalls": 14,
       "providerAttempts": 1,
-      "elapsedMs": 18799,
+      "elapsedMs": 58140,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [
+        "2 tool call(s) failed"
+      ],
       "events": [
         {
-          "at": "2026-08-23T03:23:39.769Z",
+          "at": "2026-09-05T07:43:57.198Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:39.778Z",
+          "at": "2026-09-05T07:43:57.200Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-23T03:23:39.782Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-08-23T03:23:39.828Z",
+          "at": "2026-09-05T07:43:57.202Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:23:39.829Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:23:45.870Z",
+          "at": "2026-09-05T07:43:58.599Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:45.876Z",
+          "at": "2026-09-05T07:43:58.600Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-09-05T07:43:58.600Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:04.663Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:04.666Z",
           "type": "tool_call",
           "tool": "write_file"
         },
         {
-          "at": "2026-08-23T03:23:45.914Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-23T03:23:45.929Z",
+          "at": "2026-09-05T07:44:04.672Z",
           "type": "tool_result",
           "tool": "write_file",
-          "isError": false
+          "isError": true
         },
         {
-          "at": "2026-08-23T03:23:45.933Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:23:47.341Z",
+          "at": "2026-09-05T07:44:05.295Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:47.342Z",
+          "at": "2026-09-05T07:44:05.295Z",
+          "type": "tool_call",
+          "tool": "list_files"
+        },
+        {
+          "at": "2026-09-05T07:44:05.296Z",
+          "type": "tool_result",
+          "tool": "list_files",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:09.186Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:09.187Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:09.188Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": true
+        },
+        {
+          "at": "2026-09-05T07:44:09.696Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:09.697Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-23T03:23:47.492Z",
+          "at": "2026-09-05T07:44:09.705Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:23:50.662Z",
+          "at": "2026-09-05T07:44:13.223Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:50.664Z",
+          "at": "2026-09-05T07:44:13.224Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:44:13.226Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:18.339Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:18.340Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:44:18.341Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:19.954Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:19.955Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:44:19.961Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:22.332Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:22.332Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:44:22.434Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:33.102Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:33.102Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:33.102Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:33.104Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:33.104Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:41.086Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:41.087Z",
+          "type": "tool_call",
+          "tool": "edit_file"
+        },
+        {
+          "at": "2026-09-05T07:44:41.090Z",
+          "type": "tool_result",
+          "tool": "edit_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:46.239Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:46.239Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:44:46.340Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:44:50.736Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:44:50.736Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -143,15 +285,15 @@
       "artifact": {
         "kind": "files",
         "label": "Slug utility",
-        "url": "runs/latest/build/slug.mjs",
+        "url": "runs/north-mini-code/build/slug.mjs",
         "downloads": [
           {
             "label": "slug.mjs",
-            "url": "runs/latest/build/slug.mjs"
+            "url": "runs/north-mini-code/build/slug.mjs"
           },
           {
             "label": "slug.test.mjs",
-            "url": "runs/latest/build/slug.test.mjs"
+            "url": "runs/north-mini-code/build/slug.test.mjs"
           }
         ]
       }
@@ -162,200 +304,164 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 93167,
+      "actualTokens": 37532,
       "economicalTokenTarget": 38000,
-      "predictedTokensLow": 8986,
-      "predictedTokensHigh": 23915,
+      "predictedTokensLow": 31316,
+      "predictedTokensHigh": 83342,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
-      "toolCalls": 12,
+      "toolCalls": 9,
       "providerAttempts": 1,
-      "elapsedMs": 98155,
+      "elapsedMs": 27584,
       "latencyTargetMs": 480000,
       "outputQualityChecksPassed": 5,
       "outputQualityChecksTotal": 5,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:23:55.607Z",
+          "at": "2026-09-05T07:44:54.009Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:23:55.612Z",
+          "at": "2026-09-05T07:44:54.011Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-23T03:23:55.617Z",
+          "at": "2026-09-05T07:44:54.013Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:25.752Z",
+          "at": "2026-09-05T07:44:55.521Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:24:38.689Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:38.698Z",
+          "at": "2026-09-05T07:44:55.522Z",
           "type": "tool_call",
-          "tool": "write_file"
+          "tool": "glob_files"
         },
         {
-          "at": "2026-08-23T03:24:38.727Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-23T03:24:38.738Z",
-          "type": "tool_call",
-          "tool": "write_file"
-        },
-        {
-          "at": "2026-08-23T03:24:38.748Z",
+          "at": "2026-09-05T07:44:55.523Z",
           "type": "tool_result",
-          "tool": "write_file",
+          "tool": "glob_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:38.754Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:38.756Z",
-          "type": "tool_result",
-          "tool": "write_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:41.610Z",
+          "at": "2026-09-05T07:44:56.735Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:24:41.613Z",
-          "type": "tool_call",
-          "tool": "edit_file"
-        },
-        {
-          "at": "2026-08-23T03:24:41.631Z",
-          "type": "tool_result",
-          "tool": "edit_file",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:46.424Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:52.788Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:52.789Z",
+          "at": "2026-09-05T07:44:56.735Z",
           "type": "tool_call",
           "tool": "list_files"
         },
         {
-          "at": "2026-08-23T03:24:52.792Z",
-          "type": "tool_call",
-          "tool": "run_command"
-        },
-        {
-          "at": "2026-08-23T03:24:52.856Z",
+          "at": "2026-09-05T07:44:56.736Z",
           "type": "tool_result",
           "tool": "list_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:24:52.856Z",
-          "type": "tool_result",
-          "tool": "run_command",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:56.013Z",
+          "at": "2026-09-05T07:44:57.281Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:24:56.015Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:56.015Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:56.023Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:56.024Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:59.121Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:24:59.122Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:59.122Z",
-          "type": "tool_call",
-          "tool": "grep_files"
-        },
-        {
-          "at": "2026-08-23T03:24:59.126Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:24:59.126Z",
-          "type": "tool_result",
-          "tool": "grep_files",
-          "isError": false
-        },
-        {
-          "at": "2026-08-23T03:25:05.207Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:25:25.641Z",
-          "type": "model_turn"
-        },
-        {
-          "at": "2026-08-23T03:25:25.645Z",
+          "at": "2026-09-05T07:44:57.284Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-23T03:25:25.714Z",
+          "at": "2026-09-05T07:44:57.292Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:29.541Z",
+          "at": "2026-09-05T07:44:58.368Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:29.542Z",
+          "at": "2026-09-05T07:44:58.368Z",
+          "type": "tool_call",
+          "tool": "read_file"
+        },
+        {
+          "at": "2026-09-05T07:44:58.370Z",
+          "type": "tool_result",
+          "tool": "read_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:00.994Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:00.996Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:45:00.999Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:05.005Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:05.005Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:45:05.007Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:12.406Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:12.407Z",
+          "type": "tool_call",
+          "tool": "write_file"
+        },
+        {
+          "at": "2026-09-05T07:45:12.409Z",
+          "type": "tool_result",
+          "tool": "write_file",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:13.189Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:13.190Z",
+          "type": "tool_call",
+          "tool": "run_command"
+        },
+        {
+          "at": "2026-09-05T07:45:13.288Z",
+          "type": "tool_result",
+          "tool": "run_command",
+          "isError": false
+        },
+        {
+          "at": "2026-09-05T07:45:19.184Z",
+          "type": "model_turn"
+        },
+        {
+          "at": "2026-09-05T07:45:19.185Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -363,19 +469,19 @@
       "artifact": {
         "kind": "web",
         "label": "Responsive offline web build",
-        "url": "runs/latest/web/index.html",
+        "url": "runs/north-mini-code/web/index.html",
         "downloads": [
           {
             "label": "index.html",
-            "url": "runs/latest/web/index.html"
+            "url": "runs/north-mini-code/web/index.html"
           },
           {
             "label": "styles.css",
-            "url": "runs/latest/web/styles.css"
+            "url": "runs/north-mini-code/web/styles.css"
           },
           {
             "label": "app.js",
-            "url": "runs/latest/web/app.js"
+            "url": "runs/north-mini-code/web/app.js"
           }
         ]
       }
@@ -386,84 +492,85 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 18774,
+      "actualTokens": 13915,
       "economicalTokenTarget": 25000,
-      "predictedTokensLow": 8898,
-      "predictedTokensHigh": 23681,
+      "predictedTokensLow": 8680,
+      "predictedTokensHigh": 23100,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 4,
       "providerAttempts": 1,
-      "elapsedMs": 9966,
+      "elapsedMs": 13377,
       "latencyTargetMs": 360000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:25:33.784Z",
+          "at": "2026-09-05T07:45:21.721Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:33.789Z",
+          "at": "2026-09-05T07:45:21.723Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-23T03:25:33.790Z",
+          "at": "2026-09-05T07:45:21.724Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-23T03:25:33.797Z",
+          "at": "2026-09-05T07:45:21.726Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:33.799Z",
+          "at": "2026-09-05T07:45:21.727Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:35.795Z",
+          "at": "2026-09-05T07:45:24.616Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:35.804Z",
+          "at": "2026-09-05T07:45:24.619Z",
           "type": "tool_call",
           "tool": "edit_file"
         },
         {
-          "at": "2026-08-23T03:25:35.830Z",
+          "at": "2026-09-05T07:45:24.622Z",
           "type": "tool_result",
           "tool": "edit_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:37.749Z",
+          "at": "2026-09-05T07:45:26.267Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:37.754Z",
+          "at": "2026-09-05T07:45:26.268Z",
           "type": "tool_call",
           "tool": "run_command"
         },
         {
-          "at": "2026-08-23T03:25:37.912Z",
+          "at": "2026-09-05T07:45:26.320Z",
           "type": "tool_result",
           "tool": "run_command",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:40.135Z",
+          "at": "2026-09-05T07:45:33.215Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:40.136Z",
+          "at": "2026-09-05T07:45:33.215Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -471,15 +578,15 @@
       "artifact": {
         "kind": "files",
         "label": "Math repair",
-        "url": "runs/latest/debug/math.mjs",
+        "url": "runs/north-mini-code/debug/math.mjs",
         "downloads": [
           {
             "label": "math.mjs",
-            "url": "runs/latest/debug/math.mjs"
+            "url": "runs/north-mini-code/debug/math.mjs"
           },
           {
             "label": "math.test.mjs",
-            "url": "runs/latest/debug/math.test.mjs"
+            "url": "runs/north-mini-code/debug/math.test.mjs"
           }
         ]
       }
@@ -490,43 +597,44 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 7653,
+      "actualTokens": 5368,
       "economicalTokenTarget": 8000,
-      "predictedTokensLow": 6990,
-      "predictedTokensHigh": 18602,
+      "predictedTokensLow": 6096,
+      "predictedTokensHigh": 16223,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 6220,
+      "elapsedMs": 5371,
       "latencyTargetMs": 180000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:25:45.206Z",
+          "at": "2026-09-05T07:45:37.559Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:45.211Z",
+          "at": "2026-09-05T07:45:37.561Z",
           "type": "tool_call",
           "tool": "grep_files"
         },
         {
-          "at": "2026-08-23T03:25:45.220Z",
+          "at": "2026-09-05T07:45:37.564Z",
           "type": "tool_result",
           "tool": "grep_files",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:25:47.182Z",
+          "at": "2026-09-05T07:45:39.384Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:47.183Z",
+          "at": "2026-09-05T07:45:39.385Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -534,11 +642,11 @@
       "artifact": {
         "kind": "markdown",
         "label": "search report",
-        "url": "runs/latest/notes/search.md",
+        "url": "runs/north-mini-code/notes/search.md",
         "downloads": [
           {
             "label": "search.md",
-            "url": "runs/latest/notes/search.md"
+            "url": "runs/north-mini-code/notes/search.md"
           }
         ]
       }
@@ -549,43 +657,44 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 11814,
+      "actualTokens": 9023,
       "economicalTokenTarget": 12000,
-      "predictedTokensLow": 11211,
-      "predictedTokensHigh": 36164,
+      "predictedTokensLow": 11344,
+      "predictedTokensHigh": 36592,
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 1,
       "providerAttempts": 1,
-      "elapsedMs": 17220,
+      "elapsedMs": 10295,
       "latencyTargetMs": 300000,
       "outputQualityChecksPassed": 3,
       "outputQualityChecksTotal": 3,
       "costReported": false,
       "misleadingSuccess": false,
       "permissionEscalation": false,
+      "failureReasons": [],
       "events": [
         {
-          "at": "2026-08-23T03:25:56.080Z",
+          "at": "2026-09-05T07:45:41.095Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:25:56.084Z",
+          "at": "2026-09-05T07:45:41.097Z",
           "type": "tool_call",
           "tool": "read_file"
         },
         {
-          "at": "2026-08-23T03:25:56.090Z",
+          "at": "2026-09-05T07:45:41.100Z",
           "type": "tool_result",
           "tool": "read_file",
           "isError": false
         },
         {
-          "at": "2026-08-23T03:26:08.156Z",
+          "at": "2026-09-05T07:45:50.312Z",
           "type": "model_turn"
         },
         {
-          "at": "2026-08-23T03:26:08.158Z",
+          "at": "2026-09-05T07:45:50.312Z",
           "type": "runtime_stop",
           "status": "completed"
         }
@@ -593,11 +702,11 @@
       "artifact": {
         "kind": "markdown",
         "label": "defender report",
-        "url": "runs/latest/notes/defender.md",
+        "url": "runs/north-mini-code/notes/defender.md",
         "downloads": [
           {
             "label": "defender.md",
-            "url": "runs/latest/notes/defender.md"
+            "url": "runs/north-mini-code/notes/defender.md"
           }
         ]
       }
@@ -608,11 +717,11 @@
       "verified": true,
       "scopeKept": true,
       "stateCorrect": true,
-      "actualTokens": 3850,
+      "actualTokens": 1856,
       "economicalTokenTarget": 8000,
       "predictedTokensLow": 1,
       "predictedTokensHigh": 8000,
-      "elapsedMs": 3475,
+      "elapsedMs": 2109,
       "latencyTargetMs": 120000,
       "outputQualityChecksPassed": 2,
       "outputQualityChecksTotal": 2,
@@ -620,14 +729,15 @@
       "failedToolCalls": 0,
       "unavailableToolCalls": 0,
       "toolCalls": 0,
+      "failureReasons": [],
       "artifact": {
         "kind": "markdown",
         "label": "resume report",
-        "url": "runs/latest/notes/resume.md",
+        "url": "runs/north-mini-code/notes/resume.md",
         "downloads": [
           {
             "label": "resume.md",
-            "url": "runs/latest/notes/resume.md"
+            "url": "runs/north-mini-code/notes/resume.md"
           }
         ]
       }
@@ -635,61 +745,118 @@
   ],
   "audits": [
     {
-      "platform": "darwin",
-      "architecture": "arm64",
-      "generatedAt": "2026-08-25T04:01:53.250Z",
+      "platform": "win32",
+      "architecture": "x64",
+      "generatedAt": "2026-09-09T08:11:44.216Z",
       "categories": [
         {
           "name": "ui",
           "passed": true,
-          "tests": 323,
+          "tests": 300,
           "failed": 0,
-          "durationMs": 4740
+          "durationMs": 3829
         },
         {
           "name": "taskExecution",
           "passed": true,
-          "tests": 195,
+          "tests": 200,
           "failed": 0,
-          "durationMs": 11397
+          "durationMs": 13814
         },
         {
           "name": "memoryResume",
           "passed": true,
           "tests": 128,
           "failed": 0,
-          "durationMs": 10802
+          "durationMs": 18107
         },
         {
           "name": "security",
           "passed": true,
           "tests": 97,
           "failed": 0,
-          "durationMs": 2741
+          "durationMs": 3205
         },
         {
           "name": "approvals",
           "passed": true,
-          "tests": 127,
+          "tests": 107,
           "failed": 0,
-          "durationMs": 3109
+          "durationMs": 3524
         },
         {
           "name": "costAccuracy",
           "passed": true,
           "tests": 98,
           "failed": 0,
-          "durationMs": 1969
+          "durationMs": 2186
         },
         {
           "name": "portability",
           "passed": true,
           "tests": 109,
           "failed": 0,
-          "durationMs": 2706
+          "durationMs": 2717
         }
       ],
-      "historyStartupP50Ms": 106
+      "historyStartupP50Ms": 150
+    },
+    {
+      "platform": "darwin",
+      "architecture": "arm64",
+      "generatedAt": "2026-09-09T08:10:29.167Z",
+      "categories": [
+        {
+          "name": "ui",
+          "passed": true,
+          "tests": 300,
+          "failed": 0,
+          "durationMs": 2001
+        },
+        {
+          "name": "taskExecution",
+          "passed": true,
+          "tests": 200,
+          "failed": 0,
+          "durationMs": 6717
+        },
+        {
+          "name": "memoryResume",
+          "passed": true,
+          "tests": 128,
+          "failed": 0,
+          "durationMs": 5518
+        },
+        {
+          "name": "security",
+          "passed": true,
+          "tests": 97,
+          "failed": 0,
+          "durationMs": 1265
+        },
+        {
+          "name": "approvals",
+          "passed": true,
+          "tests": 107,
+          "failed": 0,
+          "durationMs": 1901
+        },
+        {
+          "name": "costAccuracy",
+          "passed": true,
+          "tests": 98,
+          "failed": 0,
+          "durationMs": 1033
+        },
+        {
+          "name": "portability",
+          "passed": true,
+          "tests": 109,
+          "failed": 0,
+          "durationMs": 1317
+        }
+      ],
+      "historyStartupP50Ms": 77
     },
     {
       "platform": "linux",
@@ -747,63 +914,6 @@
         }
       ],
       "historyStartupP50Ms": 160
-    },
-    {
-      "platform": "win32",
-      "architecture": "x64",
-      "generatedAt": "2026-08-25T04:02:52.717Z",
-      "categories": [
-        {
-          "name": "ui",
-          "passed": true,
-          "tests": 323,
-          "failed": 0,
-          "durationMs": 5879
-        },
-        {
-          "name": "taskExecution",
-          "passed": true,
-          "tests": 195,
-          "failed": 0,
-          "durationMs": 5831
-        },
-        {
-          "name": "memoryResume",
-          "passed": true,
-          "tests": 128,
-          "failed": 0,
-          "durationMs": 13997
-        },
-        {
-          "name": "security",
-          "passed": true,
-          "tests": 97,
-          "failed": 0,
-          "durationMs": 3129
-        },
-        {
-          "name": "approvals",
-          "passed": true,
-          "tests": 127,
-          "failed": 0,
-          "durationMs": 3760
-        },
-        {
-          "name": "costAccuracy",
-          "passed": true,
-          "tests": 98,
-          "failed": 0,
-          "durationMs": 2091
-        },
-        {
-          "name": "portability",
-          "passed": true,
-          "tests": 109,
-          "failed": 0,
-          "durationMs": 2538
-        }
-      ],
-      "historyStartupP50Ms": 145
     }
   ]
 }
